@@ -2,33 +2,23 @@
 {% block title %}{{ site.domain }} · Overview{% endblock %}
 {% block content %}
 <div class="heading">
-  <div>
-    <h1>{{ site.domain }}</h1>
-    <p>Domain-level SEO / GEO / AEO overview.</p>
-  </div>
-  <div class="heading-actions">
-    <a class="button" href="{{ url_for('export_domain', domain=site.domain) }}">Export SEO data</a>
-    <form method="post" action="{{ url_for('run_audit', domain=site.domain) }}">
-      <button class="primary">Run GEO/AEO Audit</button>
-    </form>
-  </div>
+  <div><h1>{{ site.domain }}</h1><p>Domain workspace.</p></div>
+  <form method="post" action="{{ url_for('generate_full_web_report', domain=site.domain) }}"><button class="primary">Run GEO / AEO / SEO Report</button></form>
 </div>
-
-<h2>SEO</h2>
-{% if summary %}
-<div class="cards">
-  <div class="card"><span>Observed keywords</span><strong>{{ summary.keywords }}</strong></div>
-  <div class="card"><span>Ranking pages</span><strong>{{ summary.pages }}</strong></div>
-  <div class="card"><span>Impressions</span><strong>{{ summary.impressions }}</strong></div>
-  <div class="card"><span>Clicks</span><strong>{{ summary.clicks }}</strong></div>
-  <div class="card"><span>CTR</span><strong>{{ pct(summary.clicks, summary.impressions) }}%</strong></div>
-  <div class="card"><span>Observed position range</span><strong>{{ summary.best_position }}–{{ summary.worst_position }}</strong></div>
+<div class="domain-state-grid">
+  <div class="domain-state-card"><span>Status</span><strong class="ready-state">{{ readiness.label }}</strong><small>{{ readiness.pages }} page{{ '' if readiness.pages == 1 else 's' }} available for source-independent checks</small></div>
+  <div class="domain-state-card"><span>Selected / connected sources</span><strong>{{ sources|selectattr('selected')|list|length }}</strong><a href="{{ url_for('domain_sources', domain=site.domain) }}">Add / select sources</a></div>
+  <div class="domain-state-card"><span>Reports</span><strong>{{ reports|length }}</strong><a href="{{ url_for('reports', domain=site.domain) }}">View reports</a></div>
 </div>
-{% else %}
-<div class="notice">Keyword discovery table not found. Run the GSC discovery script first.</div>
-{% endif %}
-
-<div class="grid2">
-  
+<h2>Sources</h2>
+<div class="source-mini-list">
+  {% for source in sources if source.selected %}<span><strong>{{ source.name }}</strong> · {{ source.status }}{% if source.detail %} · {{ source.detail }}{% endif %}</span>
+  {% else %}<span>No optional sources selected. The domain can still run source-independent checks.</span>{% endfor %}
+</div>
+<div class="workflow-strip compact-workflow">
+  <div class="workflow-step done"><span>1</span><strong>Domain</strong></div>
+  <div class="workflow-step done"><span>2</span><strong>Sources</strong></div>
+  <div class="workflow-step done"><span>3</span><strong>Ready</strong></div>
+  <div class="workflow-step current"><span>4</span><strong>Run reports</strong></div>
 </div>
 {% endblock %}

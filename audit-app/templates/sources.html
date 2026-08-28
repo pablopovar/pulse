@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ site.domain }} · Sources{% endblock %}
+{% block content %}
+<div class="heading">
+  <div>
+    <h1>Sources</h1>
+    <p>Select data sources for {{ site.domain }}. Sources expand report coverage; they are not separate report steps.</p>
+  </div>
+  <a class="button primary" href="{{ url_for('reports', domain=site.domain) }}">Continue to Reports</a>
+</div>
+<div class="workflow-strip">
+  <div class="workflow-step done"><span>1</span><strong>Domain</strong><small>{{ site.domain }}</small></div>
+  <div class="workflow-step current"><span>2</span><strong>Add / select sources</strong><small>Optional evidence sources</small></div>
+  <div class="workflow-step done"><span>3</span><strong>Ready</strong><small>{{ readiness.label }}</small></div>
+  <div class="workflow-step"><span>4</span><strong>Run reports</strong><small>One report workflow</small></div>
+</div>
+{% if message %}<div class="notice">{{ message }}</div>{% endif %}
+<form method="post" action="{{ url_for('domain_sources', domain=site.domain) }}">
+  <div class="source-grid">
+    {% for source in sources %}
+    <label class="source-card">
+      <div class="source-card-head">
+        <input type="checkbox" name="selected" value="{{ source.key }}" {% if source.selected %}checked{% endif %}>
+        <strong>{{ source.name }}</strong>
+        <span class="source-status source-status-{{ source.status_class }}">{{ source.status }}</span>
+      </div>
+      <p>{{ source.description }}</p>
+      {% if source.detail %}<small>{{ source.detail }}</small>{% endif %}
+    </label>
+    {% endfor %}
+  </div>
+  <section class="panel source-custom">
+    <h2>Other source</h2>
+    <p>Add a source to the domain inventory even if its connector does not exist yet.</p>
+    <div class="source-custom-row">
+      <input type="text" name="custom_name" placeholder="Source name">
+      <input type="text" name="custom_detail" placeholder="Optional note, account, model, property, etc.">
+    </div>
+  </section>
+  <div class="heading-actions">
+    <button type="submit" class="primary">Save Sources</button>
+    <a class="button" href="{{ url_for('reports', domain=site.domain) }}">Skip / Continue</a>
+  </div>
+</form>
+{% endblock %}

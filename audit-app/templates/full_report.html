@@ -1,17 +1,17 @@
 {% extends "base.html" %}
-{% block title %}{{ site.domain }} - Full Audit Report{% endblock %}
+{% block title %}{{ site.domain }} · Domain Audit Report{% endblock %}
 {% block content %}
 
-<div class="report-hero">
+<header class="report-header">
   <div>
-    <div class="report-kicker">SEO / GEO / AEO DOMAIN AUDIT</div>
+    <div class="report-kicker">DOMAIN AUDIT REPORT</div>
     <h1>{{ site.domain }}</h1>
-    <p>Actionable audit report combining search visibility, technical crawl evidence, and GEO/AEO readiness.</p>
     <div class="report-meta">
-      <span>Report <code>{{ report_session.id }}</code></span>
-      <span>Created {{ report_session.created_at }}</span>
+      <span>Report {{ report_session.id }}</span>
+      <span>Generated {{ report_session.created_at }}</span>
       {% if report.audit %}
-      <span>Audit run #{{ report.audit.id }} - {{ report.audit.status }}</span>
+      <span>Audit run #{{ report.audit.id }} · {{ report.audit.completed_at or report.audit.started_at }}</span>
+      <span>{{ report.audit.scope }} · {{ report.audit_summary.pages_audited if report.audit_summary else 0 }} pages analyzed</span>
       {% endif %}
     </div>
   </div>
@@ -19,252 +19,399 @@
     <a class="button primary" href="{{ url_for('report_session_pdf', domain=site.domain, report_id=report_session.id) }}">Export PDF</a>
     <a class="button" href="{{ url_for('reports', domain=site.domain) }}">Reports</a>
   </div>
-</div>
+</header>
 
-{% set seo = report.seo or {} %}
-{% set a = report.audit_summary or {} %}
-{% set crawl = report.crawl or {} %}
-
-<section class="report-section">
-  <div class="report-section-head">
-    <div>
-      <div class="report-section-number">01</div>
-      <h2>Executive Summary <span class="info-tip" tabindex="0" data-tooltip="High-level indicators from the latest stored GSC discovery, technical crawl, and GEO/AEO audit.">?</span></h2>
-    </div>
+<nav class="family-nav" aria-label="Report families">
+  {% for family in report.families %}
+  <a class="family-nav-card {% if loop.index <= 5 %}family-nav-main{% endif %}" href="#{{ family.id }}">
+    <strong>{{ family.name }}</strong>
+    <span>{{ family.departments }}</span>
+  </a>
+  {% endfor %}
+</nav>
+{% set xr = report.cross_model_rollups or {} %}
+<section class="cross-model-overall-rollup">
+  <h2>Cross-Model Comparison Overview</h2>
+  <div class="family-snapshot">
+    <div class="snapshot-card"><span>Questions tested</span><strong>{{ xr.questions_tested or 0 }}/6</strong></div>
+    <div class="snapshot-card"><span>Providers/models tested</span><strong>{{ xr.providers_models_tested|length }}</strong></div>
+    <div class="snapshot-card"><span>Valid responses</span><strong>{{ xr.total_valid_responses or 0 }}</strong></div>
+    <div class="snapshot-card"><span>Average concept consistency</span><strong>{% if xr.average_concept_consistency is not none %}{{ '%.0f'|format(xr.average_concept_consistency * 100) }}%{% else %}—{% endif %}</strong></div>
+    <div class="snapshot-card"><span>Company-source coverage</span><strong>{{ xr.company_source_numerator or 0 }}/{{ xr.company_source_denominator or 0 }}</strong></div>
+    <div class="snapshot-card"><span>Questions with direct contradiction</span><strong>{{ xr.direct_contradiction_questions or 0 }}/6</strong></div>
   </div>
-
-  <div class="report-score-grid">
-    <div class="report-score-card">
-      <span>Observed keywords <span class="info-tip" tabindex="0" data-tooltip="Distinct Google Search Console queries found in the stored keyword discovery dataset.">?</span></span>
-      <strong>{{ seo.keywords if seo else '—' }}</strong>
-    </div>
-    <div class="report-score-card">
-      <span>Ranking pages <span class="info-tip" tabindex="0" data-tooltip="Distinct landing pages that received GSC query impressions in the stored discovery period.">?</span></span>
-      <strong>{{ seo.pages if seo else '—' }}</strong>
-    </div>
-    <div class="report-score-card score-geo">
-      <span>GEO <span class="info-tip" tabindex="0" data-tooltip="Generative Engine Optimization readiness score from the latest structured page audit.">?</span></span>
-      <strong>{{ a.geo_score if a else '—' }}</strong>
-    </div>
-    <div class="report-score-card score-aeo">
-      <span>AEO <span class="info-tip" tabindex="0" data-tooltip="Answer Engine Optimization readiness score from the latest structured page audit.">?</span></span>
-      <strong>{{ a.aeo_score if a else '—' }}</strong>
-    </div>
-    <div class="report-score-card">
-      <span>Combined <span class="info-tip" tabindex="0" data-tooltip="Current combined GEO/AEO score. Separate SEO and AIO score families will be added later.">?</span></span>
-      <strong>{{ a.combined_score if a else '—' }}</strong>
-    </div>
-  </div>
-
-  <div class="report-summary-grid">
-    <div class="panel">
-      <h3>Search visibility</h3>
-      {% if seo %}
-      <p><strong>{{ seo.impressions or 0 }}</strong> impressions and <strong>{{ seo.clicks or 0 }}</strong> clicks across the stored discovery period.</p>
-      <p>CTR {{ seo.ctr }}% - observed position range {{ seo.best_position or '—' }}-{{ seo.worst_position or '—' }}.</p>
-      {% else %}<p>No GSC keyword discovery data is stored for this report.</p>{% endif %}
-    </div>
-    <div class="panel">
-      <h3>Technical crawl</h3>
-      {% if crawl %}
-      <p><strong>{{ crawl.pages_crawled or 0 }}</strong> pages crawled - <strong>{{ crawl.pages_failed or 0 }}</strong> failed.</p>
-      <p>Latest crawl status: <span class="status-badge status-{{ crawl.status|lower }}">{{ crawl.status }}</span></p>
-      {% else %}<p>No technical crawl is stored for this report.</p>{% endif %}
-    </div>
-    <div class="panel">
-      <h3>GEO / AEO</h3>
-      {% if a %}
-      <p><strong>{{ a.pages_audited }}</strong> pages audited.</p>
-      <p>{{ a.pass_count }} pass - {{ a.partial_count }} partial - {{ a.fail_count }} fail - {{ a.manual_count }} manual review.</p>
-      {% else %}<p>No GEO/AEO audit is stored for this report.</p>{% endif %}
-    </div>
-  </div>
+  <div class="supporting-observations"><span>Shared concepts: {{ xr.shared_concepts or 0 }}</span><span>Inconsistent/provider-specific concepts: {{ xr.inconsistent_concepts or 0 }}</span>{% if xr.external_domains %}<span>Most observed external domain: {{ xr.external_domains[0].domain }} · {{ xr.external_domains[0].unique_questions }} questions · {{ xr.external_domains[0].unique_providers }} providers</span>{% endif %}</div>
 </section>
 
-<section class="report-section">
-  <div class="report-section-head">
-    <div>
-      <div class="report-section-number">02</div>
-      <h2>What To Do Next <span class="info-tip" tabindex="0" data-tooltip="Actions are grouped from repeated audit findings so the report prioritizes work rather than simply listing failures.">?</span></h2>
-      <p>Highest-priority actions, grouped across affected pages.</p>
-    </div>
-  </div>
 
-  <div class="action-grid">
-    {% for action in report.priority_actions[:12] %}
-    <article class="action-card severity-{{ action.severity|lower }}">
-      <div class="action-card-top">
-        <span class="severity-badge severity-{{ action.severity|lower }}"><span class="cue-dot"></span>{{ action.severity }}</span>
-        <span class="family-badge">{{ action.family }}</span>
+{% for family in report.families %}
+<section id="{{ family.id }}" class="report-family family-{{ family.id }}">
+  <header class="family-header">
+    <div>
+      <div class="family-number">{{ loop.index }}</div>
+      <h2>{{ family.name }}</h2>
+      <div class="department-tags">{{ family.departments }}</div>
+      <p>{{ family.purpose }}</p>
+    </div>
+  </header>
+
+  {% set family_questions = (report.get('family_questions') or {}).get(family.id, {}) %}
+  {% if family.id in ['ai-visibility', 'identity-authority', 'evidence-trust'] and family_questions %}
+    {% set family_rollup = (report.cross_model_rollups.families or {}).get(family.id, {}) %}
+    <section class="cross-model-family">
+      <div class="cross-model-family-head"><div><h3>Cross-Model Comparison</h3><p>Question-level V1 signals only: concept consistency, company-source coverage, and direct contradiction.</p></div></div>
+      <div class="cross-model-family-rollup">
+        <span>Questions tested <strong>{{ family_rollup.questions_tested or 0 }}/2</strong></span>
+        <span>Provider responses <strong>{{ family_rollup.provider_responses or 0 }}</strong></span>
+        <span>Average concept consistency <strong>{% if family_rollup.average_concept_consistency is not none %}{{ '%.0f'|format(family_rollup.average_concept_consistency * 100) }}%{% else %}—{% endif %}</strong></span>
+        <span>Company-source coverage <strong>{{ family_rollup.company_source_numerator or 0 }}/{{ family_rollup.company_source_denominator or 0 }}</strong></span>
+        <span>Questions with direct contradiction <strong>{{ family_rollup.direct_contradiction_questions or 0 }}/2</strong></span>
       </div>
-      <h3>{{ action.title }}</h3>
-      <p class="action-impact">{{ action.page_count }} affected page{{ '' if action.page_count == 1 else 's' }} - {{ action.status_summary }}</p>
-      <div class="action-label">What to do</div>
-      <p class="action-recommendation">{{ action.recommendation or 'Review the underlying evidence and resolve the finding.' }}</p>
-      {% if action.evidence_examples %}
-      <details class="action-evidence">
-        <summary>Why this was flagged</summary>
-        {% for evidence in action.evidence_examples %}<p>{{ evidence }}</p>{% endfor %}
-      </details>
-      {% endif %}
-      <details class="action-pages">
-        <summary>Affected pages</summary>
-        <ul>{% for path in action.pages %}<li>{{ path }}</li>{% endfor %}</ul>
-      </details>
-    </article>
-    {% else %}
-    <div class="panel"><p>No priority GEO/AEO actions are available.</p></div>
-    {% endfor %}
-  </div>
 
-  {% if report.technical_actions %}
-  <h3>Technical SEO actions <span class="info-tip" tabindex="0" data-tooltip="Issues grouped from the latest technical crawler run.">?</span></h3>
-  <div class="table-wrap report-table">
-    <table>
-      <thead><tr><th>Priority</th><th>Issue</th><th>Affected pages</th><th>What to inspect</th></tr></thead>
-      <tbody>
-      {% for issue in report.technical_actions %}
-      <tr>
-        <td><span class="severity-badge severity-{{ issue.severity }}">{{ issue.severity|upper }}</span></td>
-        <td><strong>{{ issue.title }}</strong></td>
-        <td>{{ issue.page_count }}</td>
-        <td>{{ issue.details[0] if issue.details else 'Review the affected pages and correct the technical issue.' }}</td>
-      </tr>
+      {% for slot in [1, 2] %}
+        {% set qdef = cross_model_question_defs.get(family.id, [])[slot-1] %}
+        {% set question_id = qdef[0] %}
+        {% set question = family_questions.get(slot) or family_questions.get(slot|string) %}
+        {% set state = (report.cross_model or {}).get(question_id, {}) %}
+        {% set comp = state.get('comparison') %}
+        {% set derived = state.get('derived') or {} %}
+        {% set saved = {} %}
+        {% for rr in state.get('responses', []) %}{% set _ = saved.update({rr.provider: rr}) %}{% endfor %}
+        <article id="{{ family.id }}-{{ question_id }}" class="cross-model-question-card">
+          <div class="cross-model-question-title"><span>{{ question_id }}</span><h4>{{ question }}</h4></div>
+          <div class="v1-signal-grid">
+            <div><span>Concept consistency</span><strong>{% if comp and comp.judge_status == 'success' and comp.concept_consistency_pct is not none %}{{ '%.0f'|format(comp.concept_consistency_pct) }}%{% else %}—{% endif %}</strong></div>
+            <div><span>Company-source coverage</span><strong>{% if comp and comp.company_source_denominator %}{{ comp.company_source_numerator }}/{{ comp.company_source_denominator }} ({{ '%.0f'|format(comp.company_source_pct) }}%){% else %}—{% endif %}</strong></div>
+            <div><span>Direct contradiction</span><strong>{% if comp and comp.judge_status == 'success' %}{{ 'Yes — ' ~ comp.direct_contradiction_count ~ ' found' if comp.direct_contradiction else 'No' }}{% else %}—{% endif %}</strong></div>
+          </div>
+          {% if comp %}<div class="supporting-observations">
+            <span>Shared concepts: {{ derived.get('shared_concepts', [])|length }}</span>
+            <span>Inconsistent concepts: {{ (derived.get('inconsistent_concepts', [])|length) + (derived.get('provider_specific_concepts', [])|length) }}</span>
+            {% set ext = derived.get('source_analysis', {}).get('external_response_count', {}) %}{% if ext %}<span>External sources observed: {{ ext|length }}</span>{% endif %}
+            {% if comp.judge_status != 'success' %}<span>Comparison status: {{ comp.judge_status }}{% if comp.judge_error %} · {{ comp.judge_error }}{% endif %}</span>{% endif %}
+          </div>{% endif %}
+
+          <form method="post" action="{{ url_for('save_cross_model_question', domain=site.domain, report_id=report_session.id, question_id=question_id) }}" class="provider-response-form">
+            <input type="hidden" name="providers" value="{{ manual_ai_providers|map(attribute='id')|join(',') }}">
+            <details open><summary>Provider responses</summary>
+              <div class="manual-ai-provider-grid">
+                {% for provider in manual_ai_providers %}{% set r = saved.get(provider.id, {}) %}
+                <section class="provider-evidence-card">
+                  <h5>{{ provider.name }}</h5>
+                  <label>Status <select name="status_{{ provider.id }}">{% for status in ['success','timeout','provider_error','unsupported','no_answer'] %}<option value="{{ status }}" {% if (r.provider_status or 'success') == status %}selected{% endif %}>{{ status }}</option>{% endfor %}</select></label>
+                  <label>Model/version <input type="text" name="model_{{ provider.id }}" value="{{ r.model or '' }}" placeholder="Only if known"></label>
+                  <label>Raw answer <textarea name="answer_{{ provider.id }}" rows="10" placeholder="Paste the complete {{ provider.name }} answer">{{ r.raw_answer or '' }}</textarea></label>
+                  <label>Raw citations / source metadata <textarea name="citations_{{ provider.id }}" rows="5" placeholder="Citation JSON, or one returned source URL per line">{% if r.citations_json %}{{ r.citations_json }}{% endif %}</textarea></label>
+                  <details class="provider-metadata"><summary>Response metadata</summary>
+                    <label>Country <input type="text" name="country_{{ provider.id }}" value="{{ r.country or '' }}"></label>
+                    <label>City/location <input type="text" name="city_{{ provider.id }}" value="{{ r.city or '' }}"></label>
+                    <label>Answer language <input type="text" name="language_{{ provider.id }}" value="{{ r.answer_language or '' }}"></label>
+                    <label>Live/web-search status <input type="text" name="live_search_{{ provider.id }}" value="{{ r.live_search_status or '' }}" placeholder="Only if exposed"></label>
+                    {% if r.observed_at %}<small>Observed: {{ r.observed_at }}</small>{% endif %}
+                  </details>
+                </section>
+                {% endfor %}
+              </div>
+              <div class="manual-ai-save"><button type="submit" class="primary">Save Responses & Compare</button></div>
+            </details>
+          </form>
+
+          {% if comp %}
+            {% if comp.judge_status == 'success' %}<details class="comparison-detail"><summary>Concept comparison</summary>
+              <div class="table-wrap report-table"><table><thead><tr><th>Concept</th>{% for p in derived.valid_providers %}<th>{{ p }}</th>{% endfor %}</tr></thead><tbody>
+                {% set judge = comp.raw_judge_json|fromjson if comp.raw_judge_json else {} %}{% for concept in judge.get('concepts', []) %}<tr><td>{{ concept.concept }}</td>{% for p in derived.valid_providers %}<td>{{ 'Yes' if concept.providers.get(p, {}).get('present') else 'No' }}</td>{% endfor %}</tr>{% endfor %}
+              </tbody></table></div>
+            </details>{% endif %}
+            <details class="comparison-detail"><summary>Source comparison</summary>{% set sa = derived.get('source_analysis', {}) %}
+              <div class="table-wrap report-table"><table><thead><tr><th>Provider</th><th>Company-controlled source</th><th>Company domains</th><th>External domains</th></tr></thead><tbody>{% for p, src in sa.get('providers', {}).items() %}<tr><td>{{ p }}</td><td>{% if src.company_controlled_source_present is none %}No usable metadata{% elif src.company_controlled_source_present %}Yes{% else %}No{% endif %}</td><td>{{ src.company_controlled_domains|join(', ') or '—' }}</td><td>{{ src.external_domains|join(', ') or '—' }}</td></tr>{% endfor %}</tbody></table></div>
+            </details>
+            {% if comp.judge_status == 'success' and (derived.get('direct_contradictions') or derived.get('potential_contradictions')) %}<details class="comparison-detail"><summary>Contradictions</summary>{% for item in derived.get('direct_contradictions', []) + derived.get('potential_contradictions', []) %}<div class="contradiction-item"><strong>{{ item.classification }}</strong> · {{ item.subject }} / {{ item.property }}<pre>{{ item|tojson(indent=2) }}</pre></div>{% endfor %}</details>{% endif %}
+            {% for r in state.get('responses', []) %}<details class="comparison-detail"><summary>{{ r.provider|title }} answer & raw citations</summary><div class="raw-provider-answer">{{ r.raw_answer }}</div>{% if r.citations %}<pre>{{ r.citations|tojson(indent=2) }}</pre>{% else %}<p>No citation metadata returned/stored.</p>{% endif %}</details>{% endfor %}
+          {% endif %}
+        </article>
       {% endfor %}
-      </tbody>
-    </table>
-  </div>
+    </section>
   {% endif %}
-</section>
 
-<section class="report-section">
-  <div class="report-section-head">
-    <div>
-      <div class="report-section-number">03</div>
-      <h2>Organic Search Visibility <span class="info-tip" tabindex="0" data-tooltip="Observed GSC query-to-page visibility. A query may appear more than once when multiple landing pages rank for it.">?</span></h2>
-      {% if seo.first_date or seo.last_date %}<p>Stored discovery period: {{ seo.first_date or '?' }} to {{ seo.last_date or '?' }}</p>{% endif %}
+  {% if family.kind == 'ai' %}
+    <div class="family-snapshot">
+      <div class="snapshot-card"><span>Questions tested</span><strong>{{ family.overview.questions_tested }}</strong></div>
+      <div class="snapshot-card"><span>AI systems tested</span><strong>{{ family.overview.systems_tested }}</strong></div>
+      <div class="snapshot-card"><span>Cited</span><strong>{{ family.overview.cited }}</strong></div>
+      <div class="snapshot-card"><span>Mentioned</span><strong>{{ family.overview.mentioned }}</strong></div>
+      <div class="snapshot-card"><span>Absent</span><strong>{{ family.overview.absent }}</strong></div>
+      <div class="snapshot-card"><span>Citation frequency</span><strong>{{ family.overview.citation_frequency }}%</strong></div>
     </div>
-  </div>
-  {% if report.keywords %}
-  <div class="table-wrap report-table">
-    <table>
-      <thead><tr><th>Query</th><th>Landing page</th><th>Impressions</th><th>Clicks</th><th>Best</th><th>Latest</th><th>Status</th></tr></thead>
-      <tbody>
-      {% for k in report.keywords %}
-      <tr>
-        <td><strong>{{ k.query }}</strong></td><td class="report-url">{{ k.page }}</td>
-        <td>{{ k.impressions }}</td><td>{{ k.clicks }}</td>
-        <td>{{ k.best_position or '—' }}</td><td>{{ k.latest_position or '—' }}</td>
-        <td><span class="status-badge status-neutral">{{ k.status or 'observed' }}</span></td>
-      </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}<div class="panel"><p>No observed keyword dataset is available.</p></div>{% endif %}
-</section>
 
-<section class="report-section">
-  <div class="report-section-head">
-    <div>
-      <div class="report-section-number">04</div>
-      <h2>Technical SEO Crawl <span class="info-tip" tabindex="0" data-tooltip="Latest crawler evidence for response status, indexability, content depth, internal links, structured data, and response time.">?</span></h2>
-    </div>
-  </div>
-  {% if report.crawl_pages %}
-  <div class="table-wrap report-table">
-    <table>
-      <thead><tr><th>Page</th><th>HTTP</th><th>Indexable</th><th>Words</th><th>Internal links</th><th>Schema</th><th>ms</th></tr></thead>
-      <tbody>
-      {% for p in report.crawl_pages %}
-      <tr>
-        <td class="report-url">{{ p.path or p.url }}</td><td>{{ p.status_code }}</td>
-        <td>{% if p.indexable %}<span class="status-badge status-pass"><span class="cue-icon">✓</span> yes</span>{% else %}<span class="status-badge status-fail"><span class="cue-icon">!</span> no</span>{% endif %}</td>
-        <td>{{ p.word_count }}</td><td>{{ p.internal_links }}</td><td>{{ p.schema_types_json or '—' }}</td><td>{{ p.response_ms }}</td>
-      </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}<div class="panel"><p>No technical crawl pages are available.</p></div>{% endif %}
-</section>
-
-<section class="report-section">
-  <div class="report-section-head">
-    <div>
-      <div class="report-section-number">05</div>
-      <h2>GEO / AEO Readiness <span class="info-tip" tabindex="0" data-tooltip="Separate page-level Generative Engine Optimization and Answer Engine Optimization scores from the latest structured audit.">?</span></h2>
-    </div>
-  </div>
-  {% if report.audit_pages %}
-  <div class="table-wrap report-table">
-    <table>
-      <thead><tr><th>Page</th><th>GEO</th><th>AEO</th><th>Combined</th></tr></thead>
-      <tbody>
-      {% for p in report.audit_pages %}
-      <tr>
-        <td class="report-url">{{ p.path }}</td>
-        <td><span class="score-pill">{{ p.geo_score }}</span></td>
-        <td><span class="score-pill">{{ p.aeo_score }}</span></td>
-        <td><span class="score-pill">{{ p.combined_score }}</span></td>
-      </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}<div class="panel"><p>No GEO/AEO page audit is available.</p></div>{% endif %}
-</section>
-
-<section class="report-section">
-  <div class="report-section-head">
-    <div>
-      <div class="report-section-number">06</div>
-      <h2>Page-by-Page Findings <span class="info-tip" tabindex="0" data-tooltip="Evidence and recommended action for every stored GEO/AEO signal. Expand only the pages you need to work on.">?</span></h2>
-    </div>
-  </div>
-
-  {% for p in report.audit_pages %}
-  <details class="page-findings">
-    <summary>
-      <span class="page-findings-path">{{ p.path }}</span>
-      <span class="page-findings-scores">GEO {{ p.geo_score }} - AEO {{ p.aeo_score }} - Combined {{ p.combined_score }}</span>
-    </summary>
+    <h3>1.1 AI Visibility Overview</h3>
+    {% if family.overview.checks %}
     <div class="table-wrap report-table">
       <table>
-        <thead><tr><th>Family</th><th>Check</th><th>Status</th><th>Severity</th><th>Evidence</th><th>What to do</th></tr></thead>
+        <thead><tr><th>AI system</th><th>Questions/checks</th><th>Cited</th><th>Mentioned</th><th>Absent</th></tr></thead>
         <tbody>
-        {% for s in report.signals_by_page.get(p.path, []) %}
-        <tr class="finding-row finding-{{ s.observed_status|lower }}">
-          <td><span class="family-badge">{{ s.family }}</span></td>
-          <td><strong>{{ s.title }}</strong><div class="signal-small">{{ s.category }}</div></td>
+        {% for row in family.engine_summary %}
+        <tr><td>{{ row.engine }}</td><td>{{ row.tested }}</td><td>{{ row.cited }}</td><td>{{ row.mentioned }}</td><td>{{ row.absent }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="panel"><p>No AEO Tracker results are stored for this report session.</p></div>
+    {% endif %}
+
+    <h3>1.2 AI Answer Results</h3>
+    {% if family.answers %}
+    <div class="table-wrap report-table">
+      <table>
+        <thead><tr><th>Question</th><th>AI system/model</th><th>Status</th><th>Citation rank</th><th>Company source</th><th>Sources / answer</th></tr></thead>
+        <tbody>
+        {% for row in family.answers %}
+        <tr>
+          <td>{{ row.question }}</td>
+          <td>{{ row.engine }}{% if row.model %}<div class="signal-small">{{ row.model }}</div>{% endif %}{% if row.searched is not none %}<div class="signal-small">Live search: {{ 'yes' if row.searched else 'no' }}</div>{% endif %}</td>
+          <td>{{ row.status or ('cited' if row.cited else 'absent') }}</td>
+          <td>{{ row.rank or '—' }}</td>
+          <td class="report-url">{{ row.url or '—' }}</td>
           <td>
-            <span class="status-badge status-{{ s.observed_status|lower }}">
-              {% if s.observed_status == 'PASS' %}<span class="cue-icon">✓</span>
-              {% elif s.observed_status == 'FAIL' %}<span class="cue-icon">!</span>
-              {% elif s.observed_status == 'PARTIAL' %}<span class="cue-icon">~</span>
-              {% else %}<span class="cue-icon">?</span>{% endif %}
-              {{ s.observed_status }}
-            </span>
+            {% if row.citations_list %}<div class="citation-domains">{{ row.citations_list|map(attribute='domain')|select|join(', ') }}</div>{% endif %}
+            {% if row.answerText %}
+            <details><summary>Returned answer</summary><div class="returned-answer">{{ row.answerText }}</div></details>
+            {% elif row.snippet %}
+            <details><summary>Returned snippet</summary><div class="returned-answer">{{ row.snippet }}</div></details>
+            {% endif %}
           </td>
-          <td><span class="severity-badge severity-{{ s.severity|lower }}"><span class="cue-dot"></span>{{ s.severity }}</span></td>
-          <td>{{ s.evidence }}</td>
-          <td><strong>{{ s.recommendation or 'Review this finding.' }}</strong></td>
         </tr>
         {% endfor %}
         </tbody>
       </table>
     </div>
-  </details>
-  {% endfor %}
-</section>
+    {% endif %}
 
-<section class="report-section">
-  <div class="report-section-head"><div><div class="report-section-number">07</div><h2>Scope and Limitations</h2></div></div>
-  <div class="panel report-limitations">
-    <p>This report is a frozen session generated from the evidence stored by the application at the time the report was created. It combines GSC keyword/page observations, the latest technical crawl, and the latest structured GEO/AEO audit.</p>
-    <p><strong>Not yet measured:</strong> inbound backlink authority, cross-platform entity consistency, live AI citations and mentions, Google AI Overview visibility, LLM share of voice, and a dedicated AIO score. These are shown as out of scope rather than inferred.</p>
-    {% if report.audit and report.audit.status == 'partial' and report.audit.error %}<p><strong>Partial audit note:</strong> {{ report.audit.error }}</p>{% endif %}
-  </div>
+    <h3>1.3 Brand Visibility</h3>
+    <div class="family-snapshot compact">
+      <div class="snapshot-card"><span>Linked domain mentions</span><strong>{{ family.brand_visibility.linked_mentions }}</strong></div>
+      <div class="snapshot-card"><span>Unlinked brand mentions</span><strong>{{ family.brand_visibility.unlinked_mentions }}</strong></div>
+      <div class="snapshot-card"><span>Company pages cited</span><strong>{{ family.brand_visibility.company_pages|length }}</strong></div>
+      <div class="snapshot-card"><span>ChatGPT cited</span><strong>{{ family.brand_visibility.chatgpt.cited if family.brand_visibility.chatgpt else '—' }}</strong></div>
+      <div class="snapshot-card"><span>Google AI Overview</span><strong>Not stored</strong></div>
+    </div>
+
+    <h3>1.4 AI Share of Voice / Competitive Visibility</h3>
+    {% if family.other_domains %}
+    <div class="table-wrap report-table narrow-table">
+      <table><thead><tr><th>Other cited domain</th><th>Citations</th></tr></thead>
+      <tbody>{% for domain, count in family.other_domains %}<tr><td>{{ domain }}</td><td>{{ count }}</td></tr>{% endfor %}</tbody></table>
+    </div>
+    {% else %}
+    <div class="panel"><p>No competitor citation dataset is stored in this report session.</p></div>
+    {% endif %}
+
+    <h3>1.5 AI Visibility Findings</h3>
+    <div class="panel"><p>Visibility findings are based only on observed AEO Tracker results. SEO traffic metrics are intentionally excluded from this family.</p></div>
+
+  {% elif family.kind == 'audit' or family.kind == 'onsite' %}
+
+    <div class="family-snapshot">
+      <div class="snapshot-card"><span>Checks</span><strong>{{ family.snapshot.checks }}</strong></div>
+      <div class="snapshot-card"><span>Checks needing attention</span><strong>{{ family.snapshot.affected_checks }}</strong></div>
+      <div class="snapshot-card"><span>Pages tested</span><strong>{{ family.snapshot.pages }}</strong></div>
+    </div>
+
+    <h3>Priority findings</h3>
+    <div class="table-wrap report-table">
+      <table>
+        <thead><tr><th>Check</th><th>Category</th><th>Status</th><th>Severity</th><th>Pages affected</th><th></th></tr></thead>
+        <tbody>
+        {% for check in family.priority_findings %}
+        <tr>
+          <td><strong>{{ check.title }}</strong></td>
+          <td>{{ check.category }}</td>
+          <td>{{ check.status }}</td>
+          <td>{{ check.severity }}</td>
+          <td>{{ check.pages_affected }} of {{ check.pages_tested }}</td>
+          <td class="tool-col"><span class="wrench-icon" aria-hidden="true">&#128295;</span></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6">No findings currently require attention.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% for category in family.categories_data %}
+    <section class="audit-category">
+      <div class="category-head">
+        <h3>{{ category.name }}</h3>
+        <span class="status-badge status-{{ category.status|lower }}">{{ category.status }}</span>
+      </div>
+      <div class="table-wrap report-table">
+        <table>
+          <thead><tr><th>Check</th><th>Status</th><th>Severity</th><th>Pages affected</th><th></th></tr></thead>
+          <tbody>
+          {% for check in category.checks %}
+          <tr>
+            <td><strong>{{ check.title }}</strong></td>
+            <td>{{ check.status }}</td>
+            <td>{{ check.severity }}</td>
+            <td>{{ check.pages_affected }} of {{ check.pages_tested }}</td>
+            <td class="tool-col"><span class="wrench-icon" aria-hidden="true">&#128295;</span></td>
+          </tr>
+          <tr class="check-detail-row">
+            <td colspan="5">
+              <details>
+                <summary>Detail · {{ check.pages_tested }} page{{ '' if check.pages_tested == 1 else 's' }}</summary>
+                {% if check.recommendation %}<p><strong>Existing recommendation:</strong> {{ check.recommendation }}</p>{% endif %}
+                <div class="table-wrap nested-table">
+                  <table>
+                    <thead><tr><th>Page</th><th>Status</th><th>Severity</th><th>Evidence</th></tr></thead>
+                    <tbody>
+                    {% for detail in check.details %}
+                    <tr>
+                      <td>{% if detail.page_id %}<a href="{{ url_for('page_workspace', domain=site.domain, page_id=detail.page_id) }}">{{ detail.path }}</a>{% else %}{{ detail.path }}{% endif %}</td>
+                      <td>{{ detail.observed_status }}</td>
+                      <td>{{ detail.severity }}</td>
+                      <td>{{ detail.evidence }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5">No stored checks in this category.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% endfor %}
+
+    {% if family.kind == 'onsite' %}
+      <h3>7.1 Onsite Issue Summary</h3>
+      {% if family.crawl_issues %}
+      <div class="table-wrap report-table">
+        <table><thead><tr><th>Severity</th><th>Issue</th><th>Page</th><th>Detail</th></tr></thead>
+        <tbody>{% for issue in family.crawl_issues %}<tr><td>{{ issue.severity }}</td><td>{{ issue.title }}</td><td class="report-url">{{ issue.page_url }}</td><td>{{ issue.detail }}</td></tr>{% endfor %}</tbody></table>
+      </div>
+      {% endif %}
+
+      <h3>7.5 Technical SEO Crawl</h3>
+      {% if family.crawl %}
+      <div class="family-snapshot compact">
+        <div class="snapshot-card"><span>Discovered</span><strong>{{ family.crawl.pages_discovered }}</strong></div>
+        <div class="snapshot-card"><span>Crawled</span><strong>{{ family.crawl.pages_crawled }}</strong></div>
+        <div class="snapshot-card"><span>Failed</span><strong>{{ family.crawl.pages_failed }}</strong></div>
+        <div class="snapshot-card"><span>Status</span><strong>{{ family.crawl.status }}</strong></div>
+      </div>
+      <div class="table-wrap report-table">
+        <table><thead><tr><th>Page</th><th>HTTP</th><th>Indexable</th><th>Words</th><th>Internal links</th><th>Schema</th><th>ms</th></tr></thead>
+        <tbody>{% for p in family.crawl_pages %}<tr><td class="report-url">{{ p.path or p.url }}</td><td>{{ p.status_code }}</td><td>{{ 'yes' if p.indexable else 'no' }}</td><td>{{ p.word_count }}</td><td>{{ p.internal_links }}</td><td>{{ p.schema_types_json or '—' }}</td><td>{{ p.response_ms }}</td></tr>{% endfor %}</tbody></table>
+      </div>
+      {% endif %}
+
+      <h3>7.6 Site Audit</h3>
+      {% if family.site_audit %}
+      <div class="panel"><p>Status {{ family.site_audit.status }} · {{ family.site_audit.pagesCrawled }} pages crawled · started {{ family.site_audit.startedAt }}</p></div>
+      {% else %}<div class="panel"><p>No OpenGSC Site Audit snapshot is stored for this report.</p></div>{% endif %}
+
+      <h3>7.7 Indexing & Sitemap</h3>
+      {% if family.sitemap_urls %}
+      <div class="table-wrap report-table"><table><thead><tr><th>URL</th><th>lastmod</th><th>First seen</th><th>Last seen</th><th>Change</th><th>Google coverage</th></tr></thead>
+      <tbody>{% for row in family.sitemap_urls[:100] %}<tr><td class="report-url">{{ row.url }}</td><td>{{ row.lastmod or '—' }}</td><td>{{ row.firstSeenAt }}</td><td>{{ row.lastSeenAt }}</td><td>{{ row.changeStatus }}</td><td>{{ row.googleCoverage or row.googleStatus or '—' }}</td></tr>{% endfor %}</tbody></table></div>
+      {% else %}<div class="panel"><p>No sitemap inventory is stored for this report.</p></div>{% endif %}
+
+      <h3>7.8 AI Crawler Accessibility</h3>
+      <div class="panel"><p>AI crawler-access checks remain an onsite technical control. Existing stored crawler-access evidence is preserved in the underlying audit/site-audit datasets.</p></div>
+
+      <h3>7.9 Site Health</h3>
+      {% if family.site_health %}
+      <div class="json-facts">
+        <div><strong>SSL</strong><pre>{{ family.site_health.sslData or '—' }}</pre></div>
+        <div><strong>Safe Browsing</strong><pre>{{ family.site_health.safeBrowsing or '—' }}</pre></div>
+        <div><strong>VirusTotal</strong><pre>{{ family.site_health.virusTotal or '—' }}</pre></div>
+        <div><strong>Core Web Vitals</strong><pre>{{ family.site_health.vitals or '—' }}</pre></div>
+      </div>
+      {% else %}<div class="panel"><p>No Site Health snapshot is stored for this report.</p></div>{% endif %}
+    {% endif %}
+
+  {% elif family.kind == 'seo' %}
+    {% set seo = family.seo or {} %}
+    <h3>6.1 Organic Search Performance</h3>
+{% if not seo or not seo.keywords %}<div class="panel source-required"><strong>Please connect Google Search Console</strong></div>{% endif %}
+    <div class="family-snapshot">
+      <div class="snapshot-card"><span>Observed queries</span><strong>{{ seo.keywords or 0 }}</strong></div>
+      <div class="snapshot-card"><span>Ranking pages</span><strong>{{ seo.pages or 0 }}</strong></div>
+      <div class="snapshot-card"><span>Impressions</span><strong>{{ seo.impressions or 0 }}</strong></div>
+      <div class="snapshot-card"><span>Clicks</span><strong>{{ seo.clicks or 0 }}</strong></div>
+      <div class="snapshot-card"><span>CTR</span><strong>{{ seo.ctr or 0 }}%</strong></div>
+    </div>
+
+    {% if family.keywords %}
+    <div class="table-wrap report-table">
+      <table><thead><tr><th>Query</th><th>Landing page</th><th>Impressions</th><th>Clicks</th><th>Best</th><th>Latest</th><th>Status</th></tr></thead>
+      <tbody>{% for k in family.keywords %}<tr><td>{{ k.query }}</td><td class="report-url">{{ k.page }}</td><td>{{ k.impressions }}</td><td>{{ k.clicks }}</td><td>{{ k.best_position }}</td><td>{{ k.latest_position }}</td><td>{{ k.status }}</td></tr>{% endfor %}</tbody></table>
+    </div>
+    {% endif %}
+
+    <h3>6.2 Search Opportunities</h3>
+    <h4>Striking Distance Keywords</h4>
+    {% if family.striking_distance %}
+    <div class="table-wrap report-table narrow-table"><table><thead><tr><th>Query</th><th>Page</th><th>Latest position</th><th>Impressions</th></tr></thead>
+    <tbody>{% for k in family.striking_distance %}<tr><td>{{ k.query }}</td><td class="report-url">{{ k.page }}</td><td>{{ k.latest_position }}</td><td>{{ k.impressions }}</td></tr>{% endfor %}</tbody></table></div>
+    {% else %}<div class="panel"><p>No striking-distance rows in the stored snapshot.</p></div>{% endif %}
+
+    <h3>6.3 Cannibalization</h3>
+    <h4>Exact-query cannibalization</h4>
+    {% if family.exact_cannibalization %}
+    <div class="table-wrap report-table narrow-table"><table><thead><tr><th>Query</th><th>Ranking pages</th></tr></thead>
+    <tbody>{% for item in family.exact_cannibalization %}<tr><td>{{ item.query }}</td><td>{{ item.pages|map(attribute='page')|join(', ') }}</td></tr>{% endfor %}</tbody></table></div>
+    {% else %}<div class="panel"><p>No exact-query cannibalization detected in the stored observations.</p></div>{% endif %}
+    <h4>Related-intent cannibalization</h4>
+    <div class="panel"><p>Related-intent analysis remains distinct. It will appear here when its OpenGSC result is persisted into the report snapshot.</p></div>
+
+    <h3>6.4 Content Decay</h3>
+    <div class="panel"><p>Content Decay remains a distinct OpenGSC module. Its report-specific snapshot will populate this section when persisted.</p></div>
+
+    <h3>6.5 Rank Tracking</h3>
+    {% if family.rank_tracking %}
+    <div class="table-wrap report-table"><table><thead><tr><th>Keyword</th><th>Last position</th><th>Previous</th><th>Best</th><th>URL</th><th>Last checked</th></tr></thead>
+    <tbody>{% for row in family.rank_tracking %}<tr><td>{{ row.keyword }}</td><td>{{ row.lastPosition or '—' }}</td><td>{{ row.prevPosition or '—' }}</td><td>{{ row.bestPosition or '—' }}</td><td class="report-url">{{ row.lastUrl or '—' }}</td><td>{{ row.lastCheckedAt or '—' }}</td></tr>{% endfor %}</tbody></table></div>
+    {% else %}<div class="panel"><p>No tracked-keyword rows are stored for this report.</p></div>{% endif %}
+
+    <h3>6.6 Keyword Demand</h3>
+    {% if family.wanted %}
+    <div class="table-wrap report-table"><table><thead><tr><th>Wanted keyword</th><th>Target page</th><th>Monthly searches</th><th>Competition</th><th>Source</th></tr></thead>
+    <tbody>{% for row in family.wanted %}<tr><td>{{ row.keyword }}</td><td>{{ row.target_path or 'Unassigned' }}</td><td>{{ row.avg_monthly_searches or '—' }}</td><td>{{ row.competition or '—' }}</td><td>{{ row.source }}</td></tr>{% endfor %}</tbody></table></div>
+    {% else %}<div class="panel"><p>No wanted/intended keyword targets are stored.</p></div>{% endif %}
+
+    <h3>6.7 Competitive Search Gaps</h3>
+    {% if family.competitor_keywords %}
+    <div class="table-wrap report-table"><table><thead><tr><th>Competitor</th><th>Keyword</th><th>Position</th><th>Volume</th><th>Difficulty</th><th>URL</th></tr></thead>
+    <tbody>{% for row in family.competitor_keywords[:100] %}<tr><td>{{ row.competitor }}</td><td>{{ row.keyword }}</td><td>{{ row.position or '—' }}</td><td>{{ row.volume or '—' }}</td><td>{{ row.difficulty or '—' }}</td><td class="report-url">{{ row.url }}</td></tr>{% endfor %}</tbody></table></div>
+    {% else %}<div class="panel"><p>No persisted competitor-gap rows are available.</p></div>{% endif %}
+
+    <h3>6.8 Backlinks & Search Authority</h3>
+    {% if family.domain_metrics %}
+    <div class="family-snapshot compact">
+      <div class="snapshot-card"><span>DR</span><strong>{{ family.domain_metrics.dr or '—' }}</strong></div>
+      <div class="snapshot-card"><span>Referring domains</span><strong>{{ family.domain_metrics.refDomains or '—' }}</strong></div>
+      <div class="snapshot-card"><span>Backlinks</span><strong>{{ family.domain_metrics.backlinks or '—' }}</strong></div>
+    </div>
+    {% endif %}
+    {% if family.ref_domains %}
+    <div class="table-wrap report-table narrow-table"><table><thead><tr><th>Referring domain</th><th>DR</th><th>Links</th><th>Dofollow</th><th>Lost</th></tr></thead>
+    <tbody>{% for row in family.ref_domains[:100] %}<tr><td>{{ row.refDomain }}</td><td>{{ row.dr or '—' }}</td><td>{{ row.linksToTarget or '—' }}</td><td>{{ 'yes' if row.dofollow else 'no' }}</td><td>{{ 'yes' if row.lost else 'no' }}</td></tr>{% endfor %}</tbody></table></div>
+    {% elif family.backlinks %}
+    <div class="table-wrap report-table narrow-table"><table><thead><tr><th>Backlink URL</th><th>Status</th><th>Indexed</th><th>Added</th></tr></thead>
+    <tbody>{% for row in family.backlinks[:100] %}<tr><td class="report-url">{{ row.url }}</td><td>{{ row.aliveStatus or ('alive' if row.isAlive else 'unknown') }}</td><td>{{ row.xrStatus or '—' }}</td><td>{{ row.addedAt }}</td></tr>{% endfor %}</tbody></table></div>
+    {% else %}<div class="panel"><p>No backlink dataset is stored for this report.</p></div>{% endif %}
+
+    <h3>6.9 Audience / Search Performance Context</h3>
+    {% if family.clarity %}<pre class="data-block">{{ family.clarity.data }}</pre>{% else %}<div class="panel"><p>No GA4/Clarity snapshot is included in this report session.</p></div>{% endif %}
+  {% endif %}
 </section>
+{% endfor %}
 
 {% endblock %}

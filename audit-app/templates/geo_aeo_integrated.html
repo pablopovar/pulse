@@ -17,7 +17,7 @@
 <section class="panel"><h2>Pages</h2><div class="table-wrap"><table><thead><tr><th>Page</th><th>GEO</th><th>AEO</th><th>Combined</th><th>Fail</th><th>Partial</th></tr></thead><tbody>
 {% for p in page_rows %}<tr><td><a href="{{ url_for('page_workspace', domain=site.domain, page_id=p.page_id) }}">{{ p.path }}</a></td><td>{{ p.geo_score }}</td><td>{{ p.aeo_score }}</td><td>{{ p.combined_score }}</td><td>{{ p.fail_count }}</td><td>{{ p.partial_count }}</td></tr>
 {% else %}<tr><td colspan="6">No audited pages yet.</td></tr>{% endfor %}</tbody></table></div></section>
-<section class="panel"><h2>Current priority signals</h2><div class="table-wrap"><table><thead><tr><th>Page</th><th>Family</th><th>Signal</th><th>Observed</th><th>Severity</th><th>Workflow</th><th>Priority</th><th>Note</th></tr></thead><tbody>
-{% for s in priority_signals %}<tr><td>{{ s.path }}</td><td>{{ s.family }}</td><td>{{ s.title }}<div class="signal-small">{{ s.category }}</div></td><td>{{ s.observed_status }}</td><td>{{ s.severity }}</td><td>{{ s.workflow_status }}</td><td>{{ s.priority }}</td><td>{{ s.user_note }}</td></tr>
-{% else %}<tr><td colspan="8">No current priority signals.</td></tr>{% endfor %}</tbody></table></div></section>
+<section class="panel"><h2>Current priority signals</h2><div class="table-wrap"><table><thead><tr><th>Page</th><th>Family</th><th>Signal</th><th>Observed</th><th>Severity</th><th>Workflow</th><th>Priority</th><th>Note</th><th class="tool-col"></th></tr></thead><tbody>
+{% for s in priority_signals %}<tr><td>{{ s.path }}</td><td>{{ s.family }}</td><td>{{ s.title }}<div class="signal-small">{{ s.category }}</div></td><td>{{ s.observed_status }}</td><td>{{ s.severity }}</td><td>{{ s.workflow_status }}</td><td>{{ s.priority }}</td><td>{{ s.user_note }}</td><td class="tool-col"><span class="wrench-icon" aria-hidden="true">&#128295;</span></td></tr>
+{% else %}<tr><td colspan="9">No current priority signals.</td></tr>{% endfor %}</tbody></table></div></section>
 {% endblock %}

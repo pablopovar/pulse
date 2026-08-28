@@ -28,8 +28,17 @@ RESEARCH_DB = Path(os.environ.get("RESEARCH_DB", "/data/dashboard/research.db"))
 from audits.geo_aeo.service import run_audit as run_geo_aeo_audit
 from reports.full_pdf import collect_report_data, build_full_report_pdf
 from reports.web_report import create_report_session, load_report_session, list_report_sessions, prepare_report_view
+from reports.cross_model import QUESTION_DEFS, QUESTION_TEMPLATES, QUESTION_TO_FAMILY, PROVIDER_STATUSES, controlled_domains, save_controlled_domains, upsert_response, run_comparison, load_question, report_rollups
 
 app = Flask(__name__)
+
+@app.template_filter("fromjson")
+def fromjson_filter(value):
+    try:
+        return json.loads(value or "{}")
+    except Exception:
+        return {}
+
 
 
 def db():
@@ -265,6 +274,261 @@ def research_db():
     con.commit()
     return con
 
+
+SOURCE_CATALOG = [
+    ("gsc", "Google Search Console", "Observed Google search queries, landing pages, impressions, clicks, CTR and positions."),
+    ("ga4", "Google Analytics 4", "Audience, session, engagement, event, conversion and revenue context."),
+    ("dataforseo", "DataForSEO", "Keyword demand, SERP, competitive and supplemental search visibility data."),
+    ("chatgpt", "ChatGPT API", "AI answer, mention and citation observations from configured OpenAI models."),
+    ("claude", "Claude API", "AI answer, mention and citation observations from configured Anthropic models."),
+    ("gemini", "Gemini API", "AI answer, mention and citation observations from configured Gemini models."),
+    ("semrush", "Semrush", "Search demand, competitor, backlink and authority datasets."),
+    ("google_apis", "Google APIs", "Additional Google services and evidence sources used by report checks."),
+]
+
+def ensure_domain_source_schema(con):
+    con.execute("CREATE TABLE IF NOT EXISTS domain_source (domain TEXT NOT NULL COLLATE NOCASE,source_key TEXT NOT NULL,source_name TEXT NOT NULL,selected INTEGER NOT NULL DEFAULT 0,connection_status TEXT NOT NULL DEFAULT 'not_connected',detail TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL,PRIMARY KEY(domain,source_key))")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_domain_source_domain ON domain_source(domain,selected)")
+    con.commit()
+
+def detected_source_state(site):
+    states={
+      "gsc":{"connected":not bool(site.get("gsc_missing")),"detail":"OpenGSC / GSC property linked" if not site.get("gsc_missing") else ""},
+      "dataforseo":{"connected":bool(os.environ.get("DATAFORSEO_LOGIN") and os.environ.get("DATAFORSEO_PASSWORD")),"detail":"Credentials configured" if os.environ.get("DATAFORSEO_LOGIN") and os.environ.get("DATAFORSEO_PASSWORD") else ""},
+    }
+    try:
+        site_id=_site_id_value(site)
+        if site_id and SEO_DB.exists():
+            with db() as con:
+                names={r["name"] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+                if "ClaritySnapshot" in names and con.execute('SELECT 1 FROM "ClaritySnapshot" WHERE siteId=? LIMIT 1',(site_id,)).fetchone():
+                    states["ga4"]={"connected":True,"detail":"Analytics/Clarity snapshot available"}
+                if "AeoCheck" in names and "TrackedQuestion" in names:
+                    engines=con.execute('SELECT DISTINCT c.engine FROM "AeoCheck" c JOIN "TrackedQuestion" q ON q.id=c.questionId WHERE q.siteId=?',(site_id,)).fetchall()
+                    found={str(r["engine"]).lower() for r in engines if r["engine"]}
+                    for key in ("chatgpt","claude","gemini"):
+                        if key in found: states[key]={"connected":True,"detail":f"Stored {key.title()} observations available"}
+    except Exception:
+        pass
+    return states
+
+def domain_sources_for_site(site):
+    detected=detected_source_state(site); now=datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with research_db() as con:
+        ensure_domain_source_schema(con)
+        rows={r["source_key"]:dict(r) for r in con.execute("SELECT * FROM domain_source WHERE domain=? COLLATE NOCASE",(site["domain"],)).fetchall()}
+        for key,name,_ in SOURCE_CATALOG:
+            d=detected.get(key,{})
+            if key not in rows and d.get("connected"):
+                con.execute("INSERT OR IGNORE INTO domain_source(domain,source_key,source_name,selected,connection_status,detail,updated_at) VALUES (?,?,?,?,?,?,?)",(site["domain"],key,name,1,"connected",d.get("detail",""),now))
+        con.commit()
+        rows={r["source_key"]:dict(r) for r in con.execute("SELECT * FROM domain_source WHERE domain=? COLLATE NOCASE",(site["domain"],)).fetchall()}
+    out=[]
+    for key,name,description in SOURCE_CATALOG:
+        stored=rows.get(key,{}); d=detected.get(key,{}); connected=bool(d.get("connected")); selected=bool(stored.get("selected")) or connected
+        out.append({"key":key,"name":name,"description":description,"selected":selected,"status":"Connected" if connected else ("Selected" if selected else "Not selected"),"status_class":"connected" if connected else ("selected" if selected else "off"),"detail":d.get("detail") or stored.get("detail") or ""})
+    catalog={x[0] for x in SOURCE_CATALOG}
+    for key,stored in rows.items():
+        if key in catalog: continue
+        out.append({"key":key,"name":stored["source_name"],"description":"Custom or future evidence source.","selected":bool(stored["selected"]),"status":"Selected" if stored["selected"] else "Not selected","status_class":"selected" if stored["selected"] else "off","detail":stored["detail"] or ""})
+    return out
+
+def ensure_domain_ready(domain):
+    now=datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with research_db() as con:
+        row=con.execute("SELECT COUNT(*) AS n FROM site_page WHERE domain=?",(domain,)).fetchone(); count=row["n"] if row else 0
+    if not count:
+        try: sync_site_pages(domain)
+        except Exception: pass
+    with research_db() as con:
+        row=con.execute("SELECT COUNT(*) AS n FROM site_page WHERE domain=?",(domain,)).fetchone(); count=row["n"] if row else 0
+        if not count:
+            url="https://"+domain.rstrip("/")+"/"
+            con.execute("INSERT OR IGNORE INTO site_page(domain,url,path,source,discovered_at,updated_at) VALUES (?,?,?,'domain',?,?)",(domain,url,"/",now,now)); con.commit(); count=1
+    return {"ready":True,"label":"Ready","pages":count}
+
+def selected_source_keys(site):
+    return [s["key"] for s in domain_sources_for_site(site) if s["selected"]]
+
+
+REPORT_FAMILY_SETTINGS = [
+    {"id": "ai-visibility", "name": "AI Visibility", "departments": "IR · Communications · Corporate Affairs · Marketing"},
+    {"id": "identity-authority", "name": "Identity & Authority", "departments": "IR · Communications · Brand"},
+    {"id": "evidence-trust", "name": "Evidence & Trust", "departments": "IR · Communications · Editorial · Legal/Review"},
+]
+
+REPORT_FAMILY_DEFAULT_QUESTIONS = {
+    "ai-visibility": [
+        "What does [Company] do, and how does its business model generate cash flows?",
+        "What are [Company]’s main growth drivers?",
+    ],
+    "identity-authority": [
+        "What differentiates [Company] from other companies or investment opportunities in its industry?",
+        "How does [Company] allocate capital, and what does that reveal about its strategy and priorities?",
+    ],
+    "evidence-trust": [
+        "What are the principal risks investors should understand about [Company]?",
+        "How should investors think about [Company]’s portfolio diversification, concentration, and exposure to key assets or businesses?",
+    ],
+}
+
+MANUAL_AI_PROVIDERS = [
+    {"id": "chatgpt", "name": "ChatGPT"},
+    {"id": "claude", "name": "Claude"},
+    {"id": "gemini", "name": "Gemini"},
+]
+
+def ensure_report_question_schema(con):
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS domain_family_question ("
+        "domain TEXT NOT NULL COLLATE NOCASE,"
+        "family_id TEXT NOT NULL,"
+        "question_slot INTEGER NOT NULL,"
+        "question_text TEXT NOT NULL DEFAULT '',"
+        "updated_at TEXT NOT NULL,"
+        "PRIMARY KEY(domain,family_id,question_slot))"
+    )
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS report_manual_ai_response ("
+        "domain TEXT NOT NULL COLLATE NOCASE,"
+        "report_id TEXT NOT NULL,"
+        "family_id TEXT NOT NULL,"
+        "question_slot INTEGER NOT NULL,"
+        "provider TEXT NOT NULL,"
+        "response_text TEXT NOT NULL DEFAULT '',"
+        "updated_at TEXT NOT NULL,"
+        "PRIMARY KEY(domain,report_id,family_id,question_slot,provider))"
+    )
+    con.execute("CREATE INDEX IF NOT EXISTS idx_family_question_domain ON domain_family_question(domain,family_id,question_slot)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_manual_ai_response_report ON report_manual_ai_response(domain,report_id,family_id,question_slot)")
+    con.commit()
+
+
+def ensure_domain_company_schema(con):
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS domain_company_settings ("
+        "domain TEXT PRIMARY KEY COLLATE NOCASE,"
+        "company_name TEXT NOT NULL DEFAULT '',"
+        "updated_at TEXT NOT NULL)"
+    )
+    con.commit()
+
+def _company_name_from_title(title):
+    if not title:
+        return ""
+    candidate = str(title).strip()
+    for sep in (" | ", " · ", " — ", " - ", ": "):
+        if sep in candidate:
+            candidate = candidate.split(sep, 1)[0].strip()
+            break
+    return candidate
+
+def infer_company_name(domain):
+    with research_db() as con:
+        ensure_domain_company_schema(con)
+        row = con.execute(
+            "SELECT company_name FROM domain_company_settings WHERE domain=? COLLATE NOCASE",
+            (domain,),
+        ).fetchone()
+        if row and str(row["company_name"] or "").strip():
+            return str(row["company_name"]).strip()
+
+        try:
+            row = con.execute(
+                "SELECT cp.title "
+                "FROM crawl_page cp "
+                "JOIN crawl_run cr ON cr.id=cp.crawl_run_id "
+                "WHERE cr.domain=? COLLATE NOCASE "
+                "AND cp.path='/' "
+                "AND TRIM(COALESCE(cp.title,''))<>'' "
+                "ORDER BY cr.id DESC LIMIT 1",
+                (domain,),
+            ).fetchone()
+            if row:
+                candidate = _company_name_from_title(row["title"])
+                if candidate:
+                    return candidate
+        except Exception:
+            pass
+
+    label = domain.lower().split(":")[0].strip().strip("/")
+    if label.startswith("www."):
+        label = label[4:]
+    label = label.split(".")[0]
+    words = [w for w in re.split(r"[-_]+", label) if w]
+    return " ".join(w.capitalize() for w in words) if words else domain
+
+def default_family_questions(domain):
+    company = infer_company_name(domain)
+    return {
+        family_id: {
+            index + 1: question.replace("[Company]", company)
+            for index, question in enumerate(questions)
+        }
+        for family_id, questions in REPORT_FAMILY_DEFAULT_QUESTIONS.items()
+    }
+
+def effective_domain_family_questions(domain):
+    defaults = default_family_questions(domain)
+    saved = load_domain_family_questions(domain)
+    for family_id, slots in saved.items():
+        if family_id not in defaults:
+            continue
+        for slot, value in slots.items():
+            if slot in (1, 2) and str(value).strip():
+                defaults[family_id][slot] = value
+    return defaults
+
+def load_domain_family_questions(domain):
+    with research_db() as con:
+        ensure_report_question_schema(con)
+        rows = con.execute(
+            "SELECT family_id,question_slot,question_text "
+            "FROM domain_family_question "
+            "WHERE domain=? COLLATE NOCASE AND TRIM(question_text)<>'' "
+            "ORDER BY family_id,question_slot",
+            (domain,),
+        ).fetchall()
+    out = {}
+    for row in rows:
+        out.setdefault(row["family_id"], {})[int(row["question_slot"])] = row["question_text"]
+    return out
+
+def load_report_manual_ai_responses(domain, report_id):
+    with research_db() as con:
+        ensure_report_question_schema(con)
+        rows = con.execute(
+            "SELECT family_id,question_slot,provider,response_text "
+            "FROM report_manual_ai_response "
+            "WHERE domain=? COLLATE NOCASE AND report_id=? "
+            "ORDER BY family_id,question_slot,provider",
+            (domain, report_id),
+        ).fetchall()
+    out = {}
+    for row in rows:
+        out.setdefault(row["family_id"], {}).setdefault(int(row["question_slot"]), {})[row["provider"]] = row["response_text"]
+    return out
+
+
+
+def load_cross_model_report_state(domain, report_id, snapshot):
+    out = {}
+    family_questions = snapshot.get("family_questions") or {}
+    with research_db() as con:
+        for family_id, defs in QUESTION_DEFS.items():
+            configured = family_questions.get(family_id) or {}
+            for slot, (question_id, template_question) in enumerate(defs, start=1):
+                rendered = configured.get(slot) or configured.get(str(slot))
+                if not rendered:
+                    continue
+                state = load_question(con, domain, report_id, question_id)
+                state["question_id"] = question_id
+                state["family_id"] = family_id
+                state["slot"] = slot
+                state["template_question"] = template_question
+                state["rendered_question"] = rendered
+                out[question_id] = state
+    return out
 
 def research_state_from_request(source):
     return {"q":source.get("q","").strip(),"sort":source.get("sort","keyword"),"dir":source.get("dir","asc"),"per_page":source.get("per_page","50"),"page":source.get("page","1"),"show_tag":source.getlist("show_tag"),"hide_tag":source.getlist("hide_tag")}
@@ -1086,27 +1350,115 @@ def domain_new():
         site=get_site(domain)
         gsc_message=" GSC linked." if not site["gsc_missing"] else " GSC missing; SEO ranking fields will remain empty."
 
-        return redirect(url_for(
-            "pages",
-            domain=domain,
-            message=("Domain added." if created else "Domain already exists.")+sitemap_message+gsc_message
-        ))
+        ensure_domain_ready(domain)
+        return redirect(url_for("domain_sources",domain=domain,message=("Domain added." if created else "Domain already exists.")+" Select any additional data sources, then continue to Reports."))
 
     return render_template("domain_new.html",sites=get_sites(),site=None,message=message)
 
+
+@app.route("/d/<domain>/sources",methods=["GET","POST"])
+def domain_sources(domain):
+    site=get_site(domain); readiness=ensure_domain_ready(domain); message=request.args.get("message","").strip()
+    if request.method=="POST":
+        selected=set(request.form.getlist("selected")); custom_name=request.form.get("custom_name","").strip(); custom_detail=request.form.get("custom_detail","").strip(); now=datetime.now(timezone.utc).isoformat(timespec="seconds"); detected=detected_source_state(site)
+        with research_db() as con:
+            ensure_domain_source_schema(con)
+            for key,name,_ in SOURCE_CATALOG:
+                connected=bool(detected.get(key,{}).get("connected"))
+                con.execute("INSERT INTO domain_source(domain,source_key,source_name,selected,connection_status,detail,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(domain,source_key) DO UPDATE SET source_name=excluded.source_name,selected=excluded.selected,connection_status=excluded.connection_status,detail=CASE WHEN excluded.detail<>'' THEN excluded.detail ELSE domain_source.detail END,updated_at=excluded.updated_at",(domain,key,name,int(key in selected or connected),"connected" if connected else "not_connected",detected.get(key,{}).get("detail",""),now))
+            if custom_name:
+                custom_key="custom_"+re.sub(r"[^a-z0-9]+","_",custom_name.lower()).strip("_")
+                if custom_key=="custom_": custom_key="custom_source"
+                con.execute("INSERT INTO domain_source(domain,source_key,source_name,selected,connection_status,detail,updated_at) VALUES (?,?,?,1,'not_connected',?,?) ON CONFLICT(domain,source_key) DO UPDATE SET source_name=excluded.source_name,selected=1,detail=excluded.detail,updated_at=excluded.updated_at",(domain,custom_key,custom_name,custom_detail,now))
+            con.commit()
+        return redirect(url_for("domain_sources",domain=domain,message="Sources saved. Domain is ready to run reports."))
+    return render_template("sources.html",sites=get_sites(),site=site,sources=domain_sources_for_site(site),readiness=readiness,message=message)
+
+@app.route("/d/<domain>/tools")
+def tools(domain):
+    site=get_site(domain)
+    return render_template("tools.html",sites=get_sites(),site=site)
+
+
+
+@app.post("/d/<domain>/settings/company-controlled-domains")
+def save_company_controlled_domains(domain):
+    get_site(domain)
+    raw = request.form.get("company_controlled_domains", "")
+    values = [line.strip() for line in raw.splitlines() if line.strip()]
+    with research_db() as con:
+        save_controlled_domains(con, domain, values)
+    return redirect(url_for("domain_settings", domain=domain, message="Company-controlled domains saved."))
+
+@app.route("/d/<domain>/settings", methods=["GET", "POST"])
+def domain_settings(domain):
+    site = get_site(domain)
+    message = request.args.get("message", "").strip()
+
+    if request.method == "POST":
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        company_name = request.form.get("company_name", "").strip() or infer_company_name(domain)
+        valid_family_ids = {f["id"] for f in REPORT_FAMILY_SETTINGS}
+
+        with research_db() as con:
+            ensure_report_question_schema(con)
+            ensure_domain_company_schema(con)
+
+            con.execute(
+                "INSERT INTO domain_company_settings(domain,company_name,updated_at) "
+                "VALUES (?,?,?) "
+                "ON CONFLICT(domain) DO UPDATE SET "
+                "company_name=excluded.company_name,updated_at=excluded.updated_at",
+                (domain, company_name, now),
+            )
+
+            placeholders = ",".join("?" for _ in valid_family_ids)
+            con.execute(
+                f"DELETE FROM domain_family_question WHERE domain=? COLLATE NOCASE "
+                f"AND (family_id NOT IN ({placeholders}) OR question_slot NOT IN (1,2))",
+                (domain, *sorted(valid_family_ids)),
+            )
+
+            defaults = {
+                family_id: {
+                    index + 1: q.replace("[Company]", company_name)
+                    for index, q in enumerate(REPORT_FAMILY_DEFAULT_QUESTIONS[family_id])
+                }
+                for family_id in valid_family_ids
+            }
+
+            for family_id in valid_family_ids:
+                for slot in (1, 2):
+                    value = request.form.get(f"q_{family_id}_{slot}", "").strip()
+                    if not value:
+                        value = defaults[family_id][slot]
+                    con.execute(
+                        "INSERT INTO domain_family_question(domain,family_id,question_slot,question_text,updated_at) "
+                        "VALUES (?,?,?,?,?) "
+                        "ON CONFLICT(domain,family_id,question_slot) DO UPDATE SET "
+                        "question_text=excluded.question_text,updated_at=excluded.updated_at",
+                        (domain, family_id, slot, value, now),
+                    )
+            con.commit()
+
+        return redirect(url_for("domain_settings", domain=domain, message="Domain questions saved."))
+
+    return render_template(
+        "domain_settings.html",
+        sites=get_sites(),
+        site=site,
+        families=REPORT_FAMILY_SETTINGS,
+        questions=effective_domain_family_questions(domain),
+        company_name=infer_company_name(domain),
+        message=message,
+        company_controlled_domains='\n'.join(controlled_domains(research_db(), domain)[1:]),
+    )
 
 @app.route("/d/<domain>/")
 def overview(domain):
     site = get_site(domain)
     summary, recent = domain_seo(site["id"])
-    return render_template(
-        "overview.html",
-        sites=get_sites(),
-        site=site,
-        summary=summary,
-        recent=recent,
-        reports=report_files(domain)[:5],
-    )
+    return render_template("overview.html",sites=get_sites(),site=site,summary=summary,recent=recent,reports=report_files(domain)[:5],readiness=ensure_domain_ready(domain),sources=domain_sources_for_site(site))
 
 
 @app.route("/d/<domain>/pages")
@@ -1938,15 +2290,30 @@ def reports(domain):
 
 @app.post("/d/<domain>/reports/full")
 def generate_full_web_report(domain):
-    site = get_site(domain)
-    report_data = collect_report_data(
-        domain=domain,
-        site_id=_site_id_value(site),
-        seo_db=SEO_DB,
-        research_db=RESEARCH_DB,
-    )
-    report_id = create_report_session(RESEARCH_DB, domain, report_data)
-    return redirect(url_for("report_session_view", domain=domain, report_id=report_id))
+    site=get_site(domain); ensure_domain_ready(domain)
+    with research_db() as con:
+        pages=con.execute("SELECT id,url,path FROM site_page WHERE domain=? ORDER BY path COLLATE NOCASE",(domain,)).fetchall()
+    try:
+        from crawlers.seo import crawl_worker,ensure_schema as ensure_crawl_schema
+        urls=[p["url"] for p in pages if p["url"]]
+        if urls:
+            with research_db() as con:
+                ensure_crawl_schema(con); cur=con.execute("INSERT INTO crawl_run(domain,base_url,status,page_cap,delay_ms,obey_robots,report_scope,selected_urls_json) VALUES (?,?,?,?,?,?,?,?)",(domain,"https://"+domain,"queued",len(urls),0,1,"report",json.dumps(urls))); crawl_run_id=cur.lastrowid; con.commit()
+            crawl_worker(crawl_run_id,domain,"https://"+domain,len(urls),0,True,research_db,urls,False)
+    except Exception:
+        pass
+    try:
+        now=datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with research_db() as con:
+            cur=con.execute("INSERT INTO audit_run(domain,scope,status,started_at) VALUES (?,?,?,?)",(domain,"report","running",now)); audit_run_id=cur.lastrowid; con.commit()
+        audit_worker(domain,audit_run_id,[dict(p) for p in pages])
+    except Exception:
+        pass
+    report_data=collect_report_data(domain=domain,site_id=_site_id_value(site),seo_db=SEO_DB,research_db=RESEARCH_DB)
+    report_data["selected_sources"]=selected_source_keys(site); report_data["source_inventory"]=domain_sources_for_site(site)
+    report_id=report_data["family_questions"] = effective_domain_family_questions(domain)
+    report_id=create_report_session(RESEARCH_DB,domain,report_data)
+    return redirect(url_for("report_session_view",domain=domain,report_id=report_id))
 
 
 @app.get("/d/<domain>/reports/<report_id>")
@@ -1955,14 +2322,127 @@ def report_session_view(domain, report_id):
     session = load_report_session(RESEARCH_DB, domain, report_id)
     if not session:
         abort(404)
+    report = prepare_report_view(session["snapshot"])
+    report["cross_model"] = load_cross_model_report_state(domain, report_id, session["snapshot"])
+    with research_db() as con:
+        report["cross_model_rollups"] = report_rollups(con, domain, report_id)
+        report["company_controlled_domains"] = controlled_domains(con, domain)
+    report["manual_ai_responses"] = load_report_manual_ai_responses(domain, report_id)
     return render_template(
         "full_report.html",
         sites=get_sites(),
         site=site,
         report_session=session,
-        report=prepare_report_view(session["snapshot"]),
+        report=report,
+        manual_ai_providers=MANUAL_AI_PROVIDERS,
+        cross_model_question_defs=QUESTION_DEFS,
     )
 
+
+
+@app.post("/d/<domain>/reports/<report_id>/family/<family_id>/manual-ai-responses")
+def save_report_manual_ai_responses(domain, report_id, family_id):
+    get_site(domain)
+    session = load_report_session(RESEARCH_DB, domain, report_id)
+    if not session:
+        abort(404)
+
+    valid_family_ids = {f["id"] for f in REPORT_FAMILY_SETTINGS}
+    if family_id not in valid_family_ids:
+        abort(404)
+
+    snapshot_questions = session["snapshot"].get("family_questions") or {}
+    family_questions = snapshot_questions.get(family_id) or {}
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    with research_db() as con:
+        ensure_report_question_schema(con)
+        for slot_key, question_text in family_questions.items():
+            try:
+                slot = int(slot_key)
+            except (TypeError, ValueError):
+                continue
+            if slot not in (1, 2, 3) or not str(question_text).strip():
+                continue
+
+            for provider in MANUAL_AI_PROVIDERS:
+                provider_id = provider["id"]
+                value = request.form.get(f"response_{slot}_{provider_id}", "").strip()
+                if value:
+                    con.execute(
+                        "INSERT INTO report_manual_ai_response("
+                        "domain,report_id,family_id,question_slot,provider,response_text,updated_at"
+                        ") VALUES (?,?,?,?,?,?,?) "
+                        "ON CONFLICT(domain,report_id,family_id,question_slot,provider) DO UPDATE SET "
+                        "response_text=excluded.response_text,updated_at=excluded.updated_at",
+                        (domain, report_id, family_id, slot, provider_id, value, now),
+                    )
+                else:
+                    con.execute(
+                        "DELETE FROM report_manual_ai_response "
+                        "WHERE domain=? COLLATE NOCASE AND report_id=? AND family_id=? "
+                        "AND question_slot=? AND provider=?",
+                        (domain, report_id, family_id, slot, provider_id),
+                    )
+        con.commit()
+
+    return redirect(url_for("report_session_view", domain=domain, report_id=report_id) + f"#{family_id}")
+
+
+
+@app.post("/d/<domain>/reports/<report_id>/cross-model/<question_id>")
+def save_cross_model_question(domain, report_id, question_id):
+    get_site(domain)
+    session = load_report_session(RESEARCH_DB, domain, report_id)
+    if not session:
+        abort(404)
+    if question_id not in QUESTION_TO_FAMILY:
+        abort(404)
+
+    family_id = QUESTION_TO_FAMILY[question_id]
+    defs = QUESTION_DEFS[family_id]
+    slot = next((i for i, (qid, _q) in enumerate(defs, start=1) if qid == question_id), None)
+    configured = (session["snapshot"].get("family_questions") or {}).get(family_id) or {}
+    rendered = configured.get(slot) or configured.get(str(slot))
+    if not rendered:
+        abort(400)
+
+    provider_ids = [p.strip() for p in request.form.get("providers", "chatgpt,claude,gemini").split(",") if p.strip()]
+    with research_db() as con:
+        for provider in provider_ids:
+            status = request.form.get(f"status_{provider}", "success").strip()
+            if status not in PROVIDER_STATUSES:
+                status = "provider_error"
+            upsert_response(con, {
+                "domain": domain,
+                "report_id": report_id,
+                "question_id": question_id,
+                "family_id": family_id,
+                "template_question": QUESTION_TEMPLATES[question_id],
+                "rendered_question": rendered,
+                "provider": provider,
+                "model": request.form.get(f"model_{provider}", "").strip(),
+                "raw_answer": request.form.get(f"answer_{provider}", ""),
+                "citations": request.form.get(f"citations_{provider}", ""),
+                "country": request.form.get(f"country_{provider}", "").strip(),
+                "city": request.form.get(f"city_{provider}", "").strip(),
+                "answer_language": request.form.get(f"language_{provider}", "").strip(),
+                "live_search_status": request.form.get(f"live_search_{provider}", "").strip(),
+                "provider_status": status,
+            })
+        run_comparison(con, domain, report_id, question_id)
+    return redirect(url_for("report_session_view", domain=domain, report_id=report_id) + f"#{family_id}-{question_id}")
+
+@app.post("/d/<domain>/reports/<report_id>/cross-model/<question_id>/rerun")
+def rerun_cross_model_question(domain, report_id, question_id):
+    get_site(domain)
+    session = load_report_session(RESEARCH_DB, domain, report_id)
+    if not session or question_id not in QUESTION_TO_FAMILY:
+        abort(404)
+    with research_db() as con:
+        run_comparison(con, domain, report_id, question_id)
+    family_id = QUESTION_TO_FAMILY[question_id]
+    return redirect(url_for("report_session_view", domain=domain, report_id=report_id) + f"#{family_id}-{question_id}")
 
 @app.get("/d/<domain>/reports/<report_id>/pdf")
 def report_session_pdf(domain, report_id):

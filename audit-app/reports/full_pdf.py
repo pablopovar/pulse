@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from reports.extended_sources import enrich_report_data
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -236,7 +237,7 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
                         data["audit_signals"] = _rows(
                             con,
                             """
-                            SELECT p.path,s.family,s.signal_key,s.category,s.title,
+                            SELECT ap.page_id,ap.url,p.path,s.family,s.signal_key,s.category,s.title,
                                    s.observed_status,s.severity,s.weight,
                                    s.evidence,s.recommendation,s.source_title,s.source_url,
                                    COALESCE(st.workflow_status,'open') workflow_status,
@@ -254,7 +255,7 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
                             """,
                             (domain, audit_run_id),
                         )
-    return data
+    return enrich_report_data(data, seo_db, site_id, domain)
 
 
 def _styles():

@@ -1,15 +1,19 @@
 {% extends "base.html" %}
 {% block title %}Add Domain{% endblock %}
 {% block content %}
-<div class="heading">
-  <div><h1>Add Domain</h1><p>Add a website independently of Google Search Console.</p></div>
-</div>
+<div class="heading"><div><h1>Add Domain</h1><p>Create the domain first. Data sources are selected on the next screen.</p></div></div>
 {% if message %}<div class="notice">{{ message }}</div>{% endif %}
+<div class="workflow-strip">
+  <div class="workflow-step current"><span>1</span><strong>+ Domain</strong><small>Create the workspace</small></div>
+  <div class="workflow-step"><span>2</span><strong>Add / select sources</strong><small>Optional evidence sources</small></div>
+  <div class="workflow-step"><span>3</span><strong>Ready</strong><small>Source-independent checks available</small></div>
+  <div class="workflow-step"><span>4</span><strong>Run reports</strong><small>One report workflow</small></div>
+</div>
 <section class="panel add-domain-panel">
   <form method="post" action="{{ url_for('domain_new') }}" class="research-form">
     <input type="text" name="domain" placeholder="example.com or https://example.com/" required autofocus>
     <button type="submit" class="primary">Add Domain</button>
   </form>
-  <p class="research-help">The platform creates the domain, discovers sitemap pages, and links OpenGSC automatically when available. GSC is optional.</p>
+  <p class="research-help">Google Search Console and all other sources are optional. The report uses whichever evidence sources are available.</p>
 </section>
 {% endblock %}

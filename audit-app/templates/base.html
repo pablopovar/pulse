@@ -24,39 +24,17 @@
 {% if site %}
 <nav class="nav">
   <a class="{% if request.endpoint == 'overview' %}active{% endif %}" href="{{ url_for('overview', domain=site.domain) }}">Overview</a>
-  <a class="{% if request.endpoint in ['pages','page'] %}active{% endif %}" href="{{ url_for('pages', domain=site.domain) }}">Pages</a>
   <a class="{% if request.endpoint in ['reports','report_session_view','report_session_pdf'] %}active{% endif %}" href="{{ url_for('reports', domain=site.domain) }}">Reports</a>
-  <details class="nav-group keyword-nav-group" {% if request.endpoint in ['keywords_dashboard','keywords','wanted','research','keyword_workspace'] %}open{% endif %}>
-  <summary class="{% if request.endpoint in ['keywords_dashboard','keywords','wanted','research','keyword_workspace'] %}active{% endif %}">Keywords</summary>
-  <div class="nav-group-menu">
-    <a class="{% if request.endpoint == 'keywords_dashboard' %}active{% endif %}" href="{{ url_for('keywords_dashboard', domain=site.domain) }}">Keywords</a>
-    <a class="{% if request.endpoint == 'keywords' %}active{% endif %}" href="{{ url_for('keywords', domain=site.domain) }}">Ranking Keywords</a>
-    <a class="{% if request.endpoint == 'wanted' %}active{% endif %}" href="{{ url_for('wanted', domain=site.domain) }}">Wanted Keywords</a>
-    <a class="{% if request.endpoint == 'research' %}active{% endif %}" href="{{ url_for('research', domain=site.domain) }}">Research Keywords</a>
-  </div>
-</details><a class="{% if request.endpoint == 'geo_aeo_integrated' %}active{% endif %}" href="{{ url_for('geo_aeo_integrated', domain=site.domain) }}">GEO / AEO</a>
+  <a class="{% if request.endpoint == 'domain_sources' %}active{% endif %}" href="{{ url_for('domain_sources', domain=site.domain) }}">Sources</a>
 
-<a class="{% if request.endpoint == 'domain_new' %}active{% endif %}" href="{{ url_for('domain_new') }}">+ Domain</a>
-
-<a class="{% if request.endpoint in ['seo_crawl','seo_crawl_run','seo_crawl_status'] %}active{% endif %}"
-   href="{% if site is defined and site %}{{ url_for('seo_crawl', domain=site.domain) }}{% else %}#{% endif %}">
-  Crawl
-</a>
-
-<a class="{% if request.endpoint in ['domain_delete_confirm','domain_delete'] %}active{% endif %}"
-   href="{% if site is defined and site %}{{ url_for('domain_delete_confirm', domain=site.domain) }}{% else %}#{% endif %}">
-  Delete Domain
-</a>
-
-<a class="{% if request.endpoint and request.endpoint.startswith('dataforseo_') %}active{% endif %}" href="{% if site is defined and site %}{{ url_for('dataforseo_extension', domain=site.domain) }}{% else %}#{% endif %}">Extensions</a>
+  <a class="{% if request.endpoint == 'domain_settings' %}active{% endif %}" href="{{ url_for('domain_settings', domain=site.domain) }}">Settings</a>
+  <a class="{% if request.endpoint in ['tools','geo_aeo_integrated','seo_crawl','seo_crawl_run','seo_crawl_status','pages','page','page_workspace','keywords_dashboard','keywords','wanted','research','keyword_workspace'] or (request.endpoint and request.endpoint.startswith('dataforseo_')) %}active{% endif %}" href="{{ url_for('tools', domain=site.domain) }}">Tools</a>
+  <a class="{% if request.endpoint == 'domain_new' %}active{% endif %}" href="{{ url_for('domain_new') }}">+ Domain</a>
 </nav>
 {% endif %}
 
 <main class="shell">
-  
-{% if site is defined and site and site.gsc_missing %}
-<div class="gsc-missing-banner">GSC missing</div>
-{% endif %}
+
 
 {% block content %}{% endblock %}
 </main>

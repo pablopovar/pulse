@@ -4,7 +4,7 @@ services:
       context: ./opengsc-repo
       dockerfile: Dockerfile
     container_name: opengsc
-    restart: unless-stopped
+#    restart: unless-stopped
     env_file:
       - ./.env
     environment:
@@ -21,7 +21,7 @@ services:
       context: ./audit-app
       dockerfile: Dockerfile
     container_name: audit-app
-    restart: unless-stopped
+#    restart: unless-stopped
     depends_on:
       - opengsc
     env_file:
@@ -34,6 +34,8 @@ services:
       DATAFORSEO_LOGIN: "${DATAFORSEO_LOGIN}"
       DATAFORSEO_PASSWORD: "${DATAFORSEO_PASSWORD}"
       DATAFORSEO_KILL_SWITCH: "${DATAFORSEO_KILL_SWITCH:-0}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "4018:4018"
     volumes:

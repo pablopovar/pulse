@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ site.domain }} · Tools{% endblock %}
+{% block content %}
+<div class="heading">
+  <div><h1>Tools</h1><p>Internal inspection and evidence-retrieval tools. These are not required steps for creating a report.</p></div>
+</div>
+<div class="tools-grid">
+  <a class="tool-card" href="{{ url_for('geo_aeo_integrated', domain=site.domain) }}"><strong>GEO / AEO Inspector</strong><span>Inspect page-level checks, findings, workflow state and evidence.</span></a>
+  <a class="tool-card" href="{{ url_for('seo_crawl', domain=site.domain) }}"><strong>Crawler</strong><span>Run and inspect crawl evidence independently of report generation.</span></a>
+  <a class="tool-card" href="{{ url_for('pages', domain=site.domain) }}"><strong>Pages</strong><span>Inspect the page inventory and page workspaces.</span></a>
+  <a class="tool-card" href="{{ url_for('keywords_dashboard', domain=site.domain) }}">
+    <strong>Keywords</strong>
+    <span>Keyword workspace overview and navigation.</span>
+  </a>
+  <a class="tool-card" href="{{ url_for('keywords', domain=site.domain) }}">
+    <strong>Ranking Keywords</strong>
+    <span>Inspect observed GSC query-to-page ranking evidence.</span>
+  </a>
+  <a class="tool-card" href="{{ url_for('wanted', domain=site.domain) }}">
+    <strong>Wanted Keywords</strong>
+    <span>Inspect intended keyword targets and target-page assignments.</span>
+  </a>
+  <a class="tool-card" href="{{ url_for('research', domain=site.domain) }}">
+    <strong>Research Keywords</strong>
+    <span>Inspect candidate keyword research and demand evidence.</span>
+  </a>
+
+  <a class="tool-card" href="{{ url_for('keywords_dashboard', domain=site.domain) }}"><strong>Keyword Workspace</strong><span>Inspect observed, wanted and research keyword evidence.</span></a>
+  <a class="tool-card" href="{{ url_for('dataforseo_extension', domain=site.domain) }}"><strong>DataForSEO</strong><span>Inspect DataForSEO integration and research data.</span></a>
+  <a class="tool-card" href="{{ url_for('export_domain', domain=site.domain) }}"><strong>SEO Data Export</strong><span>Export OpenGSC/GSC SEO data for inspection.</span></a>
+</div>
+{% endblock %}

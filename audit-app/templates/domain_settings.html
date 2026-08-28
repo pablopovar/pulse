@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}{{ site.domain }} · Settings{% endblock %}
+{% block content %}
+
+<div class="heading">
+  <div>
+    <h1>Domain Settings</h1>
+    <p>Configure the company name and the two provider questions used in each AI-facing report family.</p>
+  </div>
+  <a class="button" href="{{ url_for('reports', domain=site.domain) }}">Reports</a>
+</div>
+
+{% if message %}<div class="notice">{{ message }}</div>{% endif %}
+
+<section class="panel controlled-domain-card">
+  <h2>Company-controlled domains</h2>
+  <p>The audited domain and all of its valid subdomains are included automatically. Add only other official domains owned or controlled by the company.</p>
+  <form method="post" action="{{ url_for('save_company_controlled_domains', domain=site.domain) }}">
+    <textarea name="company_controlled_domains" rows="4" placeholder="One additional official domain per line">{{ company_controlled_domains }}</textarea>
+    <div class="heading-actions"><button type="submit">Save Official Domains</button></div>
+  </form>
+</section>
+
+<form method="post" action="{{ url_for('domain_settings', domain=site.domain) }}">
+  <section class="panel company-setting-card">
+    <label class="settings-question">
+      <span>Company name</span>
+      <input type="text" name="company_name" value="{{ company_name }}" required>
+    </label>
+    <p class="research-help">Used to resolve [Company] in the pre-populated report questions.</p>
+  </section>
+
+  <div class="settings-family-list settings-family-list-three">
+    {% for family in families %}
+    <section class="panel settings-family-card">
+      <div class="settings-family-head">
+        <div>
+          <h2>{{ family.name }}</h2>
+          <p>{{ family.departments }}</p>
+        </div>
+        <span>2 questions</span>
+      </div>
+
+      {% for slot in [1, 2] %}
+      <label class="settings-question">
+        <span>Question {{ slot }}</span>
+        <textarea name="q_{{ family.id }}_{{ slot }}" rows="3">{{ questions.get(family.id, {}).get(slot, '') }}</textarea>
+      </label>
+      {% endfor %}
+    </section>
+    {% endfor %}
+  </div>
+
+  <div class="heading-actions">
+    <button type="submit" class="primary">Save Domain Questions</button>
+  </div>
+</form>
+
+{% endblock %}

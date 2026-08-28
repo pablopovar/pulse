@@ -2,20 +2,11 @@
 {% block title %}{{ site.domain }} · Reports{% endblock %}
 {% block content %}
 <div class="heading">
-  <div><h1>Reports</h1><p>Create a frozen, web-first audit report and export it to PDF when needed.</p></div>
-  <div class="heading-actions">
-    <form method="post" action="{{ url_for('generate_full_web_report', domain=site.domain) }}">
-      <button class="primary">Generate Full Report</button>
-    </form>
-    <form method="post" action="{{ url_for('run_audit', domain=site.domain) }}">
-      <button>Run GEO/AEO Audit</button>
-    </form>
-  </div>
+  <div><h1>Reports</h1><p>Run one complete GEO / AEO / SEO report using the sources currently available to this domain.</p></div>
+  <form method="post" action="{{ url_for('generate_full_web_report', domain=site.domain) }}"><button class="primary">Run GEO / AEO / SEO Report</button></form>
 </div>
+<div class="panel report-workflow-note"><p><strong>{{ site.domain }} is ready.</strong> Crawl, GEO/AEO inspection and other evidence retrieval happen internally as needed.</p><p><a href="{{ url_for('domain_sources', domain=site.domain) }}">Add / select sources</a> to expand report coverage. Inspection tools remain under Tools.</p></div>
 
-<div class="panel">
-  <p><strong>Web-first report:</strong> each report is a frozen session with its own URL. It includes the audit evidence and a prioritized "what to do" layer. Export PDF from inside the report.</p>
-</div>
 
 
 {% if report_sessions %}
