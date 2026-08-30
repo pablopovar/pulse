@@ -18,6 +18,20 @@
 <form method="post" action="{{ url_for('domain_sources', domain=site.domain) }}">
   <div class="source-grid">
     {% for source in sources %}
+    {% if source.key == 'manual_ai' %}
+    <div class="source-card source-card-manual">
+      <div class="source-card-head">
+        <input type="checkbox" name="selected" value="{{ source.key }}" {% if source.selected %}checked{% endif %}>
+        <strong>{{ source.name }}</strong>
+        <span class="source-status source-status-{{ source.status_class }}">{{ source.status }}</span>
+      </div>
+      <p>{{ source.description }}</p>
+      {% if source.detail %}<small>{{ source.detail }}</small>{% endif %}
+      <div class="source-card-actions">
+        <a class="button small" href="{{ url_for('manual_ai_source', domain=site.domain) }}">Open</a>
+      </div>
+    </div>
+    {% else %}
     <label class="source-card">
       <div class="source-card-head">
         <input type="checkbox" name="selected" value="{{ source.key }}" {% if source.selected %}checked{% endif %}>
@@ -27,6 +41,7 @@
       <p>{{ source.description }}</p>
       {% if source.detail %}<small>{{ source.detail }}</small>{% endif %}
     </label>
+    {% endif %}
     {% endfor %}
   </div>
   <section class="panel source-custom">

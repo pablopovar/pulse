@@ -29,6 +29,7 @@ from audits.geo_aeo.service import run_audit as run_geo_aeo_audit
 from reports.full_pdf import collect_report_data, build_full_report_pdf
 from reports.web_report import create_report_session, load_report_session, list_report_sessions, prepare_report_view
 from reports.cross_model import QUESTION_DEFS, QUESTION_TEMPLATES, QUESTION_TO_FAMILY, PROVIDER_STATUSES, controlled_domains, save_controlled_domains, upsert_response, run_comparison, load_question, report_rollups
+from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, run_analysis as run_manual_ai_analysis
 
 app = Flask(__name__)
 
@@ -284,6 +285,7 @@ SOURCE_CATALOG = [
     ("gemini", "Gemini API", "AI answer, mention and citation observations from configured Gemini models."),
     ("semrush", "Semrush", "Search demand, competitor, backlink and authority datasets."),
     ("google_apis", "Google APIs", "Additional Google services and evidence sources used by report checks."),
+    ("manual_ai", "Manual AI Responses", "Copy one editable provider-agnostic prompt, then paste or upload the raw ChatGPT, Claude and Gemini responses."),
 ]
 
 def ensure_domain_source_schema(con):
@@ -332,6 +334,77 @@ def domain_sources_for_site(site):
         if key in catalog: continue
         out.append({"key":key,"name":stored["source_name"],"description":"Custom or future evidence source.","selected":bool(stored["selected"]),"status":"Selected" if stored["selected"] else "Not selected","status_class":"selected" if stored["selected"] else "off","detail":stored["detail"] or ""})
     return out
+
+def ensure_manual_ai_source_schema(con):
+    con.execute("CREATE TABLE IF NOT EXISTS manual_ai_source (domain TEXT PRIMARY KEY COLLATE NOCASE,prompt_text TEXT NOT NULL DEFAULT '',chatgpt_response TEXT NOT NULL DEFAULT '',claude_response TEXT NOT NULL DEFAULT '',gemini_response TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL)")
+    columns={row["name"] for row in con.execute("PRAGMA table_info(manual_ai_source)").fetchall()}
+    additions={
+        "phase1_prompt_text":"TEXT NOT NULL DEFAULT ''","phase2_prompt_text":"TEXT NOT NULL DEFAULT ''",
+        "phase1_chatgpt_response":"TEXT NOT NULL DEFAULT ''","phase1_claude_response":"TEXT NOT NULL DEFAULT ''","phase1_gemini_response":"TEXT NOT NULL DEFAULT ''",
+        "phase2_chatgpt_response":"TEXT NOT NULL DEFAULT ''","phase2_claude_response":"TEXT NOT NULL DEFAULT ''","phase2_gemini_response":"TEXT NOT NULL DEFAULT ''",
+        "question_set_version":"INTEGER NOT NULL DEFAULT 1","analysis_model":"TEXT NOT NULL DEFAULT ''","analysis_system_prompt":"TEXT NOT NULL DEFAULT ''",
+        "analysis_text":"TEXT NOT NULL DEFAULT ''","analysis_status":"TEXT NOT NULL DEFAULT 'not_run'","analysis_error":"TEXT NOT NULL DEFAULT ''","analysis_updated_at":"TEXT NOT NULL DEFAULT ''"}
+    for name,ddl in additions.items():
+        if name not in columns: con.execute(f"ALTER TABLE manual_ai_source ADD COLUMN {name} {ddl}")
+    con.execute("UPDATE manual_ai_source SET phase2_prompt_text=CASE WHEN TRIM(phase2_prompt_text)='' THEN prompt_text ELSE phase2_prompt_text END,phase2_chatgpt_response=CASE WHEN TRIM(phase2_chatgpt_response)='' THEN chatgpt_response ELSE phase2_chatgpt_response END,phase2_claude_response=CASE WHEN TRIM(phase2_claude_response)='' THEN claude_response ELSE phase2_claude_response END,phase2_gemini_response=CASE WHEN TRIM(phase2_gemini_response)='' THEN gemini_response ELSE phase2_gemini_response END")
+    con.commit()
+
+def manual_ai_phase1_default_prompt(domain):
+    return """Run all four questions in one response.\n\nThis is Phase 1 — blind/discovery.\nDo not mention or infer the audited brand, person, or domain in the questions.\nUse the provider's normal consumer web interface and preserve sources actually exposed.\n\n1. What organizations, companies, or experts are notable for [TOPIC OR CATEGORY], and why?\n\n2. Which organizations, companies, or experts should someone compare when evaluating [CATEGORY OR PROBLEM]?\n\n3. Who is associated with the term, idea, or framework \"[DISTINCTIVE TERM]\"?\n\n4. Who would you recommend to an organization or buyer looking for [BUYER INTENT], and why?\n\nReturn the complete answer and all exposed source URLs. Do not invent citations or source metadata."""
+
+def manual_ai_phase2_default_prompt(domain):
+    company=infer_company_name(domain)
+    return f"""Run all four questions in one response.\n\nThis is Phase 2 — named/brand interpretation.\nUse current public web sources where available.\n\n1. What is {company}, and what category does it belong in? Use a concise category label and explain the basis for it.\n\n2. What distinctive ideas, frameworks, services, or expertise are associated with {company}, and which of those have independent support beyond {company}'s own materials?\n\n3. Relative only to this human-approved comparison set — [ENTER COMPARISON SET] — how is {company} positioned, and what evidence supports that positioning?\n\n4. When would {company}'s work, product, or approach be applicable or useful, how confident are you in that assessment, and what sources support it?\n\nRequirements:\n- Distinguish first-party claims from independent third-party evidence.\n- Preserve uncertainty and disagreement.\n- Record every source URL actually used.\n- If web search is unavailable, say so.\n- Do not invent model metadata, sources, citations, rankings, or confidence."""
+
+def load_manual_ai_source(domain):
+    with research_db() as con:
+        ensure_manual_ai_source_schema(con)
+        row=con.execute("SELECT * FROM manual_ai_source WHERE domain=? COLLATE NOCASE",(domain,)).fetchone()
+    out=dict(row) if row else {"domain":domain,"question_set_version":1,"analysis_status":"not_run","updated_at":""}
+    for phase,fn in (("phase1",manual_ai_phase1_default_prompt),("phase2",manual_ai_phase2_default_prompt)):
+        if not str(out.get(f"{phase}_prompt_text") or "").strip(): out[f"{phase}_prompt_text"]=fn(domain)
+        for p in ("chatgpt","claude","gemini"): out.setdefault(f"{phase}_{p}_response","")
+    if not str(out.get("analysis_system_prompt") or "").strip(): out["analysis_system_prompt"]=DEFAULT_ANALYSIS_SYSTEM_PROMPT
+    if not str(out.get("analysis_model") or "").strip(): out["analysis_model"]=(os.environ.get("MANUAL_AI_ANALYSIS_MODEL") or os.environ.get("COMPARISON_JUDGE_MODEL") or "")
+    return out
+
+def _manual_ai_upload_text(field_name):
+    uploaded=request.files.get(field_name)
+    if not uploaded or not uploaded.filename: return None
+    raw=uploaded.read()
+    if len(raw)>2*1024*1024: raise ValueError("Uploaded response files must be 2 MB or smaller.")
+    return raw.decode("utf-8",errors="replace")
+
+def _parse_manual_provider_payload(raw):
+    raw=str(raw or "").strip()
+    if not raw: return None,""
+    cleaned=raw; candidates=[cleaned]
+    if cleaned.startswith("```"):
+        fenced=re.sub(r"^```(?:json)?\s*","",cleaned,flags=re.I); fenced=re.sub(r"\s*```$","",fenced); candidates.append(fenced)
+    a=cleaned.find("{"); b=cleaned.rfind("}")
+    if a>=0 and b>a: candidates.append(cleaned[a:b+1])
+    error=""
+    for c in candidates:
+        try:
+            v=json.loads(c)
+            if isinstance(v,dict): return v,""
+        except Exception as exc: error=str(exc)
+    return None,error
+
+def manual_ai_source_for_report(domain):
+    source=load_manual_ai_source(domain); phase_rows=[]; total_answers=0; parsed_providers=0
+    for phase in ("phase1","phase2"):
+        providers=[]
+        for provider in ("chatgpt","claude","gemini"):
+            raw=str(source.get(f"{phase}_{provider}_response") or "").strip()
+            if not raw: continue
+            parsed,err=_parse_manual_provider_payload(raw); results=parsed.get("results",[]) if isinstance(parsed,dict) and isinstance(parsed.get("results"),list) else []
+            if parsed: parsed_providers+=1
+            total_answers+=len(results); providers.append({"provider":provider,"raw_response":raw,"parsed":parsed,"parse_error":err,"result_count":len(results)})
+        phase_rows.append({"phase":phase,"providers":providers,"provider_count":len(providers)})
+    source["available"]=any(x["provider_count"] for x in phase_rows); source["phases"]=phase_rows; source["provider_runs"]=sum(x["provider_count"] for x in phase_rows)
+    source["answer_count"]=total_answers; source["expected_answer_count"]=source["provider_runs"]*4; source["valid_json_providers"]=parsed_providers
+    return source
 
 def ensure_domain_ready(domain):
     now=datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -1374,6 +1447,35 @@ def domain_sources(domain):
         return redirect(url_for("domain_sources",domain=domain,message="Sources saved. Domain is ready to run reports."))
     return render_template("sources.html",sites=get_sites(),site=site,sources=domain_sources_for_site(site),readiness=readiness,message=message)
 
+@app.route("/d/<domain>/sources/manual-ai", methods=["GET", "POST"])
+def manual_ai_source(domain):
+    site=get_site(domain); message=request.args.get("message","").strip()
+    if request.method=="POST":
+        current=load_manual_ai_source(domain); p1=request.form.get("phase1_prompt_text",""); p2=request.form.get("phase2_prompt_text","")
+        version=int(current.get("question_set_version") or 1)
+        if (str(current.get("phase1_prompt_text") or ""),str(current.get("phase2_prompt_text") or ""))!=(p1,p2): version+=1
+        values={}
+        for phase in ("phase1","phase2"):
+            for provider in ("chatgpt","claude","gemini"):
+                key=f"{phase}_{provider}"; uploaded=_manual_ai_upload_text(f"{key}_upload"); pasted=request.form.get(f"{key}_response",""); values[key]=uploaded if uploaded is not None else pasted
+        now=datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with research_db() as con:
+            ensure_manual_ai_source_schema(con)
+            con.execute("""INSERT INTO manual_ai_source(domain,phase1_prompt_text,phase2_prompt_text,phase1_chatgpt_response,phase1_claude_response,phase1_gemini_response,phase2_chatgpt_response,phase2_claude_response,phase2_gemini_response,question_set_version,analysis_model,analysis_system_prompt,analysis_text,analysis_status,analysis_error,analysis_updated_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(domain) DO UPDATE SET phase1_prompt_text=excluded.phase1_prompt_text,phase2_prompt_text=excluded.phase2_prompt_text,phase1_chatgpt_response=excluded.phase1_chatgpt_response,phase1_claude_response=excluded.phase1_claude_response,phase1_gemini_response=excluded.phase1_gemini_response,phase2_chatgpt_response=excluded.phase2_chatgpt_response,phase2_claude_response=excluded.phase2_claude_response,phase2_gemini_response=excluded.phase2_gemini_response,question_set_version=excluded.question_set_version,updated_at=excluded.updated_at""",(domain,p1,p2,values["phase1_chatgpt"],values["phase1_claude"],values["phase1_gemini"],values["phase2_chatgpt"],values["phase2_claude"],values["phase2_gemini"],version,current.get("analysis_model") or "",current.get("analysis_system_prompt") or DEFAULT_ANALYSIS_SYSTEM_PROMPT,current.get("analysis_text") or "",current.get("analysis_status") or "not_run",current.get("analysis_error") or "",current.get("analysis_updated_at") or "",now)); con.commit()
+        return redirect(url_for("manual_ai_source",domain=domain,message=f"Saved question-set v{version} and responses."))
+    return render_template("manual_ai_responses.html",sites=get_sites(),site=site,state=load_manual_ai_source(domain),message=message)
+
+@app.post("/d/<domain>/sources/manual-ai/analyze")
+def manual_ai_source_analyze(domain):
+    get_site(domain); source=load_manual_ai_source(domain); model=request.form.get("analysis_model","").strip(); system_prompt=request.form.get("analysis_system_prompt","").strip(); now=datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try: analysis=run_manual_ai_analysis(source,model,system_prompt); status="success"; error=""
+    except Exception as exc: analysis=source.get("analysis_text") or ""; status="error"; error=str(exc)
+    with research_db() as con:
+        ensure_manual_ai_source_schema(con); con.execute("UPDATE manual_ai_source SET analysis_model=?,analysis_system_prompt=?,analysis_text=?,analysis_status=?,analysis_error=?,analysis_updated_at=?,updated_at=? WHERE domain=? COLLATE NOCASE",(model,system_prompt,analysis,status,error,now,now,domain)); con.commit()
+    msg="AI response analysis completed." if status=="success" else f"Analysis failed: {error}"
+    return redirect(url_for("manual_ai_source",domain=domain,message=msg))
+
+
 @app.route("/d/<domain>/tools")
 def tools(domain):
     site=get_site(domain)
@@ -2312,6 +2414,8 @@ def generate_full_web_report(domain):
     report_data=collect_report_data(domain=domain,site_id=_site_id_value(site),seo_db=SEO_DB,research_db=RESEARCH_DB)
     report_data["selected_sources"]=selected_source_keys(site); report_data["source_inventory"]=domain_sources_for_site(site)
     report_id=report_data["family_questions"] = effective_domain_family_questions(domain)
+    report_data["manual_ai_source"] = manual_ai_source_for_report(domain)
+    report_data["manual_ai_source"]=manual_ai_source_for_report(domain)
     report_id=create_report_session(RESEARCH_DB,domain,report_data)
     return redirect(url_for("report_session_view",domain=domain,report_id=report_id))
 

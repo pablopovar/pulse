@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from reports.extended_sources import enrich_report_data
+from reports.prioritization import GLOSSARY, METHODOLOGY, build_high_signal_findings
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -106,6 +107,8 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
         "audit_summary": None,
         "audit_pages": [],
         "audit_signals": [],
+        "domain_score_history": [],
+        "page_score_history": [],
     }
 
     if seo_db.exists():
@@ -233,6 +236,11 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
                             """,
                             (audit_run_id,),
                         )
+                    if _exists(con, "audit_domain_summary"):
+                        data["domain_score_history"] = _rows(con, """SELECT ar.id AS audit_run_id,ar.completed_at,ar.started_at,ads.geo_score,ads.aeo_score,ads.combined_score,ads.pages_audited,ads.fail_count,ads.partial_count,ads.pass_count,ads.unknown_count,ads.manual_count FROM audit_domain_summary ads JOIN audit_run ar ON ar.id=ads.audit_run_id WHERE ads.domain=? ORDER BY ar.id DESC LIMIT 50""", (domain,))
+                    if _exists(con, "audit_page"):
+                        data["page_score_history"] = _rows(con, """SELECT ap.page_id,p.path,ap.audit_run_id,ar.completed_at,ar.started_at,ap.geo_score,ap.aeo_score,ap.combined_score FROM audit_page ap JOIN audit_run ar ON ar.id=ap.audit_run_id JOIN site_page p ON p.id=ap.page_id WHERE ar.domain=? ORDER BY ap.page_id,ap.audit_run_id DESC""", (domain,))
+
                     if _exists(con, "audit_signal"):
                         data["audit_signals"] = _rows(
                             con,
@@ -400,6 +408,18 @@ def build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
     story.append(PageBreak())
 
     story.append(_P("Executive Summary", S["h1"]))
+    high_signal = build_high_signal_findings(data, [], limit=5)
+    if high_signal:
+        story.append(_P("High-signal findings", S["h2"]))
+        for item in high_signal:
+            story.append(_P(item["title"], S["body"]))
+            story.append(_P(item["message"], S["small"]))
+    story.append(_P("Methodology & scope", S["h2"]))
+    story.append(_P(METHODOLOGY, S["body"]))
+    story.append(_P("GEO / AEO / AIO glossary", S["h2"]))
+    for term, definition in GLOSSARY:
+        story.append(_P(f"{term}: {definition}", S["small"]))
+    story.append(_P("The PDF is intentionally concise. Detailed page-level checks, SEO tables, technical evidence, filters, and historical drill-down remain in the online HTML report.", S["small"]))
     seo = data.get("seo") or {}
     aud = data.get("audit_summary") or {}
     crawl = data.get("crawl") or {}

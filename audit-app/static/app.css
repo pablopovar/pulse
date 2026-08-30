@@ -286,3 +286,26 @@ html{scroll-behavior:smooth}
 
 /* V1 cross-model comparison evidence fixes */
 .comparison-unavailable{color:var(--muted);font-style:italic}
+
+/* Manual AI Responses source */
+.source-card-manual{display:flex;flex-direction:column}
+.source-card-actions{margin-top:auto;padding-top:10px}
+.manual-ai-form{max-width:1100px}
+.manual-ai-prompt-panel h2,.manual-ai-provider h3{margin-top:0}
+.manual-ai-prompt,.manual-ai-provider textarea{width:100%;box-sizing:border-box;border:1px solid #cbd2da;border-radius:7px;padding:12px;font:inherit;line-height:1.5;resize:vertical;background:#fff}
+.manual-ai-prompt{min-height:280px}
+.manual-ai-results{display:grid;grid-template-columns:1fr;gap:14px;margin-top:20px}
+.manual-ai-provider textarea{min-height:260px}
+.manual-ai-upload{margin-top:10px;color:var(--muted)}
+.manual-ai-upload label{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.manual-ai-copy-status{min-height:18px;margin-top:7px;color:var(--muted);font-size:12px}
+.manual-ai-save{margin-top:18px}
+.manual-ai-updated{color:var(--muted);font-size:12px}
+
+
+
+/* Prioritized iterative report */
+.report-high-signal{margin:0 0 22px}.high-signal-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}.high-signal-item{background:#fff;border:1px solid var(--line);border-left:4px solid #1f5eff;border-radius:8px;padding:15px}.high-signal-item strong{display:block;font-size:16px;margin-bottom:6px}.high-signal-item p{margin:0 0 7px;color:#364152}.high-signal-item small{color:var(--muted)}.report-methodology{display:grid;grid-template-columns:1.4fr 1fr;gap:14px;margin:0 0 22px}.report-methodology>div{background:#fff;border:1px solid var(--line);border-radius:8px;padding:15px}.report-methodology h3{margin-top:0}.report-methodology dl{display:grid;grid-template-columns:auto 1fr;gap:6px 10px;margin:0}.report-methodology dt{font-weight:700}.report-methodology dd{margin:0;color:var(--muted)}.report-controls{position:sticky;top:0;z-index:10;display:flex;gap:9px;align-items:center;flex-wrap:wrap;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:18px 0}.report-controls>div{margin-right:auto;display:flex;flex-direction:column}.report-controls>div span{color:var(--muted);font-size:12px}.report-controls input[type=search],.report-controls select{border:1px solid #cbd2da;border-radius:6px;background:#fff;padding:8px 9px;font:inherit}.family-collapse-toggle{margin:-4px 0 14px auto;display:block;font-size:12px}.report-family.family-collapsed > :not(.family-header):not(.family-collapse-toggle){display:none!important}.value-score{font-variant-numeric:tabular-nums;font-weight:650}@media(max-width:900px){.report-methodology{grid-template-columns:1fr}.report-controls{position:static}}
+
+/* Two-phase Manual AI source + basic model analysis */
+.manual-ai-prompt-panel{margin-bottom:18px}.manual-ai-prompt-panel .manual-ai-results{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px}.manual-ai-provider{border:1px solid var(--line);border-radius:8px;padding:12px;background:#fff}.manual-ai-provider h3{margin-top:0}.manual-ai-provider textarea,.manual-ai-analysis-panel textarea,.manual-ai-analysis-panel input[type=text]{width:100%;box-sizing:border-box;border:1px solid #cbd2da;border-radius:7px;padding:10px;font:inherit}.manual-ai-analysis-panel label{display:block;margin:0 0 12px;font-weight:600}.manual-ai-analysis-panel label input,.manual-ai-analysis-panel label textarea{display:block;margin-top:6px;font-weight:400}.manual-ai-analysis-output{margin-top:18px;border-top:1px solid var(--line);padding-top:14px}.analysis-text{white-space:pre-wrap;line-height:1.55}.ai-analysis-report{margin:18px 0}@media(max-width:900px){.manual-ai-prompt-panel .manual-ai-results{grid-template-columns:1fr}}

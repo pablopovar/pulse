@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from reports.prioritization import GLOSSARY, METHODOLOGY, build_high_signal_findings, canonical_check_title, merge_duplicate_checks, value_to_fix
+
 
 FAMILIES = [
     {"id":"ai-visibility","name":"AI Visibility","departments":"IR · Communications · Corporate Affairs · Marketing","purpose":"How visible is the company in AI answers, and which sources are shaping those answers?","kind":"ai"},
@@ -101,16 +103,18 @@ def _rollup_severity(details):
     vals=[(d.get("severity") or "").upper() for d in details if d.get("severity")]
     return "" if not vals else min(vals,key=lambda x:SEVERITY_RANK.get(x,99))
 
-def _audit_family(defn,signals):
+def _audit_family(defn,signals,data=None):
+    data = data or {}
     categories=[]
     selected=[s for s in signals if s.get("category") in defn.get("categories",[])]
     for category_name in defn.get("categories",[]):
         by_check=defaultdict(list)
         for s in selected:
             if s.get("category")==category_name:
-                by_check[(s.get("signal_key") or "",s.get("title") or "")].append(s)
+                by_check[(canonical_check_title(s.get("title") or ""),)].append(s)
         checks=[]
-        for (signal_key,title),details in by_check.items():
+        for (title,),details in by_check.items():
+            signal_key = details[0].get("signal_key") or ""
             details=sorted(details,key=lambda d:d.get("path") or "")
             affected=[d for d in details if (d.get("observed_status") or "").upper() in {"FAIL","PARTIAL","UNKNOWN","MANUAL_REVIEW"}]
             sample=details[0]
@@ -121,10 +125,13 @@ def _audit_family(defn,signals):
                 "pages_tested":len({d.get("path") or "/" for d in details}),
                 "recommendation":sample.get("recommendation") or "","details":details,
             })
-        checks.sort(key=lambda c:(c["impact_rank"],c["title"]))
+        checks = merge_duplicate_checks(checks, data)
+        for check in checks:
+            check["value_score"] = value_to_fix(check, data)
+        checks.sort(key=lambda c:(-float(c.get("value_score") or 0),c["title"]))
         categories.append({"name":category_name,"status":_rollup_status([{"observed_status":c["status"]} for c in checks]) if checks else "UNKNOWN","checks":checks})
     priority=[c for cat in categories for c in cat["checks"] if c["status"]!="PASS"]
-    priority.sort(key=lambda c:(c["impact_rank"],STATUS_RANK.get(c["status"],99),c["category"],c["title"]))
+    priority.sort(key=lambda c:(-float(c.get("value_score") or 0),STATUS_RANK.get(c["status"],99),c["category"],c["title"]))
     return {**defn,"categories_data":categories,"priority_findings":priority,
             "snapshot":{"checks":sum(len(c["checks"]) for c in categories),"affected_checks":sum(1 for c in priority),"pages":len({s.get("path") or "/" for s in selected})}}
 
@@ -166,20 +173,83 @@ def _seo_family(data,defn):
             "domain_metrics":data.get("domain_metrics"),"clarity":data.get("clarity")}
 
 def _onsite_family(data,defn,signals):
-    out=_audit_family(defn,signals)
+    out=_audit_family(defn,signals,data)
     out.update({"crawl":data.get("crawl"),"crawl_issues":list(data.get("crawl_issues") or []),"crawl_pages":list(data.get("crawl_pages") or []),
                 "site_audit":data.get("site_audit"),"site_audit_pages":list(data.get("site_audit_pages") or []),
                 "sitemap_urls":list(data.get("sitemap_urls") or []),"site_health":data.get("site_health")})
     return out
+
+
+def _merge_answer_readiness_executive_findings(findings):
+    cluster_titles = {
+        "common follow-up questions addressed",
+        "faq content is visible",
+        "question-led headings",
+        "multiple relevant question forms",
+        "sections support fragment linking",
+    }
+    clustered = []
+    kept = []
+
+    for finding in findings or []:
+        title = str(finding.get("title") or "").strip().lower()
+        if title in cluster_titles:
+            clustered.append(finding)
+        else:
+            kept.append(finding)
+
+    if clustered:
+        max_score = max(float(x.get("value_score") or 0) for x in clustered)
+        kept.append({
+            "title": "Content is not consistently structured for answer retrieval",
+            "message": (
+                "Several related answer-readiness checks fail broadly across the site. "
+                "Rather than a single FAQ or heading problem, the pattern indicates that "
+                "much of the content is not consistently organized around clear questions, "
+                "direct answers, and reusable answer blocks."
+            ),
+            "value_score": max_score + 1.0,
+            "source": "Content & Answer Readiness",
+        })
+
+    kept.sort(key=lambda x: -float(x.get("value_score") or 0))
+    return kept[:5]
+
 
 def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
     data=dict(snapshot); signals=list(data.get("audit_signals") or [])
     families=[]
     for defn in FAMILIES:
         if defn["kind"]=="ai": families.append(_ai_family(data,defn))
-        elif defn["kind"]=="audit": families.append(_audit_family(defn,signals))
+        elif defn["kind"]=="audit": families.append(_audit_family(defn,signals,data))
         elif defn["kind"]=="seo": families.append(_seo_family(data,defn))
         else: families.append(_onsite_family(data,defn,signals))
+    manual_ai = dict(data.get("manual_ai_source") or {})
+    providers = list(manual_ai.get("providers") or [])
+    manual_ai["available"] = bool(manual_ai.get("available") and providers)
+    manual_ai["provider_count"] = int(manual_ai.get("provider_count") or len(providers))
+    manual_ai["answer_count"] = int(
+        manual_ai.get("answer_count")
+        or sum(int(p.get("result_count") or 0) for p in providers)
+    )
+    manual_ai["valid_json_providers"] = sum(
+        1 for p in providers if isinstance(p.get("parsed"), dict)
+    )
+    manual_ai["expected_answer_count"] = int(
+        manual_ai.get("expected_answer_count")
+        or (manual_ai.get("provider_count", 0) * 4)
+    )
+    manual_ai["complete"] = bool(
+        manual_ai.get("available")
+        and manual_ai.get("provider_count", 0) > 0
+        and manual_ai.get("answer_count", 0) >= manual_ai["expected_answer_count"]
+    )
+    data["manual_ai"] = manual_ai
     data["families"]=families
     data["family_by_id"]={f["id"]:f for f in families}
+    data["high_signal_findings"] = build_high_signal_findings(data, families, limit=5)
+    data["high_signal_findings"] = _merge_answer_readiness_executive_findings(data.get("high_signal_findings"))
+    data["methodology"] = METHODOLOGY
+    data["glossary"] = GLOSSARY
+    data["technical_family_ids"] = ["seo-audit", "onsite-audit"]
     return data
