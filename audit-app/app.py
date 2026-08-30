@@ -346,27 +346,54 @@ def ensure_manual_ai_source_schema(con):
         "analysis_text":"TEXT NOT NULL DEFAULT ''","analysis_status":"TEXT NOT NULL DEFAULT 'not_run'","analysis_error":"TEXT NOT NULL DEFAULT ''","analysis_updated_at":"TEXT NOT NULL DEFAULT ''"}
     for name,ddl in additions.items():
         if name not in columns: con.execute(f"ALTER TABLE manual_ai_source ADD COLUMN {name} {ddl}")
-    con.execute("UPDATE manual_ai_source SET phase2_prompt_text=CASE WHEN TRIM(phase2_prompt_text)='' THEN prompt_text ELSE phase2_prompt_text END,phase2_chatgpt_response=CASE WHEN TRIM(phase2_chatgpt_response)='' THEN chatgpt_response ELSE phase2_chatgpt_response END,phase2_claude_response=CASE WHEN TRIM(phase2_claude_response)='' THEN claude_response ELSE phase2_claude_response END,phase2_gemini_response=CASE WHEN TRIM(phase2_gemini_response)='' THEN gemini_response ELSE phase2_gemini_response END")
+    con.execute("CREATE TABLE IF NOT EXISTS manual_ai_state_source (domain TEXT NOT NULL COLLATE NOCASE,phase TEXT NOT NULL,state TEXT NOT NULL,prompt_text TEXT NOT NULL DEFAULT '',chatgpt_response TEXT NOT NULL DEFAULT '',claude_response TEXT NOT NULL DEFAULT '',gemini_response TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL,PRIMARY KEY(domain,phase,state))")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_manual_ai_state_domain ON manual_ai_state_source(domain,phase,state)")
+    # Preserve the pre-state workflow as State 2 because it was the web/retrieval-capable collection path.
+    con.execute("INSERT OR IGNORE INTO manual_ai_state_source(domain,phase,state,prompt_text,chatgpt_response,claude_response,gemini_response,updated_at) SELECT domain,'phase1','state2',phase1_prompt_text,phase1_chatgpt_response,phase1_claude_response,phase1_gemini_response,updated_at FROM manual_ai_source WHERE TRIM(phase1_prompt_text)<>'' OR TRIM(phase1_chatgpt_response)<>'' OR TRIM(phase1_claude_response)<>'' OR TRIM(phase1_gemini_response)<>''")
+    con.execute("INSERT OR IGNORE INTO manual_ai_state_source(domain,phase,state,prompt_text,chatgpt_response,claude_response,gemini_response,updated_at) SELECT domain,'phase2','state2',phase2_prompt_text,phase2_chatgpt_response,phase2_claude_response,phase2_gemini_response,updated_at FROM manual_ai_source WHERE TRIM(phase2_prompt_text)<>'' OR TRIM(phase2_chatgpt_response)<>'' OR TRIM(phase2_claude_response)<>'' OR TRIM(phase2_gemini_response)<>''")
     con.commit()
 
-def manual_ai_phase1_default_prompt(domain):
-    return """Run all four questions in one response.\n\nThis is Phase 1 — blind/discovery.\nDo not mention or infer the audited brand, person, or domain in the questions.\nUse the provider's normal consumer web interface and preserve sources actually exposed.\n\n1. What organizations, companies, or experts are notable for [TOPIC OR CATEGORY], and why?\n\n2. Which organizations, companies, or experts should someone compare when evaluating [CATEGORY OR PROBLEM]?\n\n3. Who is associated with the term, idea, or framework \"[DISTINCTIVE TERM]\"?\n\n4. Who would you recommend to an organization or buyer looking for [BUYER INTENT], and why?\n\nReturn the complete answer and all exposed source URLs. Do not invent citations or source metadata."""
 
-def manual_ai_phase2_default_prompt(domain):
+def manual_ai_default_prompt(domain, phase, state):
     company=infer_company_name(domain)
-    return f"""Run all four questions in one response.\n\nThis is Phase 2 — named/brand interpretation.\nUse current public web sources where available.\n\n1. What is {company}, and what category does it belong in? Use a concise category label and explain the basis for it.\n\n2. What distinctive ideas, frameworks, services, or expertise are associated with {company}, and which of those have independent support beyond {company}'s own materials?\n\n3. Relative only to this human-approved comparison set — [ENTER COMPARISON SET] — how is {company} positioned, and what evidence supports that positioning?\n\n4. When would {company}'s work, product, or approach be applicable or useful, how confident are you in that assessment, and what sources support it?\n\nRequirements:\n- Distinguish first-party claims from independent third-party evidence.\n- Preserve uncertainty and disagreement.\n- Record every source URL actually used.\n- If web search is unavailable, say so.\n- Do not invent model metadata, sources, citations, rankings, or confidence."""
+    no_tools=(state=="state1")
+    if phase=="phase1":
+        questions='''1. What organizations, companies, or experts are notable for [TOPIC OR CATEGORY], and why?\n\n2. Which organizations, companies, or experts should someone compare when evaluating [CATEGORY OR PROBLEM]?\n\n3. Who is associated with the term, idea, or framework "[DISTINCTIVE TERM]"?\n\n4. Who would you recommend to an organization or buyer looking for [BUYER INTENT], and why?'''
+        if no_tools:
+            req='''Requirements:\n- Do not use tools, skills, or web search. Answer only from your dataset. The quality of this datapoint defines the usefulness of your responses.\n- Preserve unknowns, uncertainty, disagreement, and missing information because they are valuable data points.\n- Record every source URL actually used or exposed.\n- Use `null` when a value cannot be established.\n- Do not invent model metadata, sources, citations, rankings, or confidence.'''
+            state_name="state_1_model_prior"
+        else:
+            req='''Requirements:\n- Use your available web search, browsing, retrieval, or research tools to answer the questions using current public information.\n- Preserve unknowns, uncertainty, disagreement, and missing information because they are valuable data points.\n- Distinguish claims supported by first-party sources from claims supported by independent third-party sources.\n- Record every source URL actually used or exposed.\n- If web search or retrieval is unavailable, record that in `live_search_status`.\n- Use `null` when a value cannot be established.\n- Do not invent model metadata, sources, citations, rankings, or confidence.'''
+            state_name="state_2_web_grounded"
+        return f'''Answer all four questions in one run:\n\n{questions}\n\n{req}\n\n**Return only valid JSON. Do not use Markdown fences or add commentary outside the JSON**.\n\nReturn a JSON object with schema_version `ai-visibility-discovery-run.v1`, phase `phase_1`, state `{state_name}`, provider, model, run_at_utc, and results for Q1-Q4. Each result must preserve the exact question, answer, entities_mentioned, source_urls, key_claims, and uncertainties. Each entity record should preserve name, category, mention_rank, recommended, associated_claims, and source_urls when available. Each key claim should preserve claim, source_type, confidence, and source_url.'''
+
+    questions=f'''1. What is {company}, and what category does it belong in? Use a concise category label and explain the basis for it.\n\n2. What distinctive aspects of {company}'s business model, strategy, portfolio, or capital-allocation approach differentiate it from other companies in the field?\n\n3. Relative to the following human-approved comparison set — [ENTER COMPARISON SET] — how is {company} positioned, and what evidence supports that positioning?\n\n4. When would {company} be an attractive or appropriate choice or exposure, what are the principal reasons for and against that view, and how confident are you in that assessment?'''
+    if no_tools:
+        req=f'''Requirements:\n- Do not use tools, skills, or web search. Answer only from your dataset. The quality of this datapoint defines the usefulness of your responses.\n- Do not assume {company}'s own claims are independently verified.\n- Preserve unknowns, uncertainty, disagreement, and missing information because they are valuable data points.\n- Record every source URL actually used or exposed.\n- Use `null` when a value cannot be established.\n- Do not invent model metadata, sources, citations, citation ranks, rankings, or confidence.\n- For Question 3, use only the supplied comparison set.\n- Do not treat omission as contradiction.\n- Use `source_type: "model_prior"` for claims made in this state.'''
+        state_name="state_1_model_prior"
+    else:
+        req=f'''Requirements:\n- Use your available web search, browsing, retrieval, or research tools to answer the questions using current public information.\n- Do not assume {company}'s own claims are independently verified.\n- Distinguish first-party claims from independent third-party evidence.\n- Preserve unknowns, uncertainty, disagreement, and missing information because they are valuable data points.\n- Record every source URL actually used or exposed.\n- If live web search or retrieval is unavailable, set `live_search_status` to `unavailable`.\n- If it is unclear whether live search was actually used, set `live_search_status` to `unknown`.\n- Use `null` when a value cannot be established.\n- Do not invent model metadata, source URLs, citations, citation ranks, rankings, or confidence.\n- For Question 3, use only the supplied comparison set.\n- Do not treat omission as contradiction.\n- Classify claims as `first_party`, `third_party`, `model_prior`, or `unknown`.'''
+        state_name="state_2_web_grounded"
+    return f'''Answer all four questions in one run:\n\n{questions}\n\n{req}\n\n**Return only valid JSON. Do not use Markdown fences or add commentary outside the JSON**.\n\nReturn a JSON object with schema_version `ai-visibility-brand-run.v1`, phase `phase_2`, state `{state_name}`, entity `{company}`, provider, model, run_at_utc, and results for Q1-Q4. Preserve entity_category for Q1, distinctive_attributes for Q2, comparison_set and positioning_claims for Q3, and reasons_for, reasons_against, confidence, key_claims, source URLs, and uncertainties where applicable.'''
+
 
 def load_manual_ai_source(domain):
     with research_db() as con:
         ensure_manual_ai_source_schema(con)
-        row=con.execute("SELECT * FROM manual_ai_source WHERE domain=? COLLATE NOCASE",(domain,)).fetchone()
-    out=dict(row) if row else {"domain":domain,"question_set_version":1,"analysis_status":"not_run","updated_at":""}
-    for phase,fn in (("phase1",manual_ai_phase1_default_prompt),("phase2",manual_ai_phase2_default_prompt)):
-        if not str(out.get(f"{phase}_prompt_text") or "").strip(): out[f"{phase}_prompt_text"]=fn(domain)
-        for p in ("chatgpt","claude","gemini"): out.setdefault(f"{phase}_{p}_response","")
+        parent=con.execute("SELECT * FROM manual_ai_source WHERE domain=? COLLATE NOCASE",(domain,)).fetchone()
+        rows=con.execute("SELECT * FROM manual_ai_state_source WHERE domain=? COLLATE NOCASE ORDER BY phase,state",(domain,)).fetchall()
+    out=dict(parent) if parent else {"domain":domain,"question_set_version":1,"analysis_status":"not_run","updated_at":""}
+    indexed={(r["phase"],r["state"]):dict(r) for r in rows}
+    for phase in ("phase1","phase2"):
+        for state in ("state1","state2"):
+            row=indexed.get((phase,state),{}); prefix=f"{phase}_{state}"
+            out[f"{prefix}_prompt_text"]=row.get("prompt_text") or manual_ai_default_prompt(domain,phase,state)
+            for provider in ("chatgpt","claude","gemini"):
+                out[f"{prefix}_{provider}_response"]=row.get(f"{provider}_response") or ""
     if not str(out.get("analysis_system_prompt") or "").strip(): out["analysis_system_prompt"]=DEFAULT_ANALYSIS_SYSTEM_PROMPT
     if not str(out.get("analysis_model") or "").strip(): out["analysis_model"]=(os.environ.get("MANUAL_AI_ANALYSIS_MODEL") or os.environ.get("COMPARISON_JUDGE_MODEL") or "")
     return out
+
 
 def _manual_ai_upload_text(field_name):
     uploaded=request.files.get(field_name)
@@ -375,35 +402,43 @@ def _manual_ai_upload_text(field_name):
     if len(raw)>2*1024*1024: raise ValueError("Uploaded response files must be 2 MB or smaller.")
     return raw.decode("utf-8",errors="replace")
 
+
 def _parse_manual_provider_payload(raw):
     raw=str(raw or "").strip()
     if not raw: return None,""
     cleaned=raw; candidates=[cleaned]
     if cleaned.startswith("```"):
-        fenced=re.sub(r"^```(?:json)?\s*","",cleaned,flags=re.I); fenced=re.sub(r"\s*```$","",fenced); candidates.append(fenced)
+        fenced=re.sub(r"^```(?:json)?\\s*","",cleaned,flags=re.I); fenced=re.sub(r"\\s*```$","",fenced); candidates.append(fenced)
     a=cleaned.find("{"); b=cleaned.rfind("}")
     if a>=0 and b>a: candidates.append(cleaned[a:b+1])
     error=""
-    for c in candidates:
+    for candidate in candidates:
         try:
-            v=json.loads(c)
-            if isinstance(v,dict): return v,""
+            value=json.loads(candidate)
+            if isinstance(value,dict): return value,""
         except Exception as exc: error=str(exc)
     return None,error
 
+
 def manual_ai_source_for_report(domain):
-    source=load_manual_ai_source(domain); phase_rows=[]; total_answers=0; parsed_providers=0
+    source=load_manual_ai_source(domain); phase_rows=[]; total_answers=0; parsed_runs=0
     for phase in ("phase1","phase2"):
-        providers=[]
-        for provider in ("chatgpt","claude","gemini"):
-            raw=str(source.get(f"{phase}_{provider}_response") or "").strip()
-            if not raw: continue
-            parsed,err=_parse_manual_provider_payload(raw); results=parsed.get("results",[]) if isinstance(parsed,dict) and isinstance(parsed.get("results"),list) else []
-            if parsed: parsed_providers+=1
-            total_answers+=len(results); providers.append({"provider":provider,"raw_response":raw,"parsed":parsed,"parse_error":err,"result_count":len(results)})
-        phase_rows.append({"phase":phase,"providers":providers,"provider_count":len(providers)})
-    source["available"]=any(x["provider_count"] for x in phase_rows); source["phases"]=phase_rows; source["provider_runs"]=sum(x["provider_count"] for x in phase_rows)
-    source["answer_count"]=total_answers; source["expected_answer_count"]=source["provider_runs"]*4; source["valid_json_providers"]=parsed_providers
+        states=[]
+        for state in ("state1","state2"):
+            providers=[]; prefix=f"{phase}_{state}"
+            for provider in ("chatgpt","claude","gemini"):
+                raw=str(source.get(f"{prefix}_{provider}_response") or "").strip()
+                if not raw: continue
+                parsed,err=_parse_manual_provider_payload(raw)
+                results=parsed.get("results",[]) if isinstance(parsed,dict) and isinstance(parsed.get("results"),list) else []
+                if parsed: parsed_runs+=1
+                total_answers+=len(results)
+                providers.append({"provider":provider,"raw_response":raw,"parsed":parsed,"parse_error":err,"result_count":len(results),"phase":phase,"state":state})
+            states.append({"state":state,"providers":providers,"provider_count":len(providers)})
+        phase_rows.append({"phase":phase,"states":states})
+    provider_runs=sum(s["provider_count"] for p in phase_rows for s in p["states"])
+    source["available"]=provider_runs>0; source["phases"]=phase_rows; source["provider_runs"]=provider_runs
+    source["answer_count"]=total_answers; source["expected_answer_count"]=provider_runs*4; source["valid_json_providers"]=parsed_runs
     return source
 
 def ensure_domain_ready(domain):
@@ -1451,19 +1486,30 @@ def domain_sources(domain):
 def manual_ai_source(domain):
     site=get_site(domain); message=request.args.get("message","").strip()
     if request.method=="POST":
-        current=load_manual_ai_source(domain); p1=request.form.get("phase1_prompt_text",""); p2=request.form.get("phase2_prompt_text","")
-        version=int(current.get("question_set_version") or 1)
-        if (str(current.get("phase1_prompt_text") or ""),str(current.get("phase2_prompt_text") or ""))!=(p1,p2): version+=1
-        values={}
+        current=load_manual_ai_source(domain); prompts={}; responses={}
         for phase in ("phase1","phase2"):
-            for provider in ("chatgpt","claude","gemini"):
-                key=f"{phase}_{provider}"; uploaded=_manual_ai_upload_text(f"{key}_upload"); pasted=request.form.get(f"{key}_response",""); values[key]=uploaded if uploaded is not None else pasted
+            for state in ("state1","state2"):
+                prefix=f"{phase}_{state}"; prompts[prefix]=request.form.get(f"{prefix}_prompt_text","")
+                for provider in ("chatgpt","claude","gemini"):
+                    key=f"{prefix}_{provider}"; uploaded=_manual_ai_upload_text(f"{key}_upload"); pasted=request.form.get(f"{key}_response","")
+                    responses[key]=uploaded if uploaded is not None else pasted
+        old_prompts=tuple(str(current.get(f"{p}_{s}_prompt_text") or "") for p in ("phase1","phase2") for s in ("state1","state2"))
+        new_prompts=tuple(prompts[f"{p}_{s}"] for p in ("phase1","phase2") for s in ("state1","state2"))
+        version=int(current.get("question_set_version") or 1)+(1 if old_prompts!=new_prompts else 0)
         now=datetime.now(timezone.utc).isoformat(timespec="seconds")
         with research_db() as con:
             ensure_manual_ai_source_schema(con)
-            con.execute("""INSERT INTO manual_ai_source(domain,phase1_prompt_text,phase2_prompt_text,phase1_chatgpt_response,phase1_claude_response,phase1_gemini_response,phase2_chatgpt_response,phase2_claude_response,phase2_gemini_response,question_set_version,analysis_model,analysis_system_prompt,analysis_text,analysis_status,analysis_error,analysis_updated_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(domain) DO UPDATE SET phase1_prompt_text=excluded.phase1_prompt_text,phase2_prompt_text=excluded.phase2_prompt_text,phase1_chatgpt_response=excluded.phase1_chatgpt_response,phase1_claude_response=excluded.phase1_claude_response,phase1_gemini_response=excluded.phase1_gemini_response,phase2_chatgpt_response=excluded.phase2_chatgpt_response,phase2_claude_response=excluded.phase2_claude_response,phase2_gemini_response=excluded.phase2_gemini_response,question_set_version=excluded.question_set_version,updated_at=excluded.updated_at""",(domain,p1,p2,values["phase1_chatgpt"],values["phase1_claude"],values["phase1_gemini"],values["phase2_chatgpt"],values["phase2_claude"],values["phase2_gemini"],version,current.get("analysis_model") or "",current.get("analysis_system_prompt") or DEFAULT_ANALYSIS_SYSTEM_PROMPT,current.get("analysis_text") or "",current.get("analysis_status") or "not_run",current.get("analysis_error") or "",current.get("analysis_updated_at") or "",now)); con.commit()
-        return redirect(url_for("manual_ai_source",domain=domain,message=f"Saved question-set v{version} and responses."))
+            con.execute("INSERT INTO manual_ai_source(domain,question_set_version,analysis_model,analysis_system_prompt,analysis_text,analysis_status,analysis_error,analysis_updated_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(domain) DO UPDATE SET question_set_version=excluded.question_set_version,updated_at=excluded.updated_at",(domain,version,current.get("analysis_model") or "",current.get("analysis_system_prompt") or DEFAULT_ANALYSIS_SYSTEM_PROMPT,current.get("analysis_text") or "",current.get("analysis_status") or "not_run",current.get("analysis_error") or "",current.get("analysis_updated_at") or "",now))
+            for phase in ("phase1","phase2"):
+                for state in ("state1","state2"):
+                    prefix=f"{phase}_{state}"
+                    con.execute("INSERT INTO manual_ai_state_source(domain,phase,state,prompt_text,chatgpt_response,claude_response,gemini_response,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(domain,phase,state) DO UPDATE SET prompt_text=excluded.prompt_text,chatgpt_response=excluded.chatgpt_response,claude_response=excluded.claude_response,gemini_response=excluded.gemini_response,updated_at=excluded.updated_at",(domain,phase,state,prompts[prefix],responses[f"{prefix}_chatgpt"],responses[f"{prefix}_claude"],responses[f"{prefix}_gemini"],now))
+            ensure_domain_source_schema(con)
+            con.execute("INSERT INTO domain_source(domain,source_key,source_name,selected,connection_status,detail,updated_at) VALUES (?,?,?,1,'not_connected',?,?) ON CONFLICT(domain,source_key) DO UPDATE SET source_name=excluded.source_name,selected=1,detail=excluded.detail,updated_at=excluded.updated_at",(domain,"manual_ai","Manual AI Responses",f"Four-state Manual AI source · question-set v{version}",now))
+            con.commit()
+        return redirect(url_for("manual_ai_source",domain=domain,message=f"Saved question-set v{version}: 2 phases × 2 states."))
     return render_template("manual_ai_responses.html",sites=get_sites(),site=site,state=load_manual_ai_source(domain),message=message)
+
 
 @app.post("/d/<domain>/sources/manual-ai/analyze")
 def manual_ai_source_analyze(domain):
