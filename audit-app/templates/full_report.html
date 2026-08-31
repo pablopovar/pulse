@@ -182,14 +182,27 @@
       <h3>AI Visibility</h3>
       <p>
         Manual AI evidence is available from
-        <strong>{{ report.manual_ai.provider_count }} providers</strong>
+        <strong>{{ report.manual_ai.provider_runs or report.manual_ai.provider_count }} provider runs</strong>
         covering
         <strong>{{ report.manual_ai.answer_count }} question answers</strong>.
       </p>
+      {% if report.manual_ai.analysis_status == 'success' and report.manual_ai.analysis_text %}
+      <p>
+        Model analysis has been derived from the submitted Manual AI evidence.
+        The interpretation is shown in the <strong>AI Response Analysis</strong> section above;
+        raw provider evidence remains stored under Sources.
+      </p>
+      {% elif report.manual_ai.analysis_status == 'error' %}
+      <p>
+        Manual AI evidence is available, but the latest analysis attempt failed.
+        Raw provider evidence remains stored under Sources.
+      </p>
+      {% else %}
       <p>
         Detailed AI visibility analysis has not yet been derived from the submitted responses.
         The raw provider evidence is stored under Sources.
       </p>
+      {% endif %}
     </section>
   {% else %}
     <section class="panel source-required">

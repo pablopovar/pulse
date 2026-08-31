@@ -2473,6 +2473,11 @@ def report_session_view(domain, report_id):
     if not session:
         abort(404)
     report = prepare_report_view(session["snapshot"])
+
+    live_manual_ai = manual_ai_source_for_report(domain)
+    report["manual_ai_source"] = live_manual_ai
+    report["manual_ai"] = live_manual_ai
+
     report["cross_model"] = load_cross_model_report_state(domain, report_id, session["snapshot"])
     with research_db() as con:
         report["cross_model_rollups"] = report_rollups(con, domain, report_id)
