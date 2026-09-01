@@ -7,7 +7,18 @@ from difflib import SequenceMatcher
 from typing import Any
 
 SEVERITY_FACTOR = {"CRITICAL": 4.0, "HIGH": 3.0, "MEDIUM": 2.0, "LOW": 1.0, "": 1.0}
-STATUS_FACTOR = {"FAIL": 1.0, "PARTIAL": 0.65, "UNKNOWN": 0.40, "MANUAL_REVIEW": 0.30, "PASS": 0.0, "NOT_APPLICABLE": 0.0}
+STATUS_FACTOR = {
+    "FAIL": 1.0,
+    "PARTIAL": 0.65,
+    "MANUAL_REVIEW": 0.0,
+    "DATA_UNAVAILABLE": 0.0,
+    "PASS": 0.0,
+    "NOT_APPLICABLE": 0.0,
+    # Legacy snapshots may still contain UNKNOWN. Treat it as unavailable data,
+    # not as a detected defect.
+    "UNKNOWN": 0.0,
+}
+SCORING_VERSION = "value-to-fix-v2"
 
 # Report-presentation aliases only. Raw observations remain intact.
 CHECK_ALIASES = {
@@ -70,15 +81,35 @@ def _detail_exposure(details: list[dict[str, Any]], data: dict[str, Any]) -> flo
     return min(1.0, math.log1p(observed) / math.log1p(max_imp))
 
 
-def value_to_fix(check: dict[str, Any], data: dict[str, Any]) -> float:
-    severity = SEVERITY_FACTOR.get(str(check.get("severity") or "").upper(), 1.0)
-    status = STATUS_FACTOR.get(str(check.get("status") or "").upper(), 0.4)
+def value_to_fix_components(check: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+    severity_name = str(check.get("severity") or "").upper()
+    status_name = str(check.get("status") or "").upper()
+    severity = SEVERITY_FACTOR.get(severity_name, 1.0)
+    status = STATUS_FACTOR.get(status_name, 0.0)
     affected = float(check.get("pages_affected") or 0)
     tested = float(check.get("pages_tested") or 0)
     prevalence = affected / tested if tested else 0.0
-    exposure = _detail_exposure(check.get("details") or [], data)
-    # Core: severity × traffic exposure. Site-wide prevalence amplifies repeated patterns.
-    return round(severity * status * (1.0 + 2.0 * exposure) * (1.0 + prevalence), 3)
+    page_traffic = traffic_by_page(data)
+    traffic_available = bool(page_traffic)
+    exposure = _detail_exposure(check.get("details") or [], data) if traffic_available else 0.0
+    score = severity * status * (1.0 + 2.0 * exposure) * (1.0 + prevalence)
+    return {
+        "scoring_version": SCORING_VERSION,
+        "severity": severity_name or "UNSPECIFIED",
+        "severity_factor": severity,
+        "status": status_name or "DATA_UNAVAILABLE",
+        "status_factor": status,
+        "prevalence": round(prevalence, 3),
+        "traffic_available": traffic_available,
+        "traffic_exposure": round(exposure, 3),
+        "partial_inputs": not traffic_available,
+        "formula": "severity_factor × status_factor × (1 + 2×traffic_exposure) × (1 + prevalence)",
+        "score": round(score, 3),
+    }
+
+
+def value_to_fix(check: dict[str, Any], data: dict[str, Any]) -> float:
+    return float(value_to_fix_components(check, data)["score"])
 
 
 def merge_duplicate_checks(checks: list[dict[str, Any]], data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -106,12 +137,17 @@ def merge_duplicate_checks(checks: list[dict[str, Any]], data: dict[str, Any]) -
         base["signal_keys"] = sorted(set(keys))
         base["merged_check_count"] = len(rows)
         base["details"] = deduped
-        affected = [d for d in deduped if str(d.get("observed_status") or "").upper() in {"FAIL", "PARTIAL", "UNKNOWN", "MANUAL_REVIEW"}]
+        affected = [d for d in deduped if str(d.get("observed_status") or "").upper() in {"FAIL", "PARTIAL"}]
+        review = [d for d in deduped if str(d.get("observed_status") or "").upper() == "MANUAL_REVIEW"]
+        unavailable = [d for d in deduped if str(d.get("observed_status") or "").upper() in {"UNKNOWN", "DATA_UNAVAILABLE"}]
         base["pages_affected"] = len({d.get("path") or "/" for d in affected})
+        base["pages_review_required"] = len({d.get("path") or "/" for d in review})
+        base["pages_data_unavailable"] = len({d.get("path") or "/" for d in unavailable})
         base["pages_tested"] = len({d.get("path") or "/" for d in deduped})
         base["traffic_exposure"] = round(_detail_exposure(deduped, data), 3)
         base["prevalence"] = round(base["pages_affected"] / base["pages_tested"], 3) if base["pages_tested"] else 0.0
-        base["value_score"] = value_to_fix(base, data)
+        base["value_score_explanation"] = value_to_fix_components(base, data)
+        base["value_score"] = base["value_score_explanation"]["score"]
         merged.append(base)
     merged.sort(key=lambda c: (-float(c.get("value_score") or 0), str(c.get("title") or "")))
     return merged
@@ -140,7 +176,7 @@ def build_high_signal_findings(data: dict[str, Any], families: list[dict[str, An
         pages = max(c.get("pages_affected") or 0 for c in broad_trust)
         candidates.append({
             "title": "The main gap is evidence and trust, not visibility",
-            "message": f"Trust-related checks fail or need review across as many as {pages} pages. The site can be discovered, but important claims are not consistently supported in a way a reader or AI system can independently evaluate.",
+            "message": f"Confirmed evidence-related findings affect as many as {pages} tested pages. Important claims are not consistently supported in a way a reader or AI system can independently evaluate.",
             "value_score": 18.0 + max(float(c.get("value_score") or 0) for c in broad_trust),
             "source": "Evidence & Trust",
         })
@@ -168,14 +204,18 @@ def build_high_signal_findings(data: dict[str, Any], families: list[dict[str, An
 
 
 METHODOLOGY = (
-    "The report separates observed evidence from interpretation. Page-level checks are rolled up when the same condition repeats across the site. Findings are prioritized by severity, traffic exposure, and how broadly the issue appears. Raw page-level evidence remains available in the interactive HTML report."
+    "The report separates confirmed observations, review-required items, not-applicable checks, and unavailable data. "
+    "Only FAIL and PARTIAL count as confirmed issues. Page-level observations are rolled up into check-level and root-cause findings while raw evidence remains available in the interactive report. "
+    "Value to fix prioritizes confirmed issues using severity, observed search exposure when available, and site-wide prevalence. Manual review and unavailable data do not receive defect scores."
 )
 
 GLOSSARY = [
     ("GEO", "How well content can be understood, selected, and cited by generative systems."),
     ("AEO", "How clearly the site provides extractable answers to questions and intents."),
     ("AIO / AI visibility", "What AI systems actually say, cite, omit, or attribute about the entity."),
-    ("Value to fix", "A prioritization score based on severity, observed search exposure, and site-wide prevalence."),
+    ("Manual review", "A check that cannot be established automatically and requires a human determination; it is not a confirmed defect."),
+    ("Data unavailable", "A source or observation required for the check was not available; it is not a failed check."),
+    ("Value to fix", "severity × status factor × (1 + 2×traffic exposure) × (1 + site-wide prevalence). If search exposure is unavailable, the report marks the score as based on partial inputs and uses zero traffic exposure rather than inventing it."),
 ]
 
 
