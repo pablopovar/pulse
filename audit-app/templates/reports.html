@@ -1,26 +1,36 @@
 {% extends "base.html" %}
-{% block title %}{{ site.domain }} · Reports{% endblock %}
+{% block title %}{{ site.domain }} · Living Pulse{% endblock %}
 {% block content %}
 <div class="heading">
-  <div><h1>Reports</h1><p>Run one complete GEO / AEO / SEO report using the sources currently available to this domain.</p></div>
-  <form method="post" action="{{ url_for('generate_full_web_report', domain=site.domain) }}"><button class="primary">Run GEO / AEO / SEO Report</button></form>
+  <div><h1>Living Domain Pulse</h1><p>One continuously updated GEO / AEO / SEO view for this domain. Each refresh appends a new immutable observation to the same report history.</p></div>
+  <form method="post" action="{{ url_for('generate_full_web_report', domain=site.domain) }}"><button class="primary">Refresh Living Pulse</button></form>
 </div>
-<div class="panel report-workflow-note"><p><strong>{{ site.domain }} is ready.</strong> Crawl, GEO/AEO inspection and other evidence retrieval happen internally as needed.</p><p><a href="{{ url_for('domain_sources', domain=site.domain) }}">Add / select sources</a> to expand report coverage. Inspection tools remain under Tools.</p></div>
-
-
+<div class="panel report-workflow-note"><p><strong>{{ site.domain }} is ready.</strong> Crawl, GEO/AEO inspection and other evidence retrieval happen internally as needed.</p><p><a href="{{ url_for('domain_sources', domain=site.domain) }}">Add / select sources</a> to expand monitoring coverage. Historical observations are retained; they are not separate client reports.</p></div>
 
 {% if report_sessions %}
-<h2>Recent web reports</h2>
+{% set current = report_sessions[0] %}
+<h2>Current pulse</h2>
+<div class="panel">
+  <p><strong>Latest observation:</strong> {{ current.created_at }}</p>
+  <p><a class="button primary" href="https://visible-to-ai.povarchik.com/reports/{{ current.id }}" target="_blank" rel="noopener">Open current pulse</a></p>
+</div>
+
+{% if report_sessions|length > 1 %}
+<h2>Observation history</h2>
+<p>Previous observations remain available as evidence for the history attached to each finding.</p>
 <ul class="reports large">
-{% for r in report_sessions %}
+{% for r in report_sessions[1:] %}
   <li>
     <a href="https://visible-to-ai.povarchik.com/reports/{{ r.id }}" target="_blank" rel="noopener">
-      {{ site.domain }} | {{ r.created_at }} | <code>{{ r.id }}</code>
+      {{ r.created_at }} | <code>{{ r.id }}</code>
     </a>
-    <a class="button small" href="https://visible-to-ai.povarchik.com/reports/{{ r.id }}" target="_blank" rel="noopener">Open</a>
+    <a class="button small" href="https://visible-to-ai.povarchik.com/reports/{{ r.id }}" target="_blank" rel="noopener">View observation</a>
   </li>
 {% endfor %}
 </ul>
+{% endif %}
+{% else %}
+<div class="panel"><p>No observation has been recorded yet. Refresh the living pulse to establish the baseline.</p></div>
 {% endif %}
 
 <h2>Legacy exported files</h2>
@@ -31,7 +41,7 @@
     <a class="button small" href="{{ url_for('download_report', filename=r) }}" download>Export</a>
   </li>
 {% else %}
-  <li>No reports found in the mounted reports directory.</li>
+  <li>No legacy exports found in the mounted reports directory.</li>
 {% endfor %}
 </ul>
 {% endblock %}
