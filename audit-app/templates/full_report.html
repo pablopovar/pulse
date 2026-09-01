@@ -2,246 +2,168 @@
 {% block title %}{{ site.domain }} · Living Domain Pulse{% endblock %}
 {% block content %}
 {% set meta = report.get('report_metadata') or {} %}
-{% set mai_snapshot = report.get('manual_ai_snapshot') or report.get('manual_ai') or report.get('manual_ai_source') or {} %}
-<div class="report-document report-mode-living">
+{% set mai = report.get('manual_ai_snapshot') or report.get('manual_ai') or report.get('manual_ai_source') or {} %}
+{% set pulse = report.get('pulse_summary') or {} %}
+{% set ns = namespace(issues=0,reviews=0,unavailable=0,passed=0) %}
+{% for f in report.families %}{% if f.kind in ['audit','onsite'] %}{% set ns.issues = ns.issues + (f.snapshot.confirmed_issues or 0) %}{% set ns.reviews = ns.reviews + (f.snapshot.review_required or 0) %}{% set ns.unavailable = ns.unavailable + (f.snapshot.data_unavailable or 0) %}{% set ns.passed = ns.passed + (f.snapshot.passed or 0) %}{% endif %}{% endfor %}
+
+<div class="pulse-report">
 <style>
-.report-document .status-pill{display:inline-flex;align-items:center;padding:.18rem .5rem;border-radius:999px;font-size:.76rem;font-weight:700;letter-spacing:.02em}
-.report-document .status-pill-fail{background:#fee2e2;color:#991b1b}.report-document .status-pill-partial{background:#ffedd5;color:#9a3412}.report-document .status-pill-pass{background:#dcfce7;color:#166534}.report-document .status-pill-manual_review{background:#fef3c7;color:#92400e}.report-document .status-pill-not_applicable{background:#f1f5f9;color:#475569}.report-document .status-pill-data_unavailable{background:#e2e8f0;color:#334155}
-.report-document .change-pill{display:inline-flex;align-items:center;padding:.18rem .48rem;border-radius:999px;font-size:.75rem;font-weight:650;background:#eef2f7;color:#475569}.report-document .change-improved,.report-document .change-resolved{background:#dcfce7;color:#166534}.report-document .change-worsened{background:#fee2e2;color:#991b1b}.report-document .change-new{background:#dbeafe;color:#1d4ed8}.report-document .change-not_comparable,.report-document .change-no_longer_applicable{background:#f1f5f9;color:#475569}
-.report-document .review-required-block{border-left:4px solid #d97706;padding-left:1rem}.report-document .data-coverage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.65rem}.report-document .coverage-item{border:1px solid var(--border,#d9dee7);border-radius:8px;padding:.7rem}.report-document .coverage-connected{border-left:4px solid #15803d}.report-document .coverage-missing{border-left:4px solid #64748b}.report-document .coverage-stale{border-left:4px solid #b45309}.report-document .coverage-failed{border-left:4px solid #b91c1c}
-.report-document .root-cause-card{border:1px solid var(--border,#d9dee7);border-radius:10px;padding:1rem;margin:.7rem 0}.report-document .root-cause-meta{display:flex;gap:.75rem;flex-wrap:wrap;font-size:.85rem;color:var(--muted,#64748b)}
-.report-document .quality-warning{border-left:4px solid #b45309;padding:.7rem 1rem;background:#fffbeb}.report-document .quality-error{border-left:4px solid #b91c1c;padding:.7rem 1rem;background:#fef2f2}.report-document .score-explain{font-size:.82rem;color:var(--muted,#64748b)}.report-document .export-blocked{opacity:.6;cursor:not-allowed}
-.report-document .finding-pulse{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:.55rem;margin:.7rem 0 1rem}.report-document .pulse-cell{border:1px solid var(--border,#d9dee7);border-radius:8px;padding:.65rem}.report-document .pulse-cell span{display:block;font-size:.76rem;color:var(--muted,#64748b);margin-bottom:.18rem}.report-document .pulse-cell strong{font-size:.94rem}.report-document .history-table td,.report-document .history-table th{white-space:nowrap}.report-document .history-current{font-weight:700}.report-document .history-note{font-size:.82rem;color:var(--muted,#64748b)}
-@media print{.report-document details:not([open])>*:not(summary){display:none}.report-document .report-controls,.report-document .family-collapse-toggle,.report-document .interactive-evidence,.report-document .report-quality-ui{display:none!important}}
+.pulse-report{--ink:#172033;--muted:#687386;--line:#e4e9f0;--soft:#f6f8fb;--blue:#246bfd;--red:#b42318;--amber:#b45309;--green:#157f3d;max-width:1180px;margin:0 auto;padding:28px 24px 80px;color:var(--ink)}
+.pulse-report *{box-sizing:border-box}.pulse-report h1,.pulse-report h2,.pulse-report h3,.pulse-report h4{margin:0}.pulse-report p{line-height:1.48}.pulse-report button{font:inherit}.pulse-report a{text-decoration:none}.pulse-report .eyebrow{font-size:.72rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--blue)}
+.pulse-hero{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(320px,.8fr);gap:30px;padding:4px 0 28px;border-bottom:1px solid var(--line)}.pulse-title h1{font-size:clamp(2rem,4vw,3.2rem);line-height:1.02;margin:7px 0 10px}.pulse-title .subline{color:var(--muted);display:flex;gap:14px;flex-wrap:wrap;font-size:.9rem}.pulse-state{display:grid;grid-template-columns:1fr 1fr;gap:10px}.metric{padding:14px 15px;border-left:2px solid var(--line);background:transparent}.metric span{display:block;color:var(--muted);font-size:.76rem;margin-bottom:3px}.metric strong{font-size:1.25rem}.metric .small{font-size:.92rem}
+.pulse-movement{display:grid;grid-template-columns:1.2fr repeat(5,minmax(86px,.45fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:24px 0}.movement-lead,.movement-stat{background:#fff;padding:14px 16px}.movement-lead strong{display:block;font-size:.95rem}.movement-lead span{font-size:.8rem;color:var(--muted)}.movement-stat span{display:block;color:var(--muted);font-size:.72rem}.movement-stat strong{font-size:1.15rem}.movement-stat.bad strong{color:var(--red)}.movement-stat.good strong{color:var(--green)}
+.section-block{padding:30px 0;border-bottom:1px solid var(--line)}.section-heading{display:flex;justify-content:space-between;gap:20px;align-items:flex-end;margin-bottom:18px}.section-heading h2{font-size:1.45rem}.section-heading p{margin:4px 0 0;color:var(--muted);font-size:.88rem}.quiet-link{font-size:.82rem;color:var(--blue)}
+.signal-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.signal{padding:2px 16px 14px 0;border-right:1px solid var(--line)}.signal:last-child{border-right:0}.signal strong{display:block;font-size:1rem;line-height:1.25;margin-bottom:7px}.signal p{font-size:.84rem;color:var(--muted);margin:0 0 7px}.signal small{color:var(--muted)}
+.action-list{border-top:1px solid var(--line)}.action-row{display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:14px;align-items:start;padding:16px 0;border-bottom:1px solid var(--line)}.action-rank{font-weight:800;color:#98a2b3}.action-main strong{display:block}.action-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:.78rem;margin-top:4px}.text-button{border:0;background:none;color:var(--blue);cursor:pointer;padding:3px 0;font-weight:700;font-size:.82rem}.action-detail{grid-column:2/4;display:none;padding:4px 0 8px;max-width:850px}.action-detail.open{display:block}.action-detail p{font-size:.88rem;margin:7px 0}
+.coverage-strip{display:flex;gap:8px;flex-wrap:wrap}.coverage-chip{padding:7px 10px;border-radius:999px;background:var(--soft);font-size:.77rem;color:var(--muted)}.coverage-chip.connected{background:#eaf7ef;color:var(--green)}.coverage-chip.failed{background:#fff0ee;color:var(--red)}.coverage-chip.stale{background:#fff6e8;color:var(--amber)}
+.family-nav{display:flex;gap:8px;overflow:auto;padding:18px 0 4px;position:sticky;top:0;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);z-index:10}.family-nav a{flex:0 0 auto;padding:8px 11px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-size:.78rem}.family-nav a:hover{border-color:#b8c7e6;color:var(--blue)}
+.family{padding:34px 0;border-bottom:1px solid var(--line)}.family-head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:start}.family-title{display:flex;gap:13px}.family-number{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:#eef4ff;color:var(--blue);font-size:.75rem;font-weight:800;flex:0 0 auto}.family-title h2{font-size:1.55rem}.family-dept{color:var(--muted);font-size:.78rem;font-weight:700;margin-top:2px}.family-purpose{font-size:.9rem;color:var(--muted);margin:7px 0 0;max-width:760px}.family-summary{display:flex;gap:16px;flex-wrap:wrap;justify-content:flex-end}.family-summary span{font-size:.76rem;color:var(--muted)}.family-summary strong{display:block;color:var(--ink);font-size:1.05rem}.family-body{margin:22px 0 0}.family.collapsed .family-body{display:none}.family-toggle{border:1px solid var(--line);background:white;border-radius:8px;padding:7px 10px;cursor:pointer;font-size:.8rem;color:var(--muted);margin-top:9px}
+.finding-list{margin-top:12px}.finding-card{border-top:1px solid var(--line);padding:15px 0}.finding-card.finding-extra{display:none}.finding-card.finding-extra.visible{display:block}.finding-top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px}.finding-name{font-weight:760;font-size:.98rem}.finding-category{font-size:.76rem;color:var(--muted);margin-top:2px}.finding-badges{display:flex;gap:7px;align-items:center;flex-wrap:wrap;justify-content:flex-end}.status,.change{display:inline-flex;align-items:center;border-radius:999px;padding:3px 7px;font-size:.68rem;font-weight:800}.status.FAIL{background:#fff0ee;color:var(--red)}.status.PARTIAL{background:#fff5e8;color:#a84b00}.status.PASS{background:#eaf7ef;color:var(--green)}.status.MANUAL_REVIEW{background:#fff6dc;color:var(--amber)}.status.DATA_UNAVAILABLE,.status.NOT_APPLICABLE{background:#eef1f5;color:#586174}.change{background:#f1f4f8;color:#667085}.change.worsened{background:#fff0ee;color:var(--red)}.change.improved,.change.resolved{background:#eaf7ef;color:var(--green)}.finding-sub{display:flex;gap:18px;flex-wrap:wrap;font-size:.79rem;color:var(--muted);margin-top:7px}.finding-sub strong{color:var(--ink)}.finding-actions{display:flex;gap:14px;margin-top:10px}.finding-actions button{border:0;background:none;color:var(--blue);padding:0;cursor:pointer;font-size:.78rem;font-weight:700}.finding-panel{display:none;margin:13px 0 2px;padding:15px 17px;background:var(--soft);border-radius:9px}.finding-panel.open{display:block}.finding-panel h4{font-size:.84rem;margin:0 0 9px}.finding-panel p{font-size:.83rem;margin:5px 0}.history-list{display:grid;gap:0}.history-row{display:grid;grid-template-columns:190px 120px 120px minmax(100px,1fr);gap:12px;padding:8px 0;border-bottom:1px solid #e2e6ed;font-size:.78rem;align-items:center}.history-row:last-child{border-bottom:0}.evidence-list{display:grid;gap:7px;max-height:420px;overflow:auto}.evidence-row{display:grid;grid-template-columns:minmax(140px,.8fr) 90px minmax(0,2fr);gap:12px;padding:8px 0;border-bottom:1px solid #e2e6ed;font-size:.78rem}.evidence-row:last-child{border-bottom:0}.scope-count{font-weight:700;color:var(--ink)}.value-score-inline{font-weight:700;color:var(--ink)}
+.group-label{font-size:.78rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:24px 0 7px}.review-group{border-left:3px solid #e3a008;padding-left:16px}.review-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:11px 0;border-bottom:1px solid var(--line)}.review-row:last-child{border-bottom:0}.review-row small{display:block;color:var(--muted)}
+.all-checks{margin-top:22px}.all-checks summary{cursor:pointer;font-weight:750;font-size:.88rem;color:var(--blue)}.category{margin:20px 0}.category h4{font-size:.86rem;margin-bottom:5px}.all-check-row{display:grid;grid-template-columns:minmax(0,1fr) 125px 125px 120px;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:.78rem;align-items:center}
+.ai-overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}.ai-metric{background:white;padding:14px}.ai-metric span{display:block;color:var(--muted);font-size:.72rem}.ai-metric strong{font-size:1.08rem}.ai-warning{margin:12px 0;padding:10px 12px;background:#fff8e8;color:#7a4b00;border-radius:8px;font-size:.8rem}.analysis-summary{margin-top:18px}.analysis-summary summary{cursor:pointer;color:var(--blue);font-weight:760}.analysis-text{margin-top:12px;line-height:1.55;font-size:.9rem}.analysis-meta{color:var(--muted);font-size:.73rem;margin-top:10px}.source-missing{padding:14px;background:var(--soft);border-radius:9px;color:var(--muted)}
+.seo-overview{display:flex;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}.seo-overview .metric{flex:1;background:#fff;border:0}.technical-details{margin-top:18px}.technical-details summary{cursor:pointer;color:var(--blue);font-weight:760}.data-table{width:100%;border-collapse:collapse;font-size:.76rem;margin-top:10px}.data-table th,.data-table td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}.data-table th{color:var(--muted);font-size:.68rem;text-transform:uppercase;letter-spacing:.04em}.scroll-table{overflow:auto;max-height:520px}
+.methodology{padding:28px 0;color:var(--muted)}.methodology details{border-top:1px solid var(--line);padding:13px 0}.methodology summary{cursor:pointer;font-weight:700;color:var(--ink)}.methodology p,.methodology dd{font-size:.82rem}.methodology dl{display:grid;grid-template-columns:180px 1fr;gap:7px 14px}.methodology dt{font-weight:700;color:var(--ink);font-size:.8rem}.quality{padding:12px 14px;background:#fff8e8;border-radius:8px;margin-top:10px;font-size:.8rem}
+@media(max-width:850px){.pulse-hero{grid-template-columns:1fr}.signal-grid{grid-template-columns:1fr 1fr}.pulse-movement{grid-template-columns:1fr 1fr}.movement-lead{grid-column:1/-1}.family-head{grid-template-columns:1fr}.family-summary{justify-content:flex-start}.history-row{grid-template-columns:1fr 1fr}.evidence-row{grid-template-columns:1fr}.all-check-row{grid-template-columns:1fr 90px}.ai-overview{grid-template-columns:1fr 1fr}.seo-overview{display:grid;grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.pulse-report{padding:20px 15px 60px}.signal-grid{grid-template-columns:1fr}.signal{border-right:0;border-bottom:1px solid var(--line);padding:10px 0}.pulse-state{grid-template-columns:1fr 1fr}.finding-top{grid-template-columns:1fr}.finding-badges{justify-content:flex-start}.history-row{grid-template-columns:1fr}.ai-overview{grid-template-columns:1fr}}
 </style>
 
-<header class="report-header">
-  <div>
-    <div class="report-kicker">LIVING DOMAIN PULSE</div>
+<header class="pulse-hero">
+  <div class="pulse-title">
+    <div class="eyebrow">Living Domain Pulse</div>
     <h1>{{ site.domain }}</h1>
-    <div class="report-meta">
-      <span>Current observation · {{ report_session.id }}</span>
+    <div class="subline">
       <span>Updated {{ meta.get('pulse_updated_at') or report_session.created_at }}</span>
-      {% if report.audit %}
-      <span>Audit run #{{ report.audit.id }} · {{ report.audit.completed_at or report.audit.started_at }}</span>
-      <span>{{ report.audit.scope }} · {{ report.audit_summary.pages_audited if report.audit_summary else 0 }} pages analyzed</span>
-      {% endif %}
+      {% if report.audit %}<span>{{ report.audit_summary.pages_audited if report.audit_summary else 0 }} pages monitored</span>{% endif %}
       <span>Baseline {{ meta.get('baseline_date') or '—' }}</span>
-      <span>Methodology {{ meta.get('methodology_version') or report.methodology_version }} · scoring {{ meta.get('scoring_version') or report.scoring_version }}</span>
+      {% if request.endpoint != 'public_report' %}<a class="quiet-link" href="{{ url_for('reports', domain=site.domain) }}">Observation history</a>{% endif %}
     </div>
   </div>
-  {% if request.endpoint != 'public_report' %}
-  <div class="heading-actions">
-    {% if report.report_quality and report.report_quality.blocking %}<span class="button export-blocked" title="Resolve report-quality blockers before export">Export blocked</span>{% else %}<a class="button primary" href="{{ url_for('report_session_pdf', domain=site.domain, report_id=report_session.id) }}">Export PDF</a>{% endif %}
-    <a class="button" href="{{ url_for('reports', domain=site.domain) }}">Observation history</a>
+  <div class="pulse-state">
+    <div class="metric"><span>Confirmed findings</span><strong>{{ ns.issues }}</strong></div>
+    <div class="metric"><span>Review required</span><strong>{{ ns.reviews }}</strong></div>
+    <div class="metric"><span>AI providers</span><strong>{{ mai.get('provider_count') or 0 }}</strong></div>
+    <div class="metric"><span>Monitoring coverage</span><strong>{{ report.monitoring_coverage.connected or 0 }}/{{ (report.data_coverage|length) or 0 }}</strong></div>
   </div>
-  {% endif %}
 </header>
 
-<section class="report-high-signal">
-  <div class="report-kicker">WHAT MATTERS MOST NOW</div>
-  <h2>High-signal findings</h2>
-  <div class="high-signal-list">
-    {% for finding in report.high_signal_findings %}
-    <article class="high-signal-item"><strong>{{ finding.title }}</strong><p>{{ finding.message }}</p><small>{{ finding.source }}{% if finding.confidence %} · {{ finding.confidence }} confidence{% endif %}</small></article>
-    {% else %}<div class="panel"><p>No high-signal finding can be established from the current evidence yet.</p></div>{% endfor %}
+<section class="pulse-movement" aria-label="Latest movement">
+  <div class="movement-lead"><strong>Latest movement</strong><span>Changes between the newest observation and the prior observation.</span></div>
+  <div class="movement-stat good"><span>Improved</span><strong>{{ pulse.improved or 0 }}</strong></div>
+  <div class="movement-stat bad"><span>Worsened</span><strong>{{ pulse.worsened or 0 }}</strong></div>
+  <div class="movement-stat"><span>New</span><strong>{{ pulse.new or 0 }}</strong></div>
+  <div class="movement-stat good"><span>Resolved</span><strong>{{ pulse.resolved or 0 }}</strong></div>
+  <div class="movement-stat"><span>Unchanged</span><strong>{{ pulse.unchanged or 0 }}</strong></div>
+</section>
+
+<section class="section-block">
+  <div class="section-heading"><div><div class="eyebrow">What matters now</div><h2>High-signal findings</h2><p>The few findings that best explain the current state.</p></div></div>
+  <div class="signal-grid">
+    {% for finding in report.high_signal_findings[:4] %}
+    <article class="signal"><strong>{{ finding.title }}</strong><p>{{ finding.message }}</p><small>{{ finding.source }}{% if finding.confidence %} · {{ finding.confidence }} confidence{% endif %}</small></article>
+    {% else %}<p>No high-signal finding is established yet.</p>{% endfor %}
   </div>
 </section>
 
 {% if report.top_actions %}
-<section class="report-high-signal">
-  <div class="report-kicker">TOP ACTIONS</div>
-  <h2>Highest-value actions</h2>
-  {% for root in report.top_actions[:10] %}
-  {% set rec = root.recommendation_object or {} %}
-  <article class="root-cause-card">
-    <strong>{{ root.title }}</strong>
-    <div class="root-cause-meta"><span>{{ root.pages_affected }} affected pages</span><span>{{ root.supporting_checks|length }} supporting checks</span><span>{{ root.confidence }} confidence</span><span>Recommendation: {{ rec.status or 'open' }}</span></div>
-    <p><strong>Problem:</strong> {{ rec.problem }}</p>
-    <p><strong>Why it matters:</strong> {{ rec.why_it_matters }}</p>
-    <p><strong>Recommended action:</strong> {{ rec.recommended_action }}</p>
-    <p><strong>Affected scope:</strong> {{ rec.affected_scope }}{% if rec.owner %} · <strong>Owner:</strong> {{ rec.owner }}{% endif %}</p>
-    <p><strong>Verify:</strong> {{ rec.verification_method }}</p>
-    <details><summary>Supporting diagnostics</summary><ul>{% for c in root.supporting_checks %}<li>{{ c.family }} · {{ c.title }} · {{ c.status }} · {{ c.pages_affected }}/{{ c.pages_tested }} pages</li>{% endfor %}</ul></details>
-  </article>
+<section class="section-block">
+  <div class="section-heading"><div><div class="eyebrow">Top actions</div><h2>Highest-value actions</h2><p>Root causes first. Supporting diagnostics stay underneath.</p></div></div>
+  <div class="action-list">
+  {% for root in report.top_actions[:5] %}{% set rec = root.recommendation_object or {} %}
+    <article class="action-row">
+      <div class="action-rank">{{ loop.index|string + '.' }}</div>
+      <div class="action-main"><strong>{{ root.title }}</strong><div class="action-meta"><span>{{ root.pages_affected }} affected pages</span><span>{{ root.supporting_checks|length }} supporting checks</span><span>{{ root.confidence }} confidence</span>{% if rec.owner %}<span>{{ rec.owner }}</span>{% endif %}</div></div>
+      <button type="button" class="text-button action-toggle">Recommendation</button>
+      <div class="action-detail"><p><strong>Why it matters:</strong> {{ rec.why_it_matters }}</p><p><strong>Recommended action:</strong> {{ rec.recommended_action }}</p><p><strong>Verify:</strong> {{ rec.verification_method }}</p><p><strong>Status:</strong> {{ rec.status or 'open' }}</p><details><summary>Supporting diagnostics</summary><ul>{% for c in root.supporting_checks %}<li>{{ c.family }} · {{ c.title }} · {{ c.status }} · {{ c.pages_affected }}/{{ c.pages_tested }}</li>{% endfor %}</ul></details></div>
+    </article>
   {% endfor %}
-</section>
-{% endif %}
-
-<section class="report-methodology">
-  <div><h3>Methodology & scope</h3><p>{{ report.methodology }}</p><p><strong>Living pulse:</strong> the report shows the latest known state of each monitored check. Every immutable observation is retained underneath that check, so improvement, regression, persistence, and uncertainty are visible without creating a separate monthly report.</p><p><strong>Observation semantics:</strong> automated PASS/FAIL/PARTIAL states describe observed conditions; MANUAL_REVIEW means a human determination is still required; NOT_APPLICABLE means the check does not apply; DATA_UNAVAILABLE means required evidence or integration data was not available.</p></div>
-  <div><h3>GEO / AEO / AIO glossary</h3><dl>{% for term, definition in report.glossary %}<dt>{{ term }}</dt><dd>{{ definition }}</dd>{% endfor %}</dl></div>
-</section>
-
-<section class="report-methodology">
-  <div style="grid-column:1/-1">
-    <div class="report-kicker">DATA COVERAGE</div><h2>Monitoring Coverage</h2>
-    <div class="data-coverage-grid">
-      {% for source in report.data_coverage %}<div class="coverage-item coverage-{{ source.state }}"><strong>{{ source.label }}</strong><div>{{ source.state|replace('_',' ')|title }}</div>{% if source.detail %}<small>{{ source.detail }}</small>{% endif %}</div>{% endfor %}
-    </div>
-    <p>{{ report.monitoring_coverage.connected or 0 }} connected · {{ report.monitoring_coverage.missing or 0 }} missing · {{ report.monitoring_coverage.stale or 0 }} stale · {{ report.monitoring_coverage.failed or 0 }} failed.</p>
-  </div>
-</section>
-
-{% if report.report_quality.errors or report.report_quality.warnings %}
-<section class="report-methodology report-quality-ui">
-  <div style="grid-column:1/-1"><h3>Report quality validation</h3>
-  {% for item in report.report_quality.errors %}<div class="quality-error"><strong>Export blocker:</strong> {{ item }}</div>{% endfor %}
-  {% for item in report.report_quality.warnings %}<div class="quality-warning"><strong>Warning:</strong> {{ item }}</div>{% endfor %}
   </div>
 </section>
 {% endif %}
 
-<nav class="family-nav" aria-label="Report families">
-  {% for family in report.families %}
-  <a class="family-nav-card {% if loop.index <= 5 %}family-nav-main{% endif %}" href="#{{ family.id }}"><strong>{{ family.name }}</strong><span>{{ family.departments }}</span></a>
-  {% endfor %}
-</nav>
-<section class="report-controls interactive-evidence">
-  <div><strong>Explore current state and history</strong><span>Each check carries its observation history and raw page evidence.</span></div>
-  <div class="report-expand-controls"><button type="button" class="button" id="report-expand-all">Expand all</button><button type="button" class="button" id="report-collapse-all">Collapse all</button></div>
-  <input id="report-check-search" type="search" placeholder="Search checks, pages or evidence">
-  <select id="report-status-filter"><option value="">All statuses</option><option value="FAIL">Fail</option><option value="PARTIAL">Partial</option><option value="MANUAL_REVIEW">Manual review</option><option value="DATA_UNAVAILABLE">Data unavailable</option><option value="NOT_APPLICABLE">Not applicable</option><option value="PASS">Pass</option></select>
-  <select id="report-family-filter"><option value="">All sections</option>{% for f in report.families %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}</select><label><input id="report-show-pass" type="checkbox" checked> Show passes</label>
+<section class="section-block">
+  <div class="section-heading"><div><div class="eyebrow">Monitoring coverage</div><h2>What the pulse can currently see</h2></div><span class="quiet-link">{{ report.monitoring_coverage.connected or 0 }} connected · {{ report.monitoring_coverage.missing or 0 }} missing</span></div>
+  <div class="coverage-strip">{% for source in report.data_coverage %}<span class="coverage-chip {{ source.state }}" title="{{ source.detail or '' }}">{{ source.label }} · {{ source.state|replace('_',' ') }}</span>{% endfor %}</div>
 </section>
+
+<nav class="family-nav" aria-label="Report sections">{% for family in report.families %}<a href="#{{ family.id }}">{{ family.name }}</a>{% endfor %}</nav>
 
 {% for family in report.families %}
-<section id="{{ family.id }}" class="report-family family-{{ family.id }} {% if family.id in report.technical_family_ids %}family-collapsed{% endif %}" data-family="{{ family.id }}">
-  <header class="family-header"><div><div class="family-number">{{ loop.index }}</div><h2>{{ family.name }}</h2><div class="department-tags">{{ family.departments }}</div><p>{{ family.purpose }}</p></div></header>
-  <button type="button" class="family-collapse-toggle interactive-evidence" aria-expanded="{% if family.id in report.technical_family_ids %}false{% else %}true{% endif %}">{% if family.id in report.technical_family_ids %}Expand section{% else %}Collapse section{% endif %}</button>
+<section id="{{ family.id }}" class="family {% if family.id in report.technical_family_ids %}collapsed{% endif %}" data-family="{{ family.id }}">
+  <div class="family-head">
+    <div class="family-title"><div class="family-number">{{ loop.index }}</div><div><h2>{{ family.name }}</h2><div class="family-dept">{{ family.departments }}</div><p class="family-purpose">{{ family.purpose }}</p></div></div>
+    <div>
+      {% if family.kind in ['audit','onsite'] %}<div class="family-summary"><span><strong>{{ family.snapshot.confirmed_issues }}</strong> issues</span><span><strong>{{ family.snapshot.review_required }}</strong> review</span><span><strong>{{ family.snapshot.passed }}</strong> passed</span></div>{% endif %}
+      <button class="family-toggle" type="button">{% if family.id in report.technical_family_ids %}Open section{% else %}Collapse section{% endif %}</button>
+    </div>
+  </div>
 
+  <div class="family-body">
   {% if family.kind == 'ai' %}
-    <div class="ai-visibility-report-content">
-      <section class="ai-source-overview ai-source-overview-embedded">
-        <div class="section-head"><div><div class="report-kicker">AI RESPONSE SOURCE</div><h3>Manual AI response evidence</h3></div></div>
-        {% if mai_snapshot.get('available') %}
-        <div class="cards ai-source-cards">
-          <div class="card"><span>Providers</span><strong>{{ mai_snapshot.get('provider_count') or 0 }}</strong></div>
-          <div class="card"><span>Question answers parsed</span><strong>{{ mai_snapshot.get('answer_count') or 0 }}/{{ mai_snapshot.get('expected_answer_count') or 0 }}</strong></div>
-          <div class="card"><span>Structured responses</span><strong>{{ mai_snapshot.get('valid_json_providers') or 0 }}/{{ mai_snapshot.get('provider_count') or 0 }}</strong></div>
-          <div class="card"><span>Observed</span><strong class="small-value">{{ mai_snapshot.get('updated_at') or '—' }}</strong></div>
-        </div>
-        {% if not mai_snapshot.get('complete') %}<div class="notice">The AI response source is present but incomplete or partially unparsed. Missing or malformed responses are treated as unavailable evidence, never as entity absence.</div>{% endif %}
-        {% else %}<div class="panel source-required"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><strong> AI response source not available</strong><p>No Manual AI Responses source was attached to this observation.</p></div>{% endif %}
-      </section>
-
-      <section class="ai-analysis-report ai-analysis-report-embedded">
-        <div class="section-head"><div><div class="report-kicker">AI RESPONSE ANALYSIS</div><h3>Model interpretation</h3></div></div>
-        {% if mai_snapshot.get('analysis_status') == 'success' and mai_snapshot.get('analysis_text') %}
-        <div class="panel analysis-text analysis-markdown" data-analysis-markdown>{{ mai_snapshot.get('analysis_text') }}</div>
-        <div class="signal-small">Analysis {{ mai_snapshot.get('analysis_provider') or 'ollama' }} · {{ mai_snapshot.get('analysis_model') or '—' }} · reasoning {{ mai_snapshot.get('analysis_reasoning_effort') or '—' }} · temperature {{ mai_snapshot.get('analysis_temperature') if mai_snapshot.get('analysis_temperature') is not none else '—' }} · top-p {{ mai_snapshot.get('analysis_top_p') if mai_snapshot.get('analysis_top_p') is not none else '—' }} · max {{ mai_snapshot.get('analysis_max_output_tokens') or '—' }} · prompt v{{ mai_snapshot.get('analysis_system_prompt_version') or 1 }} · question-set v{{ mai_snapshot.get('question_set_version') or 1 }}{% if mai_snapshot.get('analysis_updated_at') %} · {{ mai_snapshot.get('analysis_updated_at') }}{% endif %}</div>
-        {% elif mai_snapshot.get('available') %}<div class="panel"><p>AI response evidence is available in this observation, but model analysis had not yet been run.</p></div>{% else %}<div class="panel source-required"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><p>AI response source is not available in this observation.</p></div>{% endif %}
-      </section>
-    </div>
-
-  {% elif family.kind == 'audit' or family.kind == 'onsite' %}
-    <div class="family-snapshot">
-      <div class="snapshot-card"><span>Checks</span><strong>{{ family.snapshot.checks }}</strong></div>
-      <div class="snapshot-card"><span>Confirmed issues</span><strong>{{ family.snapshot.confirmed_issues }}</strong></div>
-      <div class="snapshot-card"><span>Review required</span><strong>{{ family.snapshot.review_required }}</strong></div>
-      <div class="snapshot-card"><span>Data unavailable</span><strong>{{ family.snapshot.data_unavailable }}</strong></div>
-      <div class="snapshot-card"><span>Pages tested</span><strong>{{ family.snapshot.pages }}</strong></div>
-    </div>
-
-    <h3>Confirmed findings</h3>
-    <div class="table-wrap report-table">
-      <table><thead><tr><th>Check</th><th>Status</th><th>Latest movement</th><th>Pages affected</th><th>Value to fix</th></tr></thead><tbody>
-      {% for check in family.priority_findings %}
-      <tr><td><strong>{{ check.title }}</strong><div class="history-note">{{ check.category }}</div></td><td><span class="status-pill status-pill-{{ check.status|lower }}">{{ check.status }}</span></td><td><span class="change-pill change-{{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span>{% if check.observed_at %}<div class="history-note">Observed {{ check.observed_at }}</div>{% endif %}</td><td>{{ check.pages_affected }} of {{ check.pages_tested }}</td><td class="value-score" data-value="{{ check.value_score or 0 }}">{{ '%.2f'|format(check.value_score or 0) }}{% if check.value_score_explanation.partial_inputs %}<div class="score-explain">Traffic data unavailable; score uses severity + prevalence only.</div>{% endif %}</td></tr>
-      {% else %}<tr><td colspan="5">No confirmed fail/partial findings currently require attention.</td></tr>{% endfor %}
-      </tbody></table>
-    </div>
-
-    {% if family.review_findings %}
-    <div class="review-required-block">
-      <h3>Review required</h3><p>These are not detected failures. A human determination is required before they can become confirmed findings.</p>
-      <div class="table-wrap report-table"><table><thead><tr><th>Check</th><th>Status</th><th>Latest movement</th><th>Pages awaiting review</th></tr></thead><tbody>
-      {% for check in family.review_findings %}<tr><td>{{ check.title }}<div class="history-note">{{ check.category }}</div></td><td><span class="status-pill status-pill-manual_review">MANUAL_REVIEW</span></td><td><span class="change-pill change-{{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span></td><td>{{ check.pages_review_required }} of {{ check.pages_tested }}</td></tr>{% endfor %}
-      </tbody></table></div>
-    </div>
-    {% endif %}
-
-    <div class="interactive-evidence">
-    {% for category in family.categories_data %}
-    <section class="audit-category">
-      <div class="category-head"><h3>{{ category.name }}</h3><span class="status-pill status-pill-{{ category.status|lower }}">{{ category.status }}</span></div>
-      <div class="table-wrap report-table"><table><thead><tr><th>Check</th><th>Current</th><th>Movement</th><th>Scope</th><th>Value to fix</th></tr></thead><tbody>
-      {% for check in category.checks %}
-      <tr><td><strong>{{ check.title }}</strong></td><td><span class="status-pill status-pill-{{ check.status|lower }}">{{ check.status }}</span></td><td><span class="change-pill change-{{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span></td><td>{% if check.status == 'MANUAL_REVIEW' %}{{ check.pages_review_required }} review{% elif check.status == 'DATA_UNAVAILABLE' %}{{ check.pages_data_unavailable }} unavailable{% elif check.status == 'NOT_APPLICABLE' %}—{% else %}{{ check.pages_affected }} of {{ check.pages_tested }}{% endif %}</td><td>{% if check.is_confirmed_issue %}{{ '%.2f'|format(check.value_score or 0) }}{% else %}—{% endif %}</td></tr>
-      <tr class="check-detail-row"><td colspan="5"><details><summary>Current evidence & history · {{ check.history_count }} observation{{ '' if check.history_count == 1 else 's' }}</summary>
-        <div class="finding-pulse">
-          <div class="pulse-cell"><span>Current state</span><strong><span class="status-pill status-pill-{{ check.status|lower }}">{{ check.status }}</span></strong></div>
-          <div class="pulse-cell"><span>Latest movement</span><strong><span class="change-pill change-{{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span></strong></div>
-          <div class="pulse-cell"><span>Last observed</span><strong>{{ check.observed_at or '—' }}</strong></div>
-          <div class="pulse-cell"><span>In this state since</span><strong>{{ check.state_since or '—' }}</strong></div>
-          <div class="pulse-cell"><span>Current scope</span><strong>{% if check.status == 'MANUAL_REVIEW' %}{{ check.pages_review_required }} review{% elif check.status == 'DATA_UNAVAILABLE' %}{{ check.pages_data_unavailable }} unavailable{% elif check.status == 'NOT_APPLICABLE' %}N/A{% else %}{{ check.pages_affected }}/{{ check.pages_tested }} affected{% endif %}</strong></div>
-        </div>
-        {% set rec = check.recommendation_object or {} %}
-        <p><strong>Confidence:</strong> {{ check.confidence }} · <strong>Evidence type:</strong> {{ check.evidence_type }} · <strong>Cadence:</strong> {{ check.monitoring_cadence }}</p>
-        {% if check.is_confirmed_issue or check.is_review_required %}<p><strong>Problem:</strong> {{ rec.problem }}<br><strong>Why it matters:</strong> {{ rec.why_it_matters }}<br><strong>Recommended action:</strong> {{ rec.recommended_action }}<br><strong>Affected scope:</strong> {{ rec.affected_scope }}{% if rec.owner %}<br><strong>Owner:</strong> {{ rec.owner }}{% endif %}<br><strong>Verification:</strong> {{ rec.verification_method }}</p>{% endif %}
-        {% if check.value_score_explanation %}<p class="score-explain"><strong>Value to fix:</strong> {{ check.value_score_explanation.formula }} · prevalence {{ check.value_score_explanation.prevalence }} · traffic exposure {{ check.value_score_explanation.traffic_exposure }} · scoring {{ check.value_score_explanation.scoring_version }}{% if check.value_score_explanation.partial_inputs %} · partial inputs: search traffic unavailable{% endif %}</p>{% endif %}
-
-        <h4>Observation history</h4>
-        {% if check.history %}
-        <div class="table-wrap nested-table history-table"><table><thead><tr><th>Observed</th><th>Status</th><th>Movement</th><th>Affected</th><th>Tested</th><th>Audit run</th><th>Snapshot</th></tr></thead><tbody>
-        {% for obs in check.history|reverse %}<tr class="{% if loop.first %}history-current{% endif %}"><td>{{ obs.observed_at or '—' }}</td><td><span class="status-pill status-pill-{{ obs.status|lower }}">{{ obs.status }}</span></td><td><span class="change-pill change-{{ obs.change }}">{{ obs.change|replace('_',' ')|title }}</span></td><td>{% if obs.status == 'MANUAL_REVIEW' %}{{ obs.pages_review_required }} review{% elif obs.status == 'DATA_UNAVAILABLE' %}{{ obs.pages_data_unavailable }} unavailable{% elif obs.status == 'NOT_APPLICABLE' %}—{% else %}{{ obs.pages_affected }}{% endif %}</td><td>{{ obs.pages_tested }}</td><td>{{ obs.audit_run_id or '—' }}</td><td>{% if obs.report_id %}<a href="{{ url_for('report_session_view', domain=site.domain, report_id=obs.report_id) }}">View</a>{% else %}—{% endif %}</td></tr>{% endfor %}
-        </tbody></table></div>
-        {% else %}<p>No prior observation history is stored for this check yet.</p>{% endif %}
-
-        <h4>Current page-level evidence</h4>
-        <div class="table-wrap nested-table"><table><thead><tr><th>Page</th><th>Status</th><th>Severity</th><th>Evidence</th></tr></thead><tbody>
-        {% for detail in check.details %}<tr><td>{% if detail.page_id %}<a href="{{ url_for('page_workspace', domain=site.domain, page_id=detail.page_id) }}">{{ detail.path }}</a>{% else %}{{ detail.path }}{% endif %}</td><td><span class="status-pill status-pill-{{ detail.observed_status|lower }}">{{ detail.observed_status }}</span></td><td>{{ detail.severity }}</td><td>{{ detail.evidence }}{% if detail.source_url %}<br><a href="{{ detail.source_url }}">Source</a>{% endif %}</td></tr>{% endfor %}
-        </tbody></table></div>
-      </details></td></tr>
-      {% else %}<tr><td colspan="5">No stored checks in this category.</td></tr>{% endfor %}
-      </tbody></table></div>
-    </section>
-    {% endfor %}
-    </div>
-
-    {% if family.kind == 'onsite' %}
-      <div class="interactive-evidence">
-      <h3>7.1 Onsite Issue Summary</h3>
-      {% if family.crawl_issues %}<div class="table-wrap report-table"><table><thead><tr><th>Severity</th><th>Issue</th><th>Page</th><th>Detail</th></tr></thead><tbody>{% for issue in family.crawl_issues %}<tr><td>{{ issue.severity }}</td><td>{{ issue.title }}</td><td class="report-url">{{ issue.page_url }}</td><td>{{ issue.detail }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
-      <h3>7.5 Technical SEO Crawl</h3>
-      {% if family.crawl %}<div class="family-snapshot compact"><div class="snapshot-card"><span>Discovered</span><strong>{{ family.crawl.pages_discovered }}</strong></div><div class="snapshot-card"><span>Crawled</span><strong>{{ family.crawl.pages_crawled }}</strong></div><div class="snapshot-card"><span>Failed</span><strong>{{ family.crawl.pages_failed }}</strong></div><div class="snapshot-card"><span>Status</span><strong>{{ family.crawl.status }}</strong></div></div><div class="table-wrap report-table"><table><thead><tr><th>Page</th><th>HTTP</th><th>Indexable</th><th>Words</th><th>Internal links</th><th>Schema</th><th>ms</th></tr></thead><tbody>{% for p in family.crawl_pages %}<tr><td class="report-url">{{ p.path or p.url }}</td><td>{{ p.status_code }}</td><td>{{ 'yes' if p.indexable else 'no' }}</td><td>{{ p.word_count }}</td><td>{{ p.internal_links }}</td><td>{{ p.schema_types_json or '—' }}</td><td>{{ p.response_ms }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
-      <h3>7.6 Site Audit</h3>{% if family.site_audit %}<div class="panel"><p>Status {{ family.site_audit.status }} · {{ family.site_audit.pagesCrawled }} pages crawled · started {{ family.site_audit.startedAt }}</p></div>{% else %}<div class="panel"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><p>No OpenGSC Site Audit observation is stored.</p></div>{% endif %}
-      <h3>7.7 Indexing & Sitemap</h3>{% if family.sitemap_urls %}<div class="table-wrap report-table"><table><thead><tr><th>URL</th><th>lastmod</th><th>First seen</th><th>Last seen</th><th>Change</th><th>Google coverage</th></tr></thead><tbody>{% for row in family.sitemap_urls[:100] %}<tr><td class="report-url">{{ row.url }}</td><td>{{ row.lastmod or '—' }}</td><td>{{ row.firstSeenAt }}</td><td>{{ row.lastSeenAt }}</td><td>{{ row.changeStatus }}</td><td>{{ row.googleCoverage or row.googleStatus or '—' }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="panel"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><p>No sitemap inventory is stored.</p></div>{% endif %}
-      <h3>7.8 AI Crawler Accessibility</h3><div class="panel"><p>AI crawler-access checks remain an onsite technical control. Stored crawler-access evidence is preserved in the underlying audit datasets.</p></div>
-      <h3>7.9 Site Health</h3>{% if family.site_health %}<div class="json-facts"><div><strong>SSL</strong><pre>{{ family.site_health.sslData or '—' }}</pre></div><div><strong>Safe Browsing</strong><pre>{{ family.site_health.safeBrowsing or '—' }}</pre></div><div><strong>VirusTotal</strong><pre>{{ family.site_health.virusTotal or '—' }}</pre></div><div><strong>Core Web Vitals</strong><pre>{{ family.site_health.vitals or '—' }}</pre></div></div>{% else %}<div class="panel"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><p>No Site Health observation is stored.</p></div>{% endif %}
+    {% if mai.get('available') %}
+      <div class="ai-overview">
+        <div class="ai-metric"><span>Providers</span><strong>{{ mai.get('provider_count') or 0 }}</strong></div>
+        <div class="ai-metric"><span>Answers captured</span><strong>{{ mai.get('answer_count') or 0 }}/{{ mai.get('expected_answer_count') or 0 }}</strong></div>
+        <div class="ai-metric"><span>Structured runs</span><strong>{{ mai.get('valid_json_providers') or 0 }}</strong></div>
+        <div class="ai-metric"><span>Observed</span><strong>{{ mai.get('updated_at') or '—' }}</strong></div>
       </div>
-    {% endif %}
+      {% if not mai.get('complete') %}<div class="ai-warning">AI evidence is incomplete or partially unparsed. Missing responses are unavailable evidence, not entity absence.</div>{% endif %}
+      <details class="analysis-summary"><summary>View full AI interpretation</summary>
+        {% if mai.get('analysis_status') == 'success' and mai.get('analysis_text') %}<div class="analysis-text analysis-markdown" data-analysis-markdown>{{ mai.get('analysis_text') }}</div><div class="analysis-meta">{{ mai.get('analysis_provider') or 'ollama' }} · {{ mai.get('analysis_model') or '—' }} · prompt v{{ mai.get('analysis_system_prompt_version') or 1 }} · question-set v{{ mai.get('question_set_version') or 1 }}{% if mai.get('analysis_updated_at') %} · {{ mai.get('analysis_updated_at') }}{% endif %}</div>{% else %}<p>No model interpretation is stored for this observation.</p>{% endif %}
+      </details>
+    {% else %}<div class="source-missing"><span class="status DATA_UNAVAILABLE">DATA_UNAVAILABLE</span> Manual AI responses are not attached to this observation.</div>{% endif %}
+
+  {% elif family.kind in ['audit','onsite'] %}
+    <div class="group-label">Confirmed findings</div>
+    <div class="finding-list">
+    {% for check in family.priority_findings %}
+      <article class="finding-card {% if loop.index > 3 %}finding-extra{% endif %}" data-status="{{ check.status }}">
+        <div class="finding-top"><div><div class="finding-name">{{ check.title }}</div><div class="finding-category">{{ check.category }}</div></div><div class="finding-badges"><span class="status {{ check.status }}">{{ check.status }}</span><span class="change {{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span></div></div>
+        <div class="finding-sub"><span><strong>{{ check.pages_affected }}/{{ check.pages_tested }}</strong> pages affected</span><span><strong>{{ '%.2f'|format(check.value_score or 0) }}</strong> value to fix</span><span>Observed {{ check.observed_at or '—' }}</span>{% if check.history_count %}<span>{{ check.history_count }} observation{{ '' if check.history_count == 1 else 's' }}</span>{% endif %}</div>
+        <div class="finding-actions"><button type="button" data-panel="rec">Recommendation</button><button type="button" data-panel="history">History</button><button type="button" data-panel="evidence">Evidence</button></div>
+        {% set rec = check.recommendation_object or {} %}
+        <div class="finding-panel" data-content="rec"><h4>Recommendation</h4><p><strong>Why it matters:</strong> {{ rec.why_it_matters }}</p><p><strong>Action:</strong> {{ rec.recommended_action }}</p><p><strong>Scope:</strong> {{ rec.affected_scope }}{% if rec.owner %} · <strong>Owner:</strong> {{ rec.owner }}{% endif %}</p><p><strong>Verify:</strong> {{ rec.verification_method }}</p><p><strong>Confidence:</strong> {{ check.confidence }} · <strong>Evidence:</strong> {{ check.evidence_type }}</p></div>
+        <div class="finding-panel" data-content="history"><h4>Observation history</h4>{% if check.history %}<div class="history-list">{% for obs in check.history|reverse %}<div class="history-row"><span>{{ obs.observed_at or '—' }}</span><span><span class="status {{ obs.status }}">{{ obs.status }}</span></span><span><span class="change {{ obs.change }}">{{ obs.change|replace('_',' ')|title }}</span></span><span>{% if obs.status == 'MANUAL_REVIEW' %}{{ obs.pages_review_required }} review{% elif obs.status == 'DATA_UNAVAILABLE' %}{{ obs.pages_data_unavailable }} unavailable{% elif obs.status == 'NOT_APPLICABLE' %}—{% else %}{{ obs.pages_affected }}/{{ obs.pages_tested }} affected{% endif %}</span></div>{% endfor %}</div>{% else %}<p>No prior observation history is stored.</p>{% endif %}</div>
+        <div class="finding-panel" data-content="evidence"><h4>Current page-level evidence</h4><div class="evidence-list">{% for d in check.details %}<div class="evidence-row"><span>{% if d.page_id %}<a href="{{ url_for('page_workspace', domain=site.domain, page_id=d.page_id) }}">{{ d.path }}</a>{% else %}{{ d.path }}{% endif %}</span><span><span class="status {{ d.observed_status }}">{{ d.observed_status }}</span></span><span>{{ d.evidence }}{% if d.source_url %} · <a href="{{ d.source_url }}">source</a>{% endif %}</span></div>{% endfor %}</div></div>
+      </article>
+    {% else %}<p>No confirmed fail/partial findings currently require attention.</p>{% endfor %}
+    </div>
+    {% if family.priority_findings|length > 3 %}<button type="button" class="text-button show-all-findings">View all {{ family.priority_findings|length }} findings</button>{% endif %}
+
+    {% if family.review_findings %}<div class="group-label">Review required</div><div class="review-group">{% for check in family.review_findings %}<div class="review-row"><div><strong>{{ check.title }}</strong><small>{{ check.category }} · {{ check.pages_review_required }}/{{ check.pages_tested }} pages awaiting review</small></div><span class="status MANUAL_REVIEW">MANUAL_REVIEW</span></div>{% endfor %}</div>{% endif %}
+
+    <details class="all-checks"><summary>All checks, passes, and lower-level diagnostics</summary>
+      {% for category in family.categories_data %}<div class="category"><h4>{{ category.name }}</h4>{% for check in category.checks %}<div class="all-check-row"><span>{{ check.title }}</span><span><span class="status {{ check.status }}">{{ check.status }}</span></span><span>{{ check.latest_change|replace('_',' ')|title }}</span><span>{% if check.status == 'MANUAL_REVIEW' %}{{ check.pages_review_required }} review{% elif check.status == 'DATA_UNAVAILABLE' %}{{ check.pages_data_unavailable }} unavailable{% elif check.status == 'NOT_APPLICABLE' %}—{% else %}{{ check.pages_affected }}/{{ check.pages_tested }}{% endif %}</span></div>{% endfor %}</div>{% endfor %}
+    </details>
+
+    {% if family.kind == 'onsite' %}<details class="technical-details"><summary>Raw onsite crawl and technical evidence</summary>{% if family.crawl %}<p>{{ family.crawl.pages_crawled }} crawled · {{ family.crawl.pages_failed }} failed · {{ family.crawl.status }}</p>{% endif %}{% if family.crawl_issues %}<div class="scroll-table"><table class="data-table"><thead><tr><th>Severity</th><th>Issue</th><th>Page</th><th>Detail</th></tr></thead><tbody>{% for x in family.crawl_issues %}<tr><td>{{ x.severity }}</td><td>{{ x.title }}</td><td>{{ x.page_url }}</td><td>{{ x.detail }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}</details>{% endif %}
 
   {% elif family.kind == 'seo' %}
     {% set seo = family.seo or {} %}
-    <h3>6.1 Organic Search Performance</h3>
-    {% if not seo or not seo.keywords %}<div class="panel source-required"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><strong> Google Search Console is not available for this report.</strong></div>{% endif %}
-    <div class="family-snapshot"><div class="snapshot-card"><span>Observed queries</span><strong>{{ seo.keywords or 0 }}</strong></div><div class="snapshot-card"><span>Ranking pages</span><strong>{{ seo.pages or 0 }}</strong></div><div class="snapshot-card"><span>Impressions</span><strong>{{ seo.impressions or 0 }}</strong></div><div class="snapshot-card"><span>Clicks</span><strong>{{ seo.clicks or 0 }}</strong></div><div class="snapshot-card"><span>CTR</span><strong>{{ seo.ctr or 0 }}%</strong></div></div>
-    <div class="interactive-evidence">
-    {% if family.keywords %}<div class="table-wrap report-table"><table><thead><tr><th>Query</th><th>Landing page</th><th>Impressions</th><th>Clicks</th><th>Best</th><th>Latest</th><th>Status</th></tr></thead><tbody>{% for k in family.keywords %}<tr><td>{{ k.query }}</td><td class="report-url">{{ k.page }}</td><td>{{ k.impressions }}</td><td>{{ k.clicks }}</td><td>{{ k.best_position }}</td><td>{{ k.latest_position }}</td><td>{{ k.status }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
-    <h3>6.2 Search Opportunities</h3><h4>Striking Distance Keywords</h4>{% if family.striking_distance %}<div class="table-wrap report-table narrow-table"><table><thead><tr><th>Query</th><th>Page</th><th>Latest position</th><th>Impressions</th></tr></thead><tbody>{% for k in family.striking_distance %}<tr><td>{{ k.query }}</td><td class="report-url">{{ k.page }}</td><td>{{ k.latest_position }}</td><td>{{ k.impressions }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="panel"><p>No striking-distance rows in the stored observation.</p></div>{% endif %}
-    <h3>6.3 Cannibalization</h3><h4>Exact-query cannibalization</h4>{% if family.exact_cannibalization %}<div class="table-wrap report-table narrow-table"><table><thead><tr><th>Query</th><th>Ranking pages</th></tr></thead><tbody>{% for item in family.exact_cannibalization %}<tr><td>{{ item.query }}</td><td>{{ item.pages|map(attribute='page')|join(', ') }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="panel"><p>No exact-query cannibalization detected in the stored observations.</p></div>{% endif %}<h4>Related-intent cannibalization</h4><div class="panel"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><p>Related-intent analysis is not persisted in the current observation.</p></div>
-    <h3>6.4 Content Decay</h3><div class="panel"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><p>Content Decay is not persisted in the current observation.</p></div>
-    <h3>6.5 Rank Tracking</h3>{% if family.rank_tracking %}<div class="table-wrap report-table"><table><thead><tr><th>Keyword</th><th>Last position</th><th>Previous</th><th>Best</th><th>URL</th><th>Last checked</th></tr></thead><tbody>{% for row in family.rank_tracking %}<tr><td>{{ row.keyword }}</td><td>{{ row.lastPosition or '—' }}</td><td>{{ row.prevPosition or '—' }}</td><td>{{ row.bestPosition or '—' }}</td><td class="report-url">{{ row.lastUrl or '—' }}</td><td>{{ row.lastCheckedAt or '—' }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="panel"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><p>No tracked-keyword rows are stored.</p></div>{% endif %}
-    <h3>6.6 Keyword Demand</h3>{% if family.wanted %}<div class="table-wrap report-table"><table><thead><tr><th>Wanted keyword</th><th>Target page</th><th>Monthly searches</th><th>Competition</th><th>Source</th></tr></thead><tbody>{% for row in family.wanted %}<tr><td>{{ row.keyword }}</td><td>{{ row.target_path or 'Unassigned' }}</td><td>{{ row.avg_monthly_searches or '—' }}</td><td>{{ row.competition or '—' }}</td><td>{{ row.source }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="panel"><p>No wanted/intended keyword targets are stored.</p></div>{% endif %}
-    <h3>6.7 Competitive Search Gaps</h3>{% if family.competitor_keywords %}<div class="table-wrap report-table"><table><thead><tr><th>Competitor</th><th>Keyword</th><th>Position</th><th>Volume</th><th>Difficulty</th><th>URL</th></tr></thead><tbody>{% for row in family.competitor_keywords[:100] %}<tr><td>{{ row.competitor }}</td><td>{{ row.keyword }}</td><td>{{ row.position or '—' }}</td><td>{{ row.volume or '—' }}</td><td>{{ row.difficulty or '—' }}</td><td class="report-url">{{ row.url }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="panel"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><p>No persisted competitor-gap rows are available.</p></div>{% endif %}
-    <h3>6.8 Backlinks & Search Authority</h3>{% if family.domain_metrics %}<div class="family-snapshot compact"><div class="snapshot-card"><span>DR</span><strong>{{ family.domain_metrics.dr or '—' }}</strong></div><div class="snapshot-card"><span>Referring domains</span><strong>{{ family.domain_metrics.refDomains or '—' }}</strong></div><div class="snapshot-card"><span>Backlinks</span><strong>{{ family.domain_metrics.backlinks or '—' }}</strong></div></div>{% endif %}{% if family.ref_domains %}<div class="table-wrap report-table narrow-table"><table><thead><tr><th>Referring domain</th><th>DR</th><th>Links</th><th>Dofollow</th><th>Lost</th></tr></thead><tbody>{% for row in family.ref_domains[:100] %}<tr><td>{{ row.refDomain }}</td><td>{{ row.dr or '—' }}</td><td>{{ row.linksToTarget or '—' }}</td><td>{{ 'yes' if row.dofollow else 'no' }}</td><td>{{ 'yes' if row.lost else 'no' }}</td></tr>{% endfor %}</tbody></table></div>{% elif family.backlinks %}<div class="table-wrap report-table narrow-table"><table><thead><tr><th>Backlink URL</th><th>Status</th><th>Indexed</th><th>Added</th></tr></thead><tbody>{% for row in family.backlinks[:100] %}<tr><td class="report-url">{{ row.url }}</td><td>{{ row.aliveStatus or ('alive' if row.isAlive else 'unknown') }}</td><td>{{ row.xrStatus or '—' }}</td><td>{{ row.addedAt }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="panel"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><p>No backlink dataset is stored.</p></div>{% endif %}
-    <h3>6.9 Audience / Search Performance Context</h3>{% if family.clarity %}<pre class="data-block">{{ family.clarity.data }}</pre>{% else %}<div class="panel"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><p>No GA4/Clarity observation is included.</p></div>{% endif %}
-    </div>
+    <div class="seo-overview"><div class="metric"><span>Observed queries</span><strong>{{ seo.keywords or 0 }}</strong></div><div class="metric"><span>Ranking pages</span><strong>{{ seo.pages or 0 }}</strong></div><div class="metric"><span>Impressions</span><strong>{{ seo.impressions or 0 }}</strong></div><div class="metric"><span>Clicks</span><strong>{{ seo.clicks or 0 }}</strong></div><div class="metric"><span>CTR</span><strong>{{ seo.ctr or 0 }}%</strong></div></div>
+    {% if not seo or not seo.keywords %}<div class="ai-warning"><span class="status DATA_UNAVAILABLE">DATA_UNAVAILABLE</span> Google Search Console is not available for this observation.</div>{% endif %}
+    <details class="technical-details"><summary>Explore search datasets</summary>
+      {% if family.keywords %}<h4>Observed search queries</h4><div class="scroll-table"><table class="data-table"><thead><tr><th>Query</th><th>Page</th><th>Impressions</th><th>Clicks</th><th>Best</th><th>Latest</th></tr></thead><tbody>{% for k in family.keywords %}<tr><td>{{ k.query }}</td><td>{{ k.page }}</td><td>{{ k.impressions }}</td><td>{{ k.clicks }}</td><td>{{ k.best_position }}</td><td>{{ k.latest_position }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+      {% if family.rank_tracking %}<h4>Rank tracking</h4><div class="scroll-table"><table class="data-table"><thead><tr><th>Keyword</th><th>Last</th><th>Previous</th><th>Best</th><th>URL</th></tr></thead><tbody>{% for r in family.rank_tracking %}<tr><td>{{ r.keyword }}</td><td>{{ r.lastPosition or '—' }}</td><td>{{ r.prevPosition or '—' }}</td><td>{{ r.bestPosition or '—' }}</td><td>{{ r.lastUrl or '—' }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+      {% if family.wanted %}<h4>Wanted keywords</h4><div class="scroll-table"><table class="data-table"><thead><tr><th>Keyword</th><th>Target page</th><th>Searches</th><th>Competition</th></tr></thead><tbody>{% for r in family.wanted %}<tr><td>{{ r.keyword }}</td><td>{{ r.target_path or 'Unassigned' }}</td><td>{{ r.avg_monthly_searches or '—' }}</td><td>{{ r.competition or '—' }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+    </details>
   {% endif %}
+  </div>
 </section>
 {% endfor %}
 
+<section class="methodology">
+  <details><summary>Methodology, status semantics, and glossary</summary><p>{{ report.methodology }}</p><p><strong>Living pulse:</strong> the current state is the latest observation; history remains attached to each check. PASS, FAIL, PARTIAL, MANUAL_REVIEW, NOT_APPLICABLE, and DATA_UNAVAILABLE remain distinct states.</p><dl>{% for term, definition in report.glossary %}<dt>{{ term }}</dt><dd>{{ definition }}</dd>{% endfor %}</dl></details>
+  {% if report.report_quality.errors or report.report_quality.warnings %}<details><summary>Report-quality validation</summary>{% for item in report.report_quality.errors %}<div class="quality"><strong>Blocker:</strong> {{ item }}</div>{% endfor %}{% for item in report.report_quality.warnings %}<div class="quality"><strong>Warning:</strong> {{ item }}</div>{% endfor %}</details>{% endif %}
+</section>
+
 <script>
 (() => {
-  const families=[...document.querySelectorAll('.report-family')];
-  const setFamilyCollapsed=(section,collapsed)=>{const b=section.querySelector(':scope > .family-collapse-toggle');section.classList.toggle('family-collapsed',collapsed);if(b){b.setAttribute('aria-expanded',collapsed?'false':'true');b.textContent=collapsed?'Expand section':'Collapse section';}};
-  families.forEach(section=>{const b=section.querySelector(':scope > .family-collapse-toggle');if(!b)return;b.addEventListener('click',()=>setFamilyCollapsed(section,!section.classList.contains('family-collapsed')));});
-  document.getElementById('report-expand-all')?.addEventListener('click',()=>families.filter(section=>!section.hidden).forEach(section=>setFamilyCollapsed(section,false)));
-  document.getElementById('report-collapse-all')?.addEventListener('click',()=>families.filter(section=>!section.hidden).forEach(section=>setFamilyCollapsed(section,true)));
-  const q=document.getElementById('report-check-search'),s=document.getElementById('report-status-filter'),f=document.getElementById('report-family-filter'),p=document.getElementById('report-show-pass');
-  function applyReportFilters(){const text=(q?.value||'').trim().toLowerCase(),st=s?.value||'',fam=f?.value||'',show=p?.checked??true;families.forEach(sec=>{const ok=!fam||sec.dataset.family===fam;sec.hidden=!ok;if(!ok)return;sec.querySelectorAll('tbody tr').forEach(row=>{if(row.classList.contains('check-detail-row'))return;const t=row.textContent||'',u=t.toUpperCase();row.hidden=!((!text||t.toLowerCase().includes(text))&&(!st||u.includes(st))&&(show||!u.includes('PASS')));});});}
-  [q,s,f,p].forEach(el=>el&&el.addEventListener(el.type==='search'?'input':'change',applyReportFilters));
+  document.querySelectorAll('.family-toggle').forEach(btn=>btn.addEventListener('click',()=>{const family=btn.closest('.family');family.classList.toggle('collapsed');btn.textContent=family.classList.contains('collapsed')?'Open section':'Collapse section';}));
+  document.querySelectorAll('.action-toggle').forEach(btn=>btn.addEventListener('click',()=>{btn.closest('.action-row').querySelector('.action-detail')?.classList.toggle('open');}));
+  document.querySelectorAll('.show-all-findings').forEach(btn=>btn.addEventListener('click',()=>{const family=btn.closest('.family');const extras=[...family.querySelectorAll('.finding-extra')];const opening=extras.some(x=>!x.classList.contains('visible'));extras.forEach(x=>x.classList.toggle('visible',opening));btn.textContent=opening?'Show only top findings':`View all ${family.querySelectorAll('.finding-card').length} findings`;}));
+  document.querySelectorAll('.finding-actions button').forEach(btn=>btn.addEventListener('click',()=>{const card=btn.closest('.finding-card');const target=card.querySelector(`[data-content="${btn.dataset.panel}"]`);card.querySelectorAll('.finding-panel').forEach(p=>{if(p!==target)p.classList.remove('open')});target?.classList.toggle('open');}));
 })();
 </script>
 </div>
