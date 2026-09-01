@@ -46,38 +46,12 @@
   </a>
   {% endfor %}
 </nav>
-<section class="ai-source-overview">
-  <div class="section-head">
-    <div>
-      <div class="report-kicker">AI RESPONSE SOURCE</div>
-      <h2>Manual AI response evidence</h2>
-    </div>
-  </div>
-
-  {% if report.manual_ai.available %}
-  <div class="cards ai-source-cards">
-    <div class="card"><span>Providers</span><strong>{{ report.manual_ai.provider_count }}</strong></div>
-    <div class="card"><span>Question answers parsed</span><strong>{{ report.manual_ai.answer_count }}/{{ report.manual_ai.expected_answer_count }}</strong></div>
-    <div class="card"><span>Structured responses</span><strong>{{ report.manual_ai.valid_json_providers }}/{{ report.manual_ai.provider_count }}</strong></div>
-    <div class="card"><span>Last saved</span><strong class="small-value">{{ report.manual_ai.updated_at or '—' }}</strong></div>
-  </div>
-  {% if not report.manual_ai.complete %}
-  <div class="notice">
-    The AI response source is present but incomplete or partially unparsed.
-    Raw provider responses remain stored under Sources.
-  </div>
-  {% endif %}
-  {% else %}
-  <div class="panel source-required">
-    <strong>AI response source not available</strong>
-    <p>No Manual AI Responses source is attached to this report.</p>
-  </div>
-  {% endif %}
-</section>
-
-<section class="ai-analysis-report"><div class="section-head"><div><div class="report-kicker">AI RESPONSE ANALYSIS</div><h2>Model interpretation</h2></div></div>{% set mai = report.get('manual_ai') or report.get('manual_ai_source') or {} %}{% if mai.get('analysis_status') == 'success' and mai.get('analysis_text') %}<div class="panel analysis-text analysis-markdown" data-analysis-markdown>{{ mai.get('analysis_text') }}</div><div class="signal-small">Analysis {{ mai.get('analysis_provider') or 'ollama' }} · {{ mai.get('analysis_model') or '—' }} · reasoning {{ mai.get('analysis_reasoning_effort') or '—' }} · temperature {{ mai.get('analysis_temperature') if mai.get('analysis_temperature') is not none else '—' }} · top-p {{ mai.get('analysis_top_p') if mai.get('analysis_top_p') is not none else '—' }} · max {{ mai.get('analysis_max_output_tokens') or '—' }} · prompt v{{ mai.get('analysis_system_prompt_version') or 1 }} · question-set v{{ mai.get('question_set_version') or 1 }}{% if mai.get('analysis_updated_at') %} · {{ mai.get('analysis_updated_at') }}{% endif %}</div>{% elif mai.get('available') %}<div class="panel"><p>AI response evidence is available, but model analysis has not yet been run.</p></div>{% else %}<div class="panel source-required"><p>AI response source is not available.</p></div>{% endif %}</section>
-
-<section class="report-controls"><div><strong>Explore detailed checks</strong><span>Search, filter, show or hide the detailed HTML evidence.</span></div><input id="report-check-search" type="search" placeholder="Search checks, pages or evidence"><select id="report-status-filter"><option value="">All statuses</option><option value="FAIL">Fail</option><option value="PARTIAL">Partial</option><option value="UNKNOWN">Unknown</option><option value="MANUAL_REVIEW">Manual review</option><option value="PASS">Pass</option></select><select id="report-family-filter"><option value="">All sections</option>{% for f in report.families %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}</select><label><input id="report-show-pass" type="checkbox" checked> Show passes</label></section>
+<section class="report-controls">
+  <div><strong>Explore detailed checks</strong><span>Search, filter, show or hide the detailed HTML evidence.</span></div>
+  <div class="report-expand-controls">
+    <button type="button" class="button" id="report-expand-all">Expand all</button>
+    <button type="button" class="button" id="report-collapse-all">Collapse all</button>
+  </div><input id="report-check-search" type="search" placeholder="Search checks, pages or evidence"><select id="report-status-filter"><option value="">All statuses</option><option value="FAIL">Fail</option><option value="PARTIAL">Partial</option><option value="UNKNOWN">Unknown</option><option value="MANUAL_REVIEW">Manual review</option><option value="PASS">Pass</option></select><select id="report-family-filter"><option value="">All sections</option>{% for f in report.families %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}</select><label><input id="report-show-pass" type="checkbox" checked> Show passes</label></section>
 
 {% for family in report.families %}
 <section id="{{ family.id }}" class="report-family family-{{ family.id }} {% if family.id in report.technical_family_ids %}family-collapsed{% endif %}" data-family="{{ family.id }}">
@@ -92,42 +66,67 @@
   <button type="button" class="family-collapse-toggle" aria-expanded="{% if family.id in report.technical_family_ids %}false{% else %}true{% endif %}">{% if family.id in report.technical_family_ids %}Expand section{% else %}Collapse section{% endif %}</button>
 
   {% if family.kind == 'ai' %}
-  {% if report.manual_ai.available %}
-    <section class="panel ai-visibility-source-state">
-      <h3>AI Visibility</h3>
-      <p>
-        Manual AI evidence is available from
-        <strong>{{ report.manual_ai.provider_runs or report.manual_ai.provider_count }} provider runs</strong>
-        covering
-        <strong>{{ report.manual_ai.answer_count }} question answers</strong>.
-      </p>
-      {% if report.manual_ai.analysis_status == 'success' and report.manual_ai.analysis_text %}
-      <p>
-        Model analysis has been derived from the submitted Manual AI evidence.
-        The interpretation is shown in the <strong>AI Response Analysis</strong> section above;
-        raw provider evidence remains stored under Sources.
-      </p>
-      {% elif report.manual_ai.analysis_status == 'error' %}
-      <p>
-        Manual AI evidence is available, but the latest analysis attempt failed.
-        Raw provider evidence remains stored under Sources.
-      </p>
-      {% else %}
-      <p>
-        Detailed AI visibility analysis has not yet been derived from the submitted responses.
-        The raw provider evidence is stored under Sources.
-      </p>
-      {% endif %}
-    </section>
-  {% else %}
-    <section class="panel source-required">
-      <strong>AI response source not available</strong>
-      <p>
-        No Manual AI Responses source is attached to this report.
-        Add the source evidence under Sources to enable AI-response analysis.
-      </p>
-    </section>
-  {% endif %}
+    <div class="ai-visibility-report-content">
+      <section class="ai-source-overview ai-source-overview-embedded">
+        <div class="section-head">
+          <div>
+            <div class="report-kicker">AI RESPONSE SOURCE</div>
+            <h3>Manual AI response evidence</h3>
+          </div>
+        </div>
+
+        {% if report.manual_ai.available %}
+        <div class="cards ai-source-cards">
+          <div class="card"><span>Providers</span><strong>{{ report.manual_ai.provider_count }}</strong></div>
+          <div class="card"><span>Question answers parsed</span><strong>{{ report.manual_ai.answer_count }}/{{ report.manual_ai.expected_answer_count }}</strong></div>
+          <div class="card"><span>Structured responses</span><strong>{{ report.manual_ai.valid_json_providers }}/{{ report.manual_ai.provider_count }}</strong></div>
+          <div class="card"><span>Last saved</span><strong class="small-value">{{ report.manual_ai.updated_at or '—' }}</strong></div>
+        </div>
+
+        {% if not report.manual_ai.complete %}
+        <div class="notice">
+          The AI response source is present but incomplete or partially unparsed.
+          Raw provider responses remain stored under Sources.
+        </div>
+        {% endif %}
+
+        {% else %}
+        <div class="panel source-required">
+          <strong>AI response source not available</strong>
+          <p>No Manual AI Responses source is attached to this report.</p>
+        </div>
+        {% endif %}
+      </section>
+
+      <section class="ai-analysis-report ai-analysis-report-embedded">
+        <div class="section-head">
+          <div>
+            <div class="report-kicker">AI RESPONSE ANALYSIS</div>
+            <h3>Model interpretation</h3>
+          </div>
+        </div>
+
+        {% set mai = report.get('manual_ai') or report.get('manual_ai_source') or {} %}
+        {% if mai.get('analysis_status') == 'success' and mai.get('analysis_text') %}
+        <div class="panel analysis-text analysis-markdown" data-analysis-markdown>{{ mai.get('analysis_text') }}</div>
+        <div class="signal-small">
+          Analysis {{ mai.get('analysis_provider') or 'ollama' }}
+          · {{ mai.get('analysis_model') or '—' }}
+          · reasoning {{ mai.get('analysis_reasoning_effort') or '—' }}
+          · temperature {{ mai.get('analysis_temperature') if mai.get('analysis_temperature') is not none else '—' }}
+          · top-p {{ mai.get('analysis_top_p') if mai.get('analysis_top_p') is not none else '—' }}
+          · max {{ mai.get('analysis_max_output_tokens') or '—' }}
+          · prompt v{{ mai.get('analysis_system_prompt_version') or 1 }}
+          · question-set v{{ mai.get('question_set_version') or 1 }}
+          {% if mai.get('analysis_updated_at') %}· {{ mai.get('analysis_updated_at') }}{% endif %}
+        </div>
+        {% elif mai.get('available') %}
+        <div class="panel"><p>AI response evidence is available, but model analysis has not yet been run.</p></div>
+        {% else %}
+        <div class="panel source-required"><p>AI response source is not available.</p></div>
+        {% endif %}
+      </section>
+    </div>
 
 {% elif family.kind == 'audit' or family.kind == 'onsite' %}
 
@@ -337,7 +336,12 @@
 <script>
 (() => {
   const families=[...document.querySelectorAll('.report-family')];
-  families.forEach(section=>{const b=section.querySelector(':scope > .family-collapse-toggle');if(!b)return;b.addEventListener('click',()=>{const c=section.classList.toggle('family-collapsed');b.setAttribute('aria-expanded',c?'false':'true');b.textContent=c?'Expand section':'Collapse section';});});
+  const setFamilyCollapsed=(section,collapsed)=>{const b=section.querySelector(':scope > .family-collapse-toggle');section.classList.toggle('family-collapsed',collapsed);if(b){b.setAttribute('aria-expanded',collapsed?'false':'true');b.textContent=collapsed?'Expand section':'Collapse section';}};
+  families.forEach(section=>{const b=section.querySelector(':scope > .family-collapse-toggle');if(!b)return;b.addEventListener('click',()=>setFamilyCollapsed(section,!section.classList.contains('family-collapsed')));});
+  const expandAll=document.getElementById('report-expand-all');
+  const collapseAll=document.getElementById('report-collapse-all');
+  expandAll?.addEventListener('click',()=>families.filter(section=>!section.hidden).forEach(section=>setFamilyCollapsed(section,false)));
+  collapseAll?.addEventListener('click',()=>families.filter(section=>!section.hidden).forEach(section=>setFamilyCollapsed(section,true)));
   const q=document.getElementById('report-check-search'),s=document.getElementById('report-status-filter'),f=document.getElementById('report-family-filter'),p=document.getElementById('report-show-pass');
   function applyReportFilters(){const text=(q?.value||'').trim().toLowerCase(),st=s?.value||'',fam=f?.value||'',show=p?.checked??true;families.forEach(sec=>{const ok=!fam||sec.dataset.family===fam;sec.hidden=!ok;if(!ok)return;sec.querySelectorAll('tbody tr').forEach(row=>{if(row.classList.contains('check-detail-row'))return;const t=row.textContent||'',u=t.toUpperCase();row.hidden=!((!text||t.toLowerCase().includes(text))&&(!st||u.includes(st))&&(show||!u.includes('PASS')));});});}
   [q,s,f,p].forEach(el=>el&&el.addEventListener(el.type==='search'?'input':'change',applyReportFilters));
@@ -345,24 +349,7 @@
 </script>
 
 
-{% if report.manual_ai.available %}
-<script>
-(function hideLegacyCrossModelForManualSource() {
-  document.querySelectorAll(".cross-model-overview,.cross-model-family").forEach((node) => {
-    node.style.display = "none";
-  });
 
-  document.querySelectorAll("h1,h2,h3,h4").forEach((heading) => {
-    const text = (heading.textContent || "").trim();
-    if (text !== "Cross-Model Comparison Overview" && text !== "Cross-Model Comparison") return;
-    const section = heading.closest("section");
-    if (section && !section.classList.contains("ai-source-overview")) {
-      section.style.display = "none";
-    }
-  });
-})();
-</script>
-{% endif %}
 
 
 
