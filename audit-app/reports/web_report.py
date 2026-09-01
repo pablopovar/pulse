@@ -18,11 +18,10 @@ from reports.prioritization import (
     value_to_fix,
     value_to_fix_components,
 )
+from reports.pulse_history import attach_history_to_check, build_finding_history, pulse_summary
 from reports.report_intelligence import (
     RECOMMENDATION_STATES,
     ai_metrics,
-    build_trends,
-    compare_snapshots,
     data_coverage,
     enrich_check,
     group_root_causes,
@@ -49,8 +48,8 @@ FAMILIES = [
 
 STATUS_RANK = {"FAIL":0,"PARTIAL":1,"MANUAL_REVIEW":2,"DATA_UNAVAILABLE":3,"PASS":4,"NOT_APPLICABLE":5}
 SEVERITY_RANK = {"CRITICAL":0,"HIGH":1,"MEDIUM":2,"LOW":3}
-METHODOLOGY_VERSION = "report-methodology-v2"
-SNAPSHOT_VERSION = "report-snapshot-v2"
+METHODOLOGY_VERSION = "report-methodology-pulse-v1"
+SNAPSHOT_VERSION = "report-snapshot-v3"
 
 # Lower = greater expected return from fixing. This is deliberately independent of severity.
 IMPACT_ORDER = {
@@ -205,18 +204,14 @@ def _auto_update_recommendations(con,domain:str,snapshot:dict[str,Any]):
 
 
 def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any])->str:
+    """Append an immutable observation snapshot and advance the domain's living report pointer."""
     report_id=secrets.token_urlsafe(12).replace("-","").replace("_","")[:16]
     now=datetime.now(timezone.utc).isoformat(timespec="seconds")
     immutable=dict(snapshot)
     immutable["manual_ai_snapshot"]=dict(immutable.get("manual_ai_source") or {})
     with _connect(db_path) as con:
         _ensure(con)
-        previous_rows=con.execute("SELECT id,created_at,snapshot_json FROM report_session WHERE domain=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 24",(domain,)).fetchall()
-        previous_snapshot=json.loads(previous_rows[0]["snapshot_json"]) if previous_rows else None
         oldest=con.execute("SELECT created_at FROM report_session WHERE domain=? COLLATE NOCASE ORDER BY created_at ASC LIMIT 1",(domain,)).fetchone()
-        comparison=compare_snapshots(immutable,previous_snapshot)
-        history=[json.loads(r["snapshot_json"]) for r in reversed(previous_rows)]
-        history.append(immutable)
         coverage=data_coverage(immutable)
         manual_ai=dict(immutable.get("manual_ai_snapshot") or {})
         source_used=[x.get("label") for x in coverage if x.get("state")=="connected"]
@@ -225,8 +220,6 @@ def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any])->str:
         audit_summary=immutable.get("audit_summary") or {}
         immutable["client_config"]=_load_client_config(con,domain)
         immutable["recommendation_tracking"]=_load_recommendation_tracking(con,domain)
-        immutable["comparison"]=comparison
-        immutable["trend_data"]=build_trends(history,FAMILIES)
         immutable["snapshot_contract"]={
             "version":SNAPSHOT_VERSION,
             "immutable":True,
@@ -234,10 +227,10 @@ def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any])->str:
             "contains":["inputs","check_outputs","evidence","page_set","source_inventory","scoring_version","methodology_version","ai_prompt_and_question_versions"],
         }
         immutable["report_metadata"]={
-            "report_mode":"monthly" if previous_rows else "baseline",
+            "report_mode":"living",
             "audit_date":audit.get("completed_at") or audit.get("started_at") or now,
             "baseline_date":oldest["created_at"] if oldest else now,
-            "comparison_period":({"from":previous_rows[0]["created_at"],"to":now} if previous_rows else None),
+            "pulse_updated_at":now,
             "pages_crawled":audit_summary.get("pages_audited") or ((immutable.get("crawl") or {}).get("pages_crawled")) or 0,
             "data_sources_used":source_used,
             "missing_sources":source_missing,
@@ -259,11 +252,28 @@ def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any])->str:
     return report_id
 
 
+def _session_with_history(con, row):
+    if not row:
+        return None
+    snapshot=json.loads(row["snapshot_json"])
+    history_rows=con.execute(
+        "SELECT id,domain,created_at,snapshot_json FROM report_session WHERE domain=? COLLATE NOCASE AND created_at<=? ORDER BY created_at ASC LIMIT 250",
+        (row["domain"],row["created_at"]),
+    ).fetchall()
+    records=[{"id":r["id"],"domain":r["domain"],"created_at":r["created_at"],"snapshot":json.loads(r["snapshot_json"])} for r in history_rows]
+    history=build_finding_history(records)
+    snapshot["finding_history"]=history
+    snapshot["pulse_summary"]=pulse_summary(history)
+    snapshot.setdefault("report_metadata",{})["report_mode"]="living"
+    snapshot["report_metadata"]["pulse_updated_at"]=row["created_at"]
+    return {"id":row["id"],"domain":row["domain"],"created_at":row["created_at"],"snapshot":snapshot}
+
+
 def load_report_session(db_path:Path,domain:str,report_id:str):
     with _connect(db_path) as con:
         _ensure(con)
         row=con.execute("SELECT id,domain,created_at,snapshot_json FROM report_session WHERE id=? AND domain=? COLLATE NOCASE",(report_id,domain)).fetchone()
-    return None if not row else {"id":row["id"],"domain":row["domain"],"created_at":row["created_at"],"snapshot":json.loads(row["snapshot_json"])}
+        return _session_with_history(con,row)
 
 
 def load_current_report_session(db_path:Path,domain:str):
@@ -274,7 +284,7 @@ def load_current_report_session(db_path:Path,domain:str):
             row=con.execute("SELECT id,domain,created_at,snapshot_json FROM report_session WHERE id=?",(living["current_report_id"],)).fetchone()
         else:
             row=con.execute("SELECT id,domain,created_at,snapshot_json FROM report_session WHERE domain=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 1",(domain,)).fetchone()
-    return None if not row else {"id":row["id"],"domain":row["domain"],"created_at":row["created_at"],"snapshot":json.loads(row["snapshot_json"])}
+        return _session_with_history(con,row)
 
 
 def list_report_sessions(db_path:Path,domain:str,limit:int=12):
@@ -305,6 +315,7 @@ def _rollup_severity(details):
 
 def _audit_family(defn,signals,data=None):
     data = data or {}
+    finding_history=data.get("finding_history") or {}
     categories=[]
     selected=[s for s in signals if s.get("category") in defn.get("categories",[])]
     for category_name in defn.get("categories",[]):
@@ -336,6 +347,7 @@ def _audit_family(defn,signals,data=None):
             check["value_score_explanation"] = value_to_fix_components(check, data)
             check["value_score"] = value_to_fix(check, data)
             enrich_check(check,defn.get("name") or "")
+            attach_history_to_check(check,finding_history)
         checks.sort(key=lambda c:(-float(c.get("value_score") or 0),STATUS_RANK.get(c.get("status"),99),c["title"]))
         categories.append({"name":category_name,"status":rollup_status([c["status"] for c in checks]),"checks":checks})
     all_checks=[c for cat in categories for c in cat["checks"]]
@@ -465,25 +477,6 @@ def _apply_recommendation_tracking(root_causes, tracking):
     return root_causes
 
 
-def _important_unchanged(comparison):
-    grouped=defaultdict(lambda:{"pages":set(),"severity":"","rows":[]})
-    severity_rank={"CRITICAL":4,"HIGH":3,"MEDIUM":2,"LOW":1,"":0}
-    for item in (comparison or {}).get("page_changes") or []:
-        if item.get("change")!="unchanged" or not is_issue(item.get("current")):
-            continue
-        row=item.get("row") or {}
-        title=str(row.get("title") or item.get("check") or "Unchanged finding")
-        bucket=grouped[title]
-        bucket["pages"].add(item.get("page") or "/")
-        bucket["rows"].append(item)
-        sev=str(row.get("severity") or "").upper()
-        if severity_rank.get(sev,0)>severity_rank.get(bucket["severity"],0):
-            bucket["severity"]=sev
-    out=[{"title":title,"severity":bucket["severity"],"pages":len(bucket["pages"])} for title,bucket in grouped.items()]
-    out.sort(key=lambda x:(-severity_rank.get(x["severity"],0),-x["pages"],x["title"]))
-    return out[:10]
-
-
 def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
     data=dict(snapshot)
     signals=[]
@@ -528,8 +521,5 @@ def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
     data["glossary"] = GLOSSARY
     data["technical_family_ids"] = ["seo-audit", "onsite-audit"]
     data["report_quality"] = validate_report(data,families,roots)
-    comparison=data.get("comparison") or {"available":False,"summary":{}}
-    data["monthly_delta"] = comparison.get("summary") or {}
-    data["regression_alerts"] = comparison.get("regression_alerts") or []
-    data["unchanged_priorities"] = _important_unchanged(comparison)
+    data["pulse_summary"] = data.get("pulse_summary") or pulse_summary(data.get("finding_history") or {})
     return data
