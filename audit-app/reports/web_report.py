@@ -19,6 +19,7 @@ from reports.prioritization import (
     value_to_fix_components,
 )
 from reports.report_intelligence import (
+    RECOMMENDATION_STATES,
     ai_metrics,
     build_trends,
     compare_snapshots,
@@ -86,6 +87,15 @@ def _ensure(con):
     con.execute("CREATE TABLE IF NOT EXISTS report_session (id TEXT PRIMARY KEY,domain TEXT NOT NULL,created_at TEXT NOT NULL,snapshot_json TEXT NOT NULL)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_report_session_domain_created ON report_session(domain,created_at DESC)")
     con.execute("""
+        CREATE TABLE IF NOT EXISTS domain_report (
+            domain TEXT PRIMARY KEY COLLATE NOCASE,
+            baseline_report_id TEXT NOT NULL,
+            current_report_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    con.execute("""
         CREATE TABLE IF NOT EXISTS client_report_config (
             domain TEXT PRIMARY KEY COLLATE NOCASE,
             competitors_json TEXT NOT NULL DEFAULT '[]',
@@ -138,15 +148,67 @@ def _load_client_config(con, domain: str) -> dict[str, Any]:
     }
 
 
+def save_client_report_config(db_path:Path,domain:str,config:dict[str,Any])->dict[str,Any]:
+    now=datetime.now(timezone.utc).isoformat(timespec="seconds")
+    fields=("competitors","priority_pages","target_topics","page_groups","integrations","monitored_ai_prompts")
+    values={key:(config.get(key) if isinstance(config.get(key),list) else []) for key in fields}
+    with _connect(db_path) as con:
+        _ensure(con)
+        con.execute("""INSERT INTO client_report_config(domain,competitors_json,priority_pages_json,target_topics_json,page_groups_json,integrations_json,monitored_ai_prompts_json,updated_at)
+                     VALUES (?,?,?,?,?,?,?,?)
+                     ON CONFLICT(domain) DO UPDATE SET competitors_json=excluded.competitors_json,priority_pages_json=excluded.priority_pages_json,target_topics_json=excluded.target_topics_json,page_groups_json=excluded.page_groups_json,integrations_json=excluded.integrations_json,monitored_ai_prompts_json=excluded.monitored_ai_prompts_json,updated_at=excluded.updated_at""",
+                    (domain,json.dumps(values["competitors"]),json.dumps(values["priority_pages"]),json.dumps(values["target_topics"]),json.dumps(values["page_groups"]),json.dumps(values["integrations"]),json.dumps(values["monitored_ai_prompts"]),now))
+        con.commit()
+        return _load_client_config(con,domain)
+
+
 def _load_recommendation_tracking(con, domain: str) -> dict[str, dict[str, Any]]:
     rows=con.execute("SELECT finding_key,status,note,updated_at FROM recommendation_tracking WHERE domain=? COLLATE NOCASE",(domain,)).fetchall()
     return {r["finding_key"]:{"status":r["status"],"note":r["note"],"updated_at":r["updated_at"]} for r in rows}
+
+
+def set_recommendation_tracking(db_path:Path,domain:str,finding_key:str,status:str,note:str="")->dict[str,Any]:
+    status=str(status or "").strip().lower()
+    if status not in RECOMMENDATION_STATES:
+        raise ValueError(f"Invalid recommendation status: {status}")
+    now=datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with _connect(db_path) as con:
+        _ensure(con)
+        con.execute("""INSERT INTO recommendation_tracking(domain,finding_key,status,note,updated_at) VALUES (?,?,?,?,?)
+                     ON CONFLICT(domain,finding_key) DO UPDATE SET status=excluded.status,note=excluded.note,updated_at=excluded.updated_at""",
+                    (domain,finding_key,status,note or "",now))
+        con.commit()
+    return {"finding_key":finding_key,"status":status,"note":note or "","updated_at":now}
+
+
+def _auto_update_recommendations(con,domain:str,snapshot:dict[str,Any]):
+    tracked=_load_recommendation_tracking(con,domain)
+    if not tracked:
+        return
+    view=prepare_report_view(snapshot)
+    root_statuses=defaultdict(list)
+    for family in view.get("families") or []:
+        if family.get("kind") not in {"audit","onsite"}:
+            continue
+        for category in family.get("categories_data") or []:
+            for check in category.get("checks") or []:
+                key,_=root_cause_key(str(check.get("title") or ""))
+                root_statuses[key].append(normalize_status(check.get("status")))
+    now=datetime.now(timezone.utc).isoformat(timespec="seconds")
+    for key,state in tracked.items():
+        statuses=root_statuses.get(key) or []
+        if state.get("status")=="implemented" and statuses and all(s=="PASS" for s in statuses):
+            con.execute("UPDATE recommendation_tracking SET status='verified',updated_at=? WHERE domain=? COLLATE NOCASE AND finding_key=?",(now,domain,key))
+        elif state.get("status")=="verified" and any(is_issue(s) for s in statuses):
+            con.execute("UPDATE recommendation_tracking SET status='reopened',updated_at=? WHERE domain=? COLLATE NOCASE AND finding_key=?",(now,domain,key))
+    con.commit()
 
 
 def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any])->str:
     report_id=secrets.token_urlsafe(12).replace("-","").replace("_","")[:16]
     now=datetime.now(timezone.utc).isoformat(timespec="seconds")
     immutable=dict(snapshot)
+    immutable["manual_ai_snapshot"]=dict(immutable.get("manual_ai_source") or {})
     with _connect(db_path) as con:
         _ensure(con)
         previous_rows=con.execute("SELECT id,created_at,snapshot_json FROM report_session WHERE domain=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 24",(domain,)).fetchall()
@@ -156,7 +218,7 @@ def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any])->str:
         history=[json.loads(r["snapshot_json"]) for r in reversed(previous_rows)]
         history.append(immutable)
         coverage=data_coverage(immutable)
-        manual_ai=dict(immutable.get("manual_ai_source") or {})
+        manual_ai=dict(immutable.get("manual_ai_snapshot") or {})
         source_used=[x.get("label") for x in coverage if x.get("state")=="connected"]
         source_missing=[x.get("label") for x in coverage if x.get("state") in {"missing","failed"}]
         audit=immutable.get("audit") or {}
@@ -185,7 +247,14 @@ def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any])->str:
             "analysis_prompt_version":manual_ai.get("analysis_system_prompt_version") or 1,
             "snapshot_version":SNAPSHOT_VERSION,
         }
+        _auto_update_recommendations(con,domain,immutable)
+        immutable["recommendation_tracking"]=_load_recommendation_tracking(con,domain)
         con.execute("INSERT INTO report_session(id,domain,created_at,snapshot_json) VALUES (?,?,?,?)",(report_id,domain,now,json.dumps(immutable,default=_json_default,separators=(",",":"))))
+        living=con.execute("SELECT baseline_report_id FROM domain_report WHERE domain=? COLLATE NOCASE",(domain,)).fetchone()
+        if living:
+            con.execute("UPDATE domain_report SET current_report_id=?,updated_at=? WHERE domain=? COLLATE NOCASE",(report_id,now,domain))
+        else:
+            con.execute("INSERT INTO domain_report(domain,baseline_report_id,current_report_id,created_at,updated_at) VALUES (?,?,?,?,?)",(domain,report_id,report_id,now,now))
         con.commit()
     return report_id
 
@@ -194,6 +263,17 @@ def load_report_session(db_path:Path,domain:str,report_id:str):
     with _connect(db_path) as con:
         _ensure(con)
         row=con.execute("SELECT id,domain,created_at,snapshot_json FROM report_session WHERE id=? AND domain=? COLLATE NOCASE",(report_id,domain)).fetchone()
+    return None if not row else {"id":row["id"],"domain":row["domain"],"created_at":row["created_at"],"snapshot":json.loads(row["snapshot_json"])}
+
+
+def load_current_report_session(db_path:Path,domain:str):
+    with _connect(db_path) as con:
+        _ensure(con)
+        living=con.execute("SELECT current_report_id FROM domain_report WHERE domain=? COLLATE NOCASE",(domain,)).fetchone()
+        if living:
+            row=con.execute("SELECT id,domain,created_at,snapshot_json FROM report_session WHERE id=?",(living["current_report_id"],)).fetchone()
+        else:
+            row=con.execute("SELECT id,domain,created_at,snapshot_json FROM report_session WHERE domain=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 1",(domain,)).fetchone()
     return None if not row else {"id":row["id"],"domain":row["domain"],"created_at":row["created_at"],"snapshot":json.loads(row["snapshot_json"])}
 
 
@@ -336,9 +416,7 @@ def _merge_answer_readiness_executive_findings(findings):
         max_score = max(float(x.get("value_score") or 0) for x in clustered)
         kept.append({
             "title": "Content is not consistently structured for answer retrieval",
-            "message": (
-                "Several related answer-readiness checks fail broadly across the site. Rather than a single FAQ or heading problem, the pattern indicates that much of the content is not consistently organized around clear questions, direct answers, and reusable answer blocks."
-            ),
+            "message": "Several related answer-readiness checks fail broadly across the site. Rather than a single FAQ or heading problem, the pattern indicates that much of the content is not consistently organized around clear questions, direct answers, and reusable answer blocks.",
             "value_score": max_score + 1.0,
             "source": "Content & Answer Readiness",
         })
@@ -363,9 +441,14 @@ def _dedupe_executive_root_causes(findings, root_causes):
                 "value_score":max(float(finding.get("value_score") or 0),float(root.get("value_score") or 0)),
                 "source":" · ".join(root.get("family_names") or []),
                 "root_cause_id":key,
+                "confidence":root.get("confidence") or "medium",
+                "evidence_type":"root_cause_group",
             })
         else:
-            out.append(finding)
+            item=dict(finding)
+            item.setdefault("confidence","medium")
+            item.setdefault("evidence_type","derived_report_summary")
+            out.append(item)
     out.sort(key=lambda x:-float(x.get("value_score") or 0))
     return out[:5]
 
@@ -382,6 +465,25 @@ def _apply_recommendation_tracking(root_causes, tracking):
     return root_causes
 
 
+def _important_unchanged(comparison):
+    grouped=defaultdict(lambda:{"pages":set(),"severity":"","rows":[]})
+    severity_rank={"CRITICAL":4,"HIGH":3,"MEDIUM":2,"LOW":1,"":0}
+    for item in (comparison or {}).get("page_changes") or []:
+        if item.get("change")!="unchanged" or not is_issue(item.get("current")):
+            continue
+        row=item.get("row") or {}
+        title=str(row.get("title") or item.get("check") or "Unchanged finding")
+        bucket=grouped[title]
+        bucket["pages"].add(item.get("page") or "/")
+        bucket["rows"].append(item)
+        sev=str(row.get("severity") or "").upper()
+        if severity_rank.get(sev,0)>severity_rank.get(bucket["severity"],0):
+            bucket["severity"]=sev
+    out=[{"title":title,"severity":bucket["severity"],"pages":len(bucket["pages"])} for title,bucket in grouped.items()]
+    out.sort(key=lambda x:(-severity_rank.get(x["severity"],0),-x["pages"],x["title"]))
+    return out[:10]
+
+
 def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
     data=dict(snapshot)
     signals=[]
@@ -396,7 +498,7 @@ def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
         elif defn["kind"]=="audit": families.append(_audit_family(defn,signals,data))
         elif defn["kind"]=="seo": families.append(_seo_family(data,defn))
         else: families.append(_onsite_family(data,defn,signals))
-    manual_ai = dict(data.get("manual_ai_source") or {})
+    manual_ai = dict(data.get("manual_ai_snapshot") or data.get("manual_ai_source") or {})
     providers = list(manual_ai.get("providers") or [])
     manual_ai["available"] = bool(manual_ai.get("available") and providers)
     manual_ai["provider_count"] = int(manual_ai.get("provider_count") or len(providers))
@@ -404,6 +506,7 @@ def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
     manual_ai["valid_json_providers"] = sum(1 for p in providers if isinstance(p.get("parsed"), dict))
     manual_ai["expected_answer_count"] = int(manual_ai.get("expected_answer_count") or (manual_ai.get("provider_count", 0) * 4))
     manual_ai["complete"] = bool(manual_ai.get("available") and manual_ai.get("provider_count", 0) > 0 and manual_ai.get("answer_count", 0) >= manual_ai["expected_answer_count"])
+    data["manual_ai_snapshot"] = manual_ai
     data["manual_ai"] = manual_ai
     data["families"]=families
     data["family_by_id"]={f["id"]:f for f in families}
@@ -428,4 +531,5 @@ def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
     comparison=data.get("comparison") or {"available":False,"summary":{}}
     data["monthly_delta"] = comparison.get("summary") or {}
     data["regression_alerts"] = comparison.get("regression_alerts") or []
+    data["unchanged_priorities"] = _important_unchanged(comparison)
     return data
