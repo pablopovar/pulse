@@ -15,10 +15,12 @@
       {% endif %}
     </div>
   </div>
+  {% if request.endpoint != 'public_report' %}
   <div class="heading-actions">
     <a class="button primary" href="{{ url_for('report_session_pdf', domain=site.domain, report_id=report_session.id) }}">Export PDF</a>
     <a class="button" href="{{ url_for('reports', domain=site.domain) }}">Reports</a>
   </div>
+  {% endif %}
 </header>
 
 <section class="report-high-signal">
@@ -88,7 +90,7 @@
   {% endif %}
 </section>
 
-<section class="ai-analysis-report"><div class="section-head"><div><div class="report-kicker">AI RESPONSE ANALYSIS</div><h2>Model interpretation</h2></div></div>{% set mai = report.get('manual_ai') or report.get('manual_ai_source') or {} %}{% if mai.get('analysis_status') == 'success' and mai.get('analysis_text') %}<div class="panel analysis-text">{{ mai.get('analysis_text') }}</div><div class="signal-small">Model {{ mai.get('analysis_model') or '—' }}{% if mai.get('analysis_updated_at') %} · {{ mai.get('analysis_updated_at') }}{% endif %} · question-set v{{ mai.get('question_set_version') or 1 }}</div>{% elif mai.get('available') %}<div class="panel"><p>AI response evidence is available, but model analysis has not yet been run.</p></div>{% else %}<div class="panel source-required"><p>AI response source is not available.</p></div>{% endif %}</section>
+<section class="ai-analysis-report"><div class="section-head"><div><div class="report-kicker">AI RESPONSE ANALYSIS</div><h2>Model interpretation</h2></div></div>{% set mai = report.get('manual_ai') or report.get('manual_ai_source') or {} %}{% if mai.get('analysis_status') == 'success' and mai.get('analysis_text') %}<div class="panel analysis-text analysis-markdown" data-analysis-markdown>{{ mai.get('analysis_text') }}</div><div class="signal-small">Analysis {{ mai.get('analysis_provider') or 'ollama' }} · {{ mai.get('analysis_model') or '—' }} · reasoning {{ mai.get('analysis_reasoning_effort') or '—' }} · temperature {{ mai.get('analysis_temperature') if mai.get('analysis_temperature') is not none else '—' }} · top-p {{ mai.get('analysis_top_p') if mai.get('analysis_top_p') is not none else '—' }} · max {{ mai.get('analysis_max_output_tokens') or '—' }} · prompt v{{ mai.get('analysis_system_prompt_version') or 1 }} · question-set v{{ mai.get('question_set_version') or 1 }}{% if mai.get('analysis_updated_at') %} · {{ mai.get('analysis_updated_at') }}{% endif %}</div>{% elif mai.get('available') %}<div class="panel"><p>AI response evidence is available, but model analysis has not yet been run.</p></div>{% else %}<div class="panel source-required"><p>AI response source is not available.</p></div>{% endif %}</section>
 
 <section class="report-controls"><div><strong>Explore detailed checks</strong><span>Search, filter, show or hide the detailed HTML evidence.</span></div><input id="report-check-search" type="search" placeholder="Search checks, pages or evidence"><select id="report-status-filter"><option value="">All statuses</option><option value="FAIL">Fail</option><option value="PARTIAL">Partial</option><option value="UNKNOWN">Unknown</option><option value="MANUAL_REVIEW">Manual review</option><option value="PASS">Pass</option></select><select id="report-family-filter"><option value="">All sections</option>{% for f in report.families %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}</select><label><input id="report-show-pass" type="checkbox" checked> Show passes</label></section>
 
@@ -419,7 +421,16 @@
   {% endif %}
 </section>
 {% endfor %}
-\n<script>\n(() => {\n  const families=[...document.querySelectorAll('.report-family')];\n  families.forEach(section=>{const b=section.querySelector(':scope > .family-collapse-toggle');if(!b)return;b.addEventListener('click',()=>{const c=section.classList.toggle('family-collapsed');b.setAttribute('aria-expanded',c?'false':'true');b.textContent=c?'Expand section':'Collapse section';});});\n  const q=document.getElementById('report-check-search'),s=document.getElementById('report-status-filter'),f=document.getElementById('report-family-filter'),p=document.getElementById('report-show-pass');\n  function applyReportFilters(){const text=(q?.value||'').trim().toLowerCase(),st=s?.value||'',fam=f?.value||'',show=p?.checked??true;families.forEach(sec=>{const ok=!fam||sec.dataset.family===fam;sec.hidden=!ok;if(!ok)return;sec.querySelectorAll('tbody tr').forEach(row=>{if(row.classList.contains('check-detail-row'))return;const t=row.textContent||'',u=t.toUpperCase();row.hidden=!((!text||t.toLowerCase().includes(text))&&(!st||u.includes(st))&&(show||!u.includes('PASS')));});});}\n  [q,s,f,p].forEach(el=>el&&el.addEventListener(el.type==='search'?'input':'change',applyReportFilters));\n})();\n</script>\n
+\n<script>
+(() => {
+  const families=[...document.querySelectorAll('.report-family')];
+  families.forEach(section=>{const b=section.querySelector(':scope > .family-collapse-toggle');if(!b)return;b.addEventListener('click',()=>{const c=section.classList.toggle('family-collapsed');b.setAttribute('aria-expanded',c?'false':'true');b.textContent=c?'Expand section':'Collapse section';});});
+  const q=document.getElementById('report-check-search'),s=document.getElementById('report-status-filter'),f=document.getElementById('report-family-filter'),p=document.getElementById('report-show-pass');
+  function applyReportFilters(){const text=(q?.value||'').trim().toLowerCase(),st=s?.value||'',fam=f?.value||'',show=p?.checked??true;families.forEach(sec=>{const ok=!fam||sec.dataset.family===fam;sec.hidden=!ok;if(!ok)return;sec.querySelectorAll('tbody tr').forEach(row=>{if(row.classList.contains('check-detail-row'))return;const t=row.textContent||'',u=t.toUpperCase();row.hidden=!((!text||t.toLowerCase().includes(text))&&(!st||u.includes(st))&&(show||!u.includes('PASS')));});});}
+  [q,s,f,p].forEach(el=>el&&el.addEventListener(el.type==='search'?'input':'change',applyReportFilters));
+})();
+</script>
+
 
 {% if report.manual_ai.available %}
 <script>

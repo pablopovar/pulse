@@ -28,6 +28,7 @@ reports/*
 !reports/.gitkeep
 
 # Backups
+backups/
 *.bak
 *.bak-*
 *.backup

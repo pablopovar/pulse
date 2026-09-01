@@ -4,9 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{% block title %}SEO / GEO / AEO Dashboard{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  {% set public_report_view = request.endpoint == 'public_report' %}
+  {% set asset_endpoint = 'public_report_static' if public_report_view else 'static' %}
+  <link rel="stylesheet" href="{{ url_for(asset_endpoint, filename='app.css') }}">
 </head>
-<body>
+<body class="{% if public_report_view %}public-report-view{% endif %}">
+{% if not public_report_view %}
 <header class="topbar">
   <div class="brand">SEO / GEO / AEO</div>
   {% if sites %}
@@ -32,16 +35,18 @@
   <a class="{% if request.endpoint == 'domain_new' %}active{% endif %}" href="{{ url_for('domain_new') }}">+ Domain</a>
 </nav>
 {% endif %}
+{% endif %}
 
-<main class="shell">
+<main class="shell{% if public_report_view %} public-report-shell{% endif %}">
 
 
 {% block content %}{% endblock %}
 </main>
-  <script src="{{ url_for('static', filename='sortable.js') }}"></script>
-  <script src="{{ url_for('static', filename='collapsible-notes.js') }}"></script>
-  <script src="{{ url_for('static', filename='taxonomy.js') }}"></script>
-  <script src="{{ url_for('static', filename='nav-keyword-links.js') }}"></script>
-  <script src="{{ url_for('static', filename='page-geo-aeo.js') }}"></script>
+  <script src="{{ url_for(asset_endpoint, filename='sortable.js') }}"></script>
+  <script src="{{ url_for(asset_endpoint, filename='collapsible-notes.js') }}"></script>
+  <script src="{{ url_for(asset_endpoint, filename='taxonomy.js') }}"></script>
+  <script src="{{ url_for(asset_endpoint, filename='nav-keyword-links.js') }}"></script>
+  <script src="{{ url_for(asset_endpoint, filename='page-geo-aeo.js') }}"></script>
+  <script src="{{ url_for(asset_endpoint, filename='analysis-markdown.js') }}"></script>
 </body>
 </html>

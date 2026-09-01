@@ -14,10 +14,10 @@
 <ul class="reports large">
 {% for r in report_sessions %}
   <li>
-    <a href="{{ url_for('report_session_view', domain=site.domain, report_id=r.id) }}">
+    <a href="https://visible-to-ai.povarchik.com/reports/{{ r.id }}" target="_blank" rel="noopener">
       {{ site.domain }} | {{ r.created_at }} | <code>{{ r.id }}</code>
     </a>
-    <a class="button small" href="{{ url_for('report_session_view', domain=site.domain, report_id=r.id) }}">Open</a>
+    <a class="button small" href="https://visible-to-ai.povarchik.com/reports/{{ r.id }}" target="_blank" rel="noopener">Open</a>
   </li>
 {% endfor %}
 </ul>

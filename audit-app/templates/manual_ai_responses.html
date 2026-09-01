@@ -1,18 +1,297 @@
-{% extends "base.html" %}{% block title %}{{ site.domain }} · Manual AI Responses{% endblock %}{% block content %}
-<div class="heading"><div><h1>Manual AI Responses</h1><p>{{ site.domain }} · question-set v{{ state.question_set_version or 1 }}</p></div><a class="button" href="{{ url_for('domain_sources', domain=site.domain) }}">Back to Sources</a></div>
+{% extends "base.html" %}
+{% block title %}{{ site.domain }} · Manual AI Responses{% endblock %}
+{% block content %}
+<div class="heading">
+  <div>
+    <h1>Manual AI Responses</h1>
+    <p>{{ site.domain }} · question-set v{{ state.question_set_version or 1 }}</p>
+  </div>
+  <a class="button" href="{{ url_for('domain_sources', domain=site.domain) }}">Back to Sources</a>
+</div>
+
 {% if message %}<div class="notice">{{ message }}</div>{% endif %}
+
 <form method="post" enctype="multipart/form-data" class="manual-ai-form">
-{% set phases=[('phase1','Phase 1 — Blind / Discovery','The audited brand, person, and domain are not named.'),('phase2','Phase 2 — Named / Brand Interpretation','The brand is named. The comparison set remains human-controlled.')] %}
-{% set states=[('state1','State 1 — Model Prior / No Tools','Answer from the provider’s existing model state. No tools, browsing, retrieval, or live search.'),('state2','State 2 — Web Grounded / Retrieval Enabled','Run the same phase with the provider’s available web/search/retrieval tools.')] %}
+{% set phases=[
+  ('phase1','Phase 1 — Blind / Discovery','The audited brand, person, and domain are not named.'),
+  ('phase2','Phase 2 — Named / Brand Interpretation','The brand is named. The comparison set remains human-controlled.')
+] %}
+{% set states=[
+  ('state1','State 1 — Model Prior / No Tools','Answer from the provider’s existing model state. No tools, browsing, retrieval, or live search.'),
+  ('state2','State 2 — Web Grounded / Retrieval Enabled','Run the same phase with the provider’s available web/search/retrieval tools.')
+] %}
+
 {% for phase,phase_title,phase_desc in phases %}
-<section class="panel manual-ai-phase"><h2>{{ phase_title }}</h2><p>{{ phase_desc }}</p><div class="manual-ai-state-grid">
-{% for state_key,state_title,state_desc in states %}{% set prefix=phase ~ '_' ~ state_key %}
-<section class="manual-ai-state"><div class="section-head"><div><h3>{{ state_title }}</h3><p>{{ state_desc }}</p></div><button type="button" class="copy-prompt" data-target="{{ prefix }}-prompt">Copy Prompt</button></div>
-<textarea id="{{ prefix }}-prompt" name="{{ prefix }}_prompt_text" class="manual-ai-prompt" rows="18">{{ state.get(prefix ~ '_prompt_text','') }}</textarea>
-<div class="manual-ai-results">{% for provider,label in [('chatgpt','ChatGPT'),('claude','Claude'),('gemini','Gemini')] %}<section class="manual-ai-provider"><h4>{{ label }}</h4><textarea name="{{ prefix }}_{{ provider }}_response" rows="13" placeholder="Paste the complete {{ label }} response for {{ state_title }}">{{ state.get(prefix ~ '_' ~ provider ~ '_response','') }}</textarea><label class="manual-ai-upload">Or upload response <input type="file" name="{{ prefix }}_{{ provider }}_upload" accept=".txt,.md,.json,text/plain,text/markdown,application/json"></label></section>{% endfor %}</div></section>
-{% endfor %}</div></section>
+<section class="panel manual-ai-phase">
+  <h2>{{ phase_title }}</h2>
+  <p>{{ phase_desc }}</p>
+  <div class="manual-ai-state-grid">
+  {% for state_key,state_title,state_desc in states %}
+    {% set prefix=phase ~ '_' ~ state_key %}
+    <section class="manual-ai-state">
+      <div class="section-head">
+        <div><h3>{{ state_title }}</h3><p>{{ state_desc }}</p></div>
+        <button type="button" class="copy-prompt" data-target="{{ prefix }}-prompt">Copy Prompt</button>
+      </div>
+      <textarea id="{{ prefix }}-prompt" name="{{ prefix }}_prompt_text" class="manual-ai-prompt" rows="18">{{ state.get(prefix ~ '_prompt_text','') }}</textarea>
+
+      <div class="manual-ai-results">
+      {% for provider,label in [('chatgpt','ChatGPT'),('claude','Claude'),('gemini','Gemini')] %}
+        {% set field_id=prefix ~ '-' ~ provider ~ '-response' %}
+        <section class="manual-ai-provider">
+          <h4>{{ label }}</h4>
+          <textarea
+            id="{{ field_id }}"
+            class="manual-ai-raw-response"
+            name="{{ prefix }}_{{ provider }}_response"
+            rows="13"
+            wrap="off"
+            spellcheck="false"
+            placeholder="Paste the complete {{ label }} response for {{ state_title }}"
+          >{{ state.get(prefix ~ '_' ~ provider ~ '_response','') }}</textarea>
+          <label class="manual-ai-upload">
+            Or upload response
+            <input type="file" name="{{ prefix }}_{{ provider }}_upload" accept=".txt,.md,.json,text/plain,text/markdown,application/json">
+          </label>
+          <details class="manual-ai-parsed-preview" data-source="{{ field_id }}">
+            <summary>Parsed JSON preview</summary>
+            <div class="manual-ai-parse-status"></div>
+            <pre></pre>
+          </details>
+        </section>
+      {% endfor %}
+      </div>
+    </section>
+  {% endfor %}
+  </div>
+</section>
 {% endfor %}
-<div class="manual-ai-save"><button type="submit" class="primary">Save Questions & Responses</button>{% if state.updated_at %}<span class="manual-ai-updated">Last saved {{ state.updated_at }}</span>{% endif %}</div></form>
-<section class="panel manual-ai-analysis-panel"><div class="section-head"><div><h2>AI Response Analysis</h2><p>One model and one system prompt analyzing all four evidence states.</p></div></div><form method="post" action="{{ url_for('manual_ai_source_analyze', domain=site.domain) }}"><label>Model<input type="text" name="analysis_model" value="{{ state.analysis_model or '' }}" placeholder="e.g. qwen3.5:latest"></label><label>System prompt<textarea name="analysis_system_prompt" rows="14">{{ state.analysis_system_prompt }}</textarea></label><button type="submit" class="primary">Run Analysis</button></form>{% if state.analysis_status == 'success' and state.analysis_text %}<div class="manual-ai-analysis-output"><h3>Latest analysis</h3><div class="analysis-text">{{ state.analysis_text }}</div></div>{% elif state.analysis_status == 'error' %}<div class="notice"><strong>Analysis error</strong><p>{{ state.analysis_error }}</p></div>{% endif %}</section>
-<script>(()=>{document.querySelectorAll('.copy-prompt').forEach(b=>b.addEventListener('click',async()=>{const t=document.getElementById(b.dataset.target);if(!t)return;try{await navigator.clipboard.writeText(t.value);const x=b.textContent;b.textContent='Copied';setTimeout(()=>b.textContent=x,1200)}catch(_){t.focus();t.select();document.execCommand('copy')}}))})();</script>
+
+<div class="manual-ai-save">
+  <button type="submit" class="primary">Save Questions & Responses</button>
+  {% if state.updated_at %}<span class="manual-ai-updated">Last saved {{ state.updated_at }}</span>{% endif %}
+</div>
+</form>
+
+<section class="panel manual-ai-analysis-panel">
+  <div class="section-head">
+    <div>
+      <h2>AI Response Analysis</h2>
+      <p>One controlled analysis model comparing all four evidence states.</p>
+    </div>
+  </div>
+
+  <form method="post" action="{{ url_for('manual_ai_source_analyze', domain=site.domain) }}" id="manual-ai-analysis-form">
+    <div class="manual-ai-analysis-grid">
+      <label>
+        Provider
+        <select id="analysis-provider" name="analysis_provider">
+          {% set ap = state.analysis_provider or 'ollama' %}
+          <option value="ollama" {% if ap == 'ollama' %}selected{% endif %}>Ollama</option>
+          <option value="openai" {% if ap == 'openai' %}selected{% endif %}>OpenAI API</option>
+        </select>
+      </label>
+
+      <label>
+        Model
+        <select id="analysis-model-select" data-current="{{ state.analysis_model or '' }}">
+          {% if state.analysis_model %}
+          <option value="{{ state.analysis_model }}" selected>{{ state.analysis_model }}</option>
+          {% else %}
+          <option value="">Loading available models…</option>
+          {% endif %}
+        </select>
+        <input type="text" id="analysis-model-manual" value="{{ state.analysis_model or '' }}" placeholder="Manual model name" autocomplete="off">
+        <input type="hidden" id="analysis-model" name="analysis_model" value="{{ state.analysis_model or '' }}">
+        <small id="analysis-model-status">Choose an available model, or enter one manually.</small>
+      </label>
+
+      <label>
+        Reasoning effort
+        {% set effort = state.analysis_reasoning_effort or 'high' %}
+        <select name="analysis_reasoning_effort">
+          <option value="high" {% if effort == 'high' %}selected{% endif %}>high</option>
+          <option value="medium" {% if effort == 'medium' %}selected{% endif %}>medium</option>
+          <option value="low" {% if effort == 'low' %}selected{% endif %}>low</option>
+          <option value="none" {% if effort == 'none' %}selected{% endif %}>not sent</option>
+        </select>
+      </label>
+
+      <label>
+        Temperature
+        <input type="number" name="analysis_temperature" value="{{ state.analysis_temperature if state.analysis_temperature is not none else 0.1 }}" min="0" max="2" step="0.01">
+      </label>
+
+      <label>
+        Top-P
+        <input type="number" name="analysis_top_p" value="{{ state.analysis_top_p if state.analysis_top_p is not none else 0.9 }}" min="0" max="1" step="0.01">
+      </label>
+
+      <label>
+        Max output tokens
+        <input type="number" name="analysis_max_output_tokens" value="{{ state.analysis_max_output_tokens or 8000 }}" min="256" max="128000" step="1">
+      </label>
+
+      <label>
+        System-prompt version
+        <input type="number" name="analysis_system_prompt_version" value="{{ state.analysis_system_prompt_version or 3 }}" min="1" step="1">
+      </label>
+
+      <label>
+        Question-set version
+        <input type="text" value="{{ state.question_set_version or 1 }}" readonly>
+        <small>Derived from the evidence packet. Change the questions above to create a new question-set version.</small>
+      </label>
+    </div>
+
+    <label class="manual-ai-system-prompt-label">
+      System prompt
+      <textarea name="analysis_system_prompt" rows="24">{{ state.analysis_system_prompt }}</textarea>
+    </label>
+
+    <button type="submit" class="primary">Run Analysis</button>
+  </form>
+
+  {% if state.analysis_status == 'success' and state.analysis_text %}
+  <div class="manual-ai-analysis-output">
+    <h3>Latest analysis</h3>
+    <div class="analysis-provenance">
+      {{ state.analysis_provider or 'ollama' }} · {{ state.analysis_model or '—' }}
+      · reasoning {{ state.analysis_reasoning_effort or '—' }}
+      · temperature {{ state.analysis_temperature if state.analysis_temperature is not none else '—' }}
+      · top-p {{ state.analysis_top_p if state.analysis_top_p is not none else '—' }}
+      · max {{ state.analysis_max_output_tokens or '—' }}
+      · prompt v{{ state.analysis_system_prompt_version or 1 }}
+      · question-set v{{ state.question_set_version or 1 }}
+    </div>
+    <div class="analysis-text analysis-markdown" data-analysis-markdown>{{ state.analysis_text }}</div>
+  </div>
+  {% elif state.analysis_status == 'error' %}
+  <div class="notice"><strong>Analysis error</strong><p>{{ state.analysis_error }}</p></div>
+  {% endif %}
+</section>
+
+<script>
+(() => {
+  document.querySelectorAll('.copy-prompt').forEach(b => b.addEventListener('click', async () => {
+    const t = document.getElementById(b.dataset.target);
+    if (!t) return;
+    try {
+      await navigator.clipboard.writeText(t.value);
+      const x = b.textContent;
+      b.textContent = 'Copied';
+      setTimeout(() => b.textContent = x, 1200);
+    } catch (_) {
+      t.focus();
+      t.select();
+      document.execCommand('copy');
+    }
+  }));
+
+  const stripOneJsonFence = (raw) => {
+    const s = raw.trim();
+    const m = s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    return m ? m[1] : s;
+  };
+
+  const refreshPreview = (details) => {
+    const textarea = document.getElementById(details.dataset.source);
+    const status = details.querySelector('.manual-ai-parse-status');
+    const pre = details.querySelector('pre');
+    if (!textarea || !status || !pre) return;
+    const raw = textarea.value;
+    if (!raw.trim()) {
+      status.textContent = 'No response stored.';
+      status.className = 'manual-ai-parse-status';
+      pre.textContent = '';
+      return;
+    }
+    try {
+      const value = JSON.parse(stripOneJsonFence(raw));
+      if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error('Top level must be a JSON object.');
+      status.textContent = 'Valid JSON. Raw evidence above is preserved unchanged.';
+      status.className = 'manual-ai-parse-status parse-ok';
+      pre.textContent = JSON.stringify(value, null, 2);
+    } catch (err) {
+      status.textContent = 'Parse error: ' + err.message;
+      status.className = 'manual-ai-parse-status parse-error';
+      pre.textContent = '';
+    }
+  };
+
+  document.querySelectorAll('.manual-ai-parsed-preview').forEach(details => {
+    const textarea = document.getElementById(details.dataset.source);
+    details.addEventListener('toggle', () => {
+      if (details.open) refreshPreview(details);
+    });
+    if (textarea) textarea.addEventListener('input', () => {
+      if (details.open) refreshPreview(details);
+    });
+  });
+
+  const provider = document.getElementById('analysis-provider');
+  const select = document.getElementById('analysis-model-select');
+  const manual = document.getElementById('analysis-model-manual');
+  const hidden = document.getElementById('analysis-model');
+  const status = document.getElementById('analysis-model-status');
+  const modelsUrl = "{{ url_for('manual_ai_analysis_models', domain=site.domain) }}";
+
+  const syncModel = (preferManual=false) => {
+    const value = preferManual ? manual.value.trim() : (select.value || manual.value.trim());
+    hidden.value = value;
+    if (!preferManual && select.value) manual.value = select.value;
+  };
+
+  select.addEventListener('change', () => syncModel(false));
+  manual.addEventListener('input', () => syncModel(true));
+
+  async function loadModels() {
+    const current = hidden.value.trim();
+    status.textContent = 'Loading available models…';
+    select.disabled = true;
+    try {
+      const res = await fetch(modelsUrl + '?provider=' + encodeURIComponent(provider.value), {headers:{'Accept':'application/json'}});
+      const data = await res.json();
+      const models = Array.isArray(data.models) ? data.models : [];
+      select.innerHTML = '';
+      if (models.length) {
+        models.forEach(model => {
+          const o = document.createElement('option');
+          o.value = model;
+          o.textContent = model;
+          if (model === current) o.selected = true;
+          select.appendChild(o);
+        });
+        if (current && !models.includes(current)) {
+          const o = document.createElement('option');
+          o.value = current;
+          o.textContent = current + ' (saved/manual)';
+          o.selected = true;
+          select.insertBefore(o, select.firstChild);
+        }
+        status.textContent = data.error ? data.error : models.length + ' model(s) available.';
+        select.disabled = false;
+        syncModel(false);
+      } else {
+        const o = document.createElement('option');
+        o.value = '';
+        o.textContent = 'No models returned';
+        select.appendChild(o);
+        status.textContent = data.error || 'No models were returned. Enter a model manually.';
+        select.disabled = false;
+        syncModel(true);
+      }
+    } catch (err) {
+      select.innerHTML = '<option value="">Model discovery failed</option>';
+      select.disabled = false;
+      status.textContent = 'Model discovery failed: ' + err.message + '. Enter a model manually.';
+      syncModel(true);
+    }
+  }
+
+  provider.addEventListener('change', loadModels);
+  document.getElementById('manual-ai-analysis-form').addEventListener('submit', () => syncModel(!select.value));
+  loadModels();
+})();
+</script>
 {% endblock %}

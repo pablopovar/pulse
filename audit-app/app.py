@@ -29,7 +29,7 @@ from audits.geo_aeo.service import run_audit as run_geo_aeo_audit
 from reports.full_pdf import collect_report_data, build_full_report_pdf
 from reports.web_report import create_report_session, load_report_session, list_report_sessions, prepare_report_view
 from reports.cross_model import QUESTION_DEFS, QUESTION_TEMPLATES, QUESTION_TO_FAMILY, PROVIDER_STATUSES, controlled_domains, save_controlled_domains, upsert_response, run_comparison, load_question, report_rollups
-from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, run_analysis as run_manual_ai_analysis
+from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, list_models as list_manual_ai_analysis_models, run_analysis as run_manual_ai_analysis
 
 app = Flask(__name__)
 
@@ -343,6 +343,10 @@ def ensure_manual_ai_source_schema(con):
         "phase1_chatgpt_response":"TEXT NOT NULL DEFAULT ''","phase1_claude_response":"TEXT NOT NULL DEFAULT ''","phase1_gemini_response":"TEXT NOT NULL DEFAULT ''",
         "phase2_chatgpt_response":"TEXT NOT NULL DEFAULT ''","phase2_claude_response":"TEXT NOT NULL DEFAULT ''","phase2_gemini_response":"TEXT NOT NULL DEFAULT ''",
         "question_set_version":"INTEGER NOT NULL DEFAULT 1","analysis_model":"TEXT NOT NULL DEFAULT ''","analysis_system_prompt":"TEXT NOT NULL DEFAULT ''",
+        "analysis_provider":"TEXT NOT NULL DEFAULT 'ollama'","analysis_reasoning_effort":"TEXT NOT NULL DEFAULT 'high'",
+        "analysis_temperature":"REAL NOT NULL DEFAULT 0.1","analysis_top_p":"REAL NOT NULL DEFAULT 0.9",
+        "analysis_max_output_tokens":"INTEGER NOT NULL DEFAULT 8000","analysis_system_prompt_version":"INTEGER NOT NULL DEFAULT 3",
+        "analysis_parameters_json":"TEXT NOT NULL DEFAULT '{}'",
         "analysis_text":"TEXT NOT NULL DEFAULT ''","analysis_status":"TEXT NOT NULL DEFAULT 'not_run'","analysis_error":"TEXT NOT NULL DEFAULT ''","analysis_updated_at":"TEXT NOT NULL DEFAULT ''"}
     for name,ddl in additions.items():
         if name not in columns: con.execute(f"ALTER TABLE manual_ai_source ADD COLUMN {name} {ddl}")
@@ -392,6 +396,12 @@ def load_manual_ai_source(domain):
                 out[f"{prefix}_{provider}_response"]=row.get(f"{provider}_response") or ""
     if not str(out.get("analysis_system_prompt") or "").strip(): out["analysis_system_prompt"]=DEFAULT_ANALYSIS_SYSTEM_PROMPT
     if not str(out.get("analysis_model") or "").strip(): out["analysis_model"]=(os.environ.get("MANUAL_AI_ANALYSIS_MODEL") or os.environ.get("COMPARISON_JUDGE_MODEL") or "")
+    if not str(out.get("analysis_provider") or "").strip(): out["analysis_provider"]=(os.environ.get("MANUAL_AI_ANALYSIS_PROVIDER") or "ollama").strip().lower()
+    if not str(out.get("analysis_reasoning_effort") or "").strip(): out["analysis_reasoning_effort"]="high"
+    if out.get("analysis_temperature") is None: out["analysis_temperature"]=0.1
+    if out.get("analysis_top_p") is None: out["analysis_top_p"]=0.9
+    if not out.get("analysis_max_output_tokens"): out["analysis_max_output_tokens"]=8000
+    if not out.get("analysis_system_prompt_version"): out["analysis_system_prompt_version"]=3
     return out
 
 
@@ -406,17 +416,18 @@ def _manual_ai_upload_text(field_name):
 def _parse_manual_provider_payload(raw):
     raw=str(raw or "").strip()
     if not raw: return None,""
-    cleaned=raw; candidates=[cleaned]
-    if cleaned.startswith("```"):
-        fenced=re.sub(r"^```(?:json)?\\s*","",cleaned,flags=re.I); fenced=re.sub(r"\\s*```$","",fenced); candidates.append(fenced)
-    a=cleaned.find("{"); b=cleaned.rfind("}")
-    if a>=0 and b>a: candidates.append(cleaned[a:b+1])
+    candidates=[raw]
+    if raw.startswith("```"):
+        match=re.match(r"^```(?:json)?\s*([\s\S]*?)\s*```$",raw,flags=re.I)
+        if match: candidates.append(match.group(1))
     error=""
     for candidate in candidates:
         try:
             value=json.loads(candidate)
             if isinstance(value,dict): return value,""
-        except Exception as exc: error=str(exc)
+            error="Top-level JSON value must be an object."
+        except Exception as exc:
+            error=str(exc)
     return None,error
 
 
@@ -1511,13 +1522,100 @@ def manual_ai_source(domain):
     return render_template("manual_ai_responses.html",sites=get_sites(),site=site,state=load_manual_ai_source(domain),message=message)
 
 
+@app.get("/d/<domain>/sources/manual-ai/models")
+def manual_ai_analysis_models(domain):
+    get_site(domain)
+    provider=request.args.get("provider","ollama").strip().lower()
+    if provider not in {"ollama","openai"}:
+        return {"provider":provider,"models":[],"error":"Unsupported provider."},400
+    result=list_manual_ai_analysis_models(provider)
+    return {"provider":provider,**result}
+
+
 @app.post("/d/<domain>/sources/manual-ai/analyze")
 def manual_ai_source_analyze(domain):
-    get_site(domain); source=load_manual_ai_source(domain); model=request.form.get("analysis_model","").strip(); system_prompt=request.form.get("analysis_system_prompt","").strip(); now=datetime.now(timezone.utc).isoformat(timespec="seconds")
-    try: analysis=run_manual_ai_analysis(source,model,system_prompt); status="success"; error=""
-    except Exception as exc: analysis=source.get("analysis_text") or ""; status="error"; error=str(exc)
+    get_site(domain)
+    source=load_manual_ai_source(domain)
+    provider=request.form.get("analysis_provider","ollama").strip().lower()
+    model=request.form.get("analysis_model","").strip()
+    system_prompt=request.form.get("analysis_system_prompt","").strip()
+    effort=request.form.get("analysis_reasoning_effort","high").strip().lower()
+    now=datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    if provider not in {"ollama","openai"}: provider="ollama"
+    if effort not in {"low","medium","high","none"}: effort="high"
+
+    try:
+        temperature=float(request.form.get("analysis_temperature","0.1"))
+    except (TypeError,ValueError):
+        temperature=0.1
+    temperature=max(0.0,min(2.0,temperature))
+
+    try:
+        top_p=float(request.form.get("analysis_top_p","0.9"))
+    except (TypeError,ValueError):
+        top_p=0.9
+    top_p=max(0.0,min(1.0,top_p))
+
+    try:
+        max_tokens=int(request.form.get("analysis_max_output_tokens","8000"))
+    except (TypeError,ValueError):
+        max_tokens=8000
+    max_tokens=max(256,min(128000,max_tokens))
+
+    try:
+        prompt_version=int(request.form.get("analysis_system_prompt_version","3"))
+    except (TypeError,ValueError):
+        prompt_version=3
+    prompt_version=max(1,prompt_version)
+
+    parameters={
+        "provider":provider,
+        "model":model,
+        "reasoning_effort":effort,
+        "temperature":temperature,
+        "top_p":top_p,
+        "max_output_tokens":max_tokens,
+        "system_prompt_version":prompt_version,
+        "question_set_version":int(source.get("question_set_version") or 1),
+    }
+
+    try:
+        analysis=run_manual_ai_analysis(
+            source,
+            model,
+            system_prompt,
+            provider=provider,
+            reasoning_effort=effort,
+            temperature=temperature,
+            top_p=top_p,
+            max_output_tokens=max_tokens,
+        )
+        status="success"
+        error=""
+    except Exception as exc:
+        analysis=source.get("analysis_text") or ""
+        status="error"
+        error=str(exc)
+
     with research_db() as con:
-        ensure_manual_ai_source_schema(con); con.execute("UPDATE manual_ai_source SET analysis_model=?,analysis_system_prompt=?,analysis_text=?,analysis_status=?,analysis_error=?,analysis_updated_at=?,updated_at=? WHERE domain=? COLLATE NOCASE",(model,system_prompt,analysis,status,error,now,now,domain)); con.commit()
+        ensure_manual_ai_source_schema(con)
+        con.execute(
+            """UPDATE manual_ai_source SET
+               analysis_provider=?,analysis_model=?,analysis_reasoning_effort=?,
+               analysis_temperature=?,analysis_top_p=?,analysis_max_output_tokens=?,
+               analysis_system_prompt_version=?,analysis_parameters_json=?,
+               analysis_system_prompt=?,analysis_text=?,analysis_status=?,analysis_error=?,
+               analysis_updated_at=?,updated_at=?
+               WHERE domain=? COLLATE NOCASE""",
+            (
+                provider,model,effort,temperature,top_p,max_tokens,prompt_version,
+                json.dumps(parameters,separators=(",",":")),
+                system_prompt,analysis,status,error,now,now,domain
+            ),
+        )
+        con.commit()
+
     msg="AI response analysis completed." if status=="success" else f"Analysis failed: {error}"
     return redirect(url_for("manual_ai_source",domain=domain,message=msg))
 
@@ -2464,6 +2562,23 @@ def generate_full_web_report(domain):
     report_data["manual_ai_source"]=manual_ai_source_for_report(domain)
     report_id=create_report_session(RESEARCH_DB,domain,report_data)
     return redirect(url_for("report_session_view",domain=domain,report_id=report_id))
+
+
+@app.get("/reports/_static/<path:filename>")
+def public_report_static(filename):
+    return send_from_directory(APP_DIR / "static", filename)
+
+
+@app.get("/reports/<report_id>")
+def public_report(report_id):
+    with research_db() as con:
+        row = con.execute(
+            "SELECT domain FROM report_session WHERE id=? LIMIT 1",
+            (report_id,),
+        ).fetchone()
+    if not row:
+        abort(404)
+    return report_session_view(row["domain"], report_id)
 
 
 @app.get("/d/<domain>/reports/<report_id>")
