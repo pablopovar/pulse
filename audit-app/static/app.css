@@ -244,45 +244,11 @@ html{scroll-behavior:smooth}
 
 /* Pages and Keywords are internal tools, not top-level report workflow navigation. */
 
-
-/* Domain family questions + manual ChatGPT / Claude / Gemini responses */
-.settings-family-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
-.settings-family-card{margin:0}.settings-family-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:12px}
-.settings-family-head h2{margin:0 0 4px}.settings-family-head p{margin:0;color:var(--muted);font-size:12px}
-.settings-family-head>span{white-space:nowrap;font-size:11px;color:var(--muted)}
-.settings-question{display:block;margin-top:10px}.settings-question>span{display:block;font-size:12px;font-weight:700;margin-bottom:5px}
-.settings-question textarea{width:100%;resize:vertical}
-.manual-ai-family-block{margin:18px 0 28px;padding:16px;border:1px solid var(--line);border-radius:9px;background:#fff}
-.manual-ai-family-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:14px}
-.manual-ai-family-head h3{margin:0 0 4px}.manual-ai-family-head p{margin:0;color:var(--muted)}
-.manual-ai-question{border-top:1px solid var(--line);padding:16px 0}.manual-ai-question:first-of-type{border-top:0;padding-top:0}
-.manual-ai-question-title{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}.manual-ai-question-title>span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.manual-ai-question-title>strong{font-size:15px}
-.manual-ai-provider-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
-.manual-ai-provider>span{display:block;font-weight:750;font-size:12px;margin-bottom:5px}.manual-ai-provider textarea{width:100%;resize:vertical;min-height:150px}
-.manual-ai-save{display:flex;justify-content:flex-end;padding-top:6px}
-@media(max-width:1050px){.manual-ai-provider-grid{grid-template-columns:1fr}.settings-family-list{grid-template-columns:1fr}}
-
-
 /* Provider-question settings are limited to three AI-facing families. */
 .settings-family-list-three{grid-template-columns:repeat(3,minmax(0,1fr))}
 .company-setting-card{max-width:720px;margin-bottom:14px}
 .company-setting-card input[type="text"]{width:100%}
 @media(max-width:1200px){.settings-family-list-three{grid-template-columns:1fr}}
-
-
-/* V1 cross-model comparison Q=(C,S,D) */
-.controlled-domain-card{margin-bottom:14px}.controlled-domain-card textarea{width:100%;resize:vertical}
-.cross-model-overall-rollup{margin:18px 0 34px;padding:18px;border:1px solid var(--line);border-radius:9px;background:#fff}
-.cross-model-family{margin:18px 0 30px}.cross-model-family-head h3{margin-bottom:4px}.cross-model-family-head p{margin-top:0;color:var(--muted)}
-.cross-model-family-rollup{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 16px}.cross-model-family-rollup span{padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:#fff;font-size:12px}
-.cross-model-question-card{margin:14px 0;padding:16px;border:1px solid var(--line);border-radius:9px;background:#fff;scroll-margin-top:16px}.cross-model-question-title>span{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}.cross-model-question-title h4{margin:4px 0 12px;font-size:16px}
-.v1-signal-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 9px}.v1-signal-grid>div{padding:12px;border:1px solid var(--line);border-radius:7px;background:#f8fafc}.v1-signal-grid span{display:block;font-size:11px;color:var(--muted);margin-bottom:5px}.v1-signal-grid strong{font-size:20px}
-.supporting-observations{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 12px}.supporting-observations span{font-size:11px;color:#475569;background:#f1f5f9;border-radius:999px;padding:4px 8px}
-.provider-response-form>details>summary,.comparison-detail>summary{cursor:pointer;font-weight:750;padding:8px 0}.provider-evidence-card{border:1px solid var(--line);border-radius:7px;padding:10px;background:#fbfcfe}.provider-evidence-card h5{margin:0 0 8px}.provider-evidence-card label{display:block;font-size:11px;font-weight:700;margin:7px 0}.provider-evidence-card input,.provider-evidence-card select,.provider-evidence-card textarea{width:100%;margin-top:4px}.provider-evidence-card textarea{resize:vertical}.provider-metadata{margin-top:8px}.provider-metadata summary{cursor:pointer;font-size:11px;color:#315cab}
-.raw-provider-answer{white-space:pre-wrap;line-height:1.55;padding:11px;background:#f8fafc;border-radius:6px}.comparison-detail pre,.contradiction-item pre{white-space:pre-wrap;overflow:auto;background:#111827;color:#e5e7eb;padding:10px;border-radius:6px;font-size:11px}.contradiction-item{padding:10px 0;border-bottom:1px solid var(--line)}
-@media(max-width:900px){.v1-signal-grid{grid-template-columns:1fr}}
-
 
 /* V1 cross-model comparison evidence fixes */
 .comparison-unavailable{color:var(--muted);font-style:italic}

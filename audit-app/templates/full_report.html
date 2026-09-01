@@ -46,21 +46,6 @@
   </a>
   {% endfor %}
 </nav>
-{% set xr = report.cross_model_rollups or {} %}
-<section class="cross-model-overall-rollup">
-  <h2>Cross-Model Comparison Overview</h2>
-  <div class="family-snapshot">
-    <div class="snapshot-card"><span>Questions tested</span><strong>{{ xr.questions_tested or 0 }}/6</strong></div>
-    <div class="snapshot-card"><span>Providers/models tested</span><strong>{{ xr.providers_models_tested|length }}</strong></div>
-    <div class="snapshot-card"><span>Valid responses</span><strong>{{ xr.total_valid_responses or 0 }}</strong></div>
-    <div class="snapshot-card"><span>Average concept consistency</span><strong>{% if xr.average_concept_consistency is not none %}{{ '%.0f'|format(xr.average_concept_consistency * 100) }}%{% else %}—{% endif %}</strong></div>
-    <div class="snapshot-card"><span>Company-source coverage</span><strong>{{ xr.company_source_numerator or 0 }}/{{ xr.company_source_denominator or 0 }}</strong></div>
-    <div class="snapshot-card"><span>Questions with direct contradiction</span><strong>{{ xr.direct_contradiction_questions or 0 }}/6</strong></div>
-  </div>
-  <div class="supporting-observations"><span>Shared concepts: {{ xr.shared_concepts or 0 }}</span><span>Inconsistent/provider-specific concepts: {{ xr.inconsistent_concepts or 0 }}</span>{% if xr.external_domains %}<span>Most observed external domain: {{ xr.external_domains[0].domain }} · {{ xr.external_domains[0].unique_questions }} questions · {{ xr.external_domains[0].unique_providers }} providers</span>{% endif %}</div>
-</section>
-
-
 <section class="ai-source-overview">
   <div class="section-head">
     <div>
@@ -105,78 +90,6 @@
     </div>
   </header>
   <button type="button" class="family-collapse-toggle" aria-expanded="{% if family.id in report.technical_family_ids %}false{% else %}true{% endif %}">{% if family.id in report.technical_family_ids %}Expand section{% else %}Collapse section{% endif %}</button>
-
-  {% set family_questions = (report.get('family_questions') or {}).get(family.id, {}) %}
-  {% if family.id in ['ai-visibility', 'identity-authority', 'evidence-trust'] and family_questions %}
-    {% set family_rollup = (report.cross_model_rollups.families or {}).get(family.id, {}) %}
-    <section class="cross-model-family">
-      <div class="cross-model-family-head">
-        <div>
-          <h3>Cross-Model Comparison</h3>
-          <p>Derived from stored AI-response source evidence. Response collection and editing are managed under Sources, not in this report.</p>
-        </div>
-      </div>
-      {% if report.manual_ai.available %}
-      <div class="panel source-available">
-        <strong>Manual AI response source attached</strong>
-        <p>{{ report.manual_ai.provider_count }} provider responses; {{ report.manual_ai.answer_count }} question answers stored for this domain.</p>
-        <small>Last saved {{ report.manual_ai.updated_at or '—' }}</small>
-      </div>
-      {% elif not family_rollup.provider_responses %}
-      <div class="panel source-required">
-        <strong>AI response source not available</strong>
-        <p>No stored ChatGPT, Claude, or Gemini response evidence is attached to this report. Add the source evidence under Sources to enable AI-response analysis.</p>
-      </div>
-      {% endif %}
-      <div class="cross-model-family-rollup">
-        <span>Questions tested <strong>{{ family_rollup.questions_tested or 0 }}/2</strong></span>
-        <span>Provider responses <strong>{{ family_rollup.provider_responses or 0 }}</strong></span>
-        <span>Average concept consistency <strong>{% if family_rollup.average_concept_consistency is not none %}{{ '%.0f'|format(family_rollup.average_concept_consistency * 100) }}%{% else %}—{% endif %}</strong></span>
-        <span>Company-source coverage <strong>{{ family_rollup.company_source_numerator or 0 }}/{{ family_rollup.company_source_denominator or 0 }}</strong></span>
-        <span>Questions with direct contradiction <strong>{{ family_rollup.direct_contradiction_questions or 0 }}/2</strong></span>
-      </div>
-
-      {% if family_rollup.provider_responses %}
-      {% for slot in [1, 2] %}
-        {% set qdef = cross_model_question_defs.get(family.id, [])[slot-1] %}
-        {% set question_id = qdef[0] %}
-        {% set question = family_questions.get(slot) or family_questions.get(slot|string) %}
-        {% set state = (report.cross_model or {}).get(question_id, {}) %}
-        {% set comp = state.get('comparison') %}
-        {% set derived = state.get('derived') or {} %}
-        {% set saved = {} %}
-        {% for rr in state.get('responses', []) %}{% set _ = saved.update({rr.provider: rr}) %}{% endfor %}
-        <article id="{{ family.id }}-{{ question_id }}" class="cross-model-question-card">
-          <div class="cross-model-question-title"><span>{{ question_id }}</span><h4>{{ question }}</h4></div>
-          <div class="v1-signal-grid">
-            <div><span>Concept consistency</span><strong>{% if comp and comp.judge_status == 'success' and comp.concept_consistency_pct is not none %}{{ '%.0f'|format(comp.concept_consistency_pct) }}%{% else %}—{% endif %}</strong></div>
-            <div><span>Company-source coverage</span><strong>{% if comp and comp.company_source_denominator %}{{ comp.company_source_numerator }}/{{ comp.company_source_denominator }} ({{ '%.0f'|format(comp.company_source_pct) }}%){% else %}—{% endif %}</strong></div>
-            <div><span>Direct contradiction</span><strong>{% if comp and comp.judge_status == 'success' %}{{ 'Yes — ' ~ comp.direct_contradiction_count ~ ' found' if comp.direct_contradiction else 'No' }}{% else %}—{% endif %}</strong></div>
-          </div>
-          {% if comp %}<div class="supporting-observations">
-            <span>Shared concepts: {{ derived.get('shared_concepts', [])|length }}</span>
-            <span>Inconsistent concepts: {{ (derived.get('inconsistent_concepts', [])|length) + (derived.get('provider_specific_concepts', [])|length) }}</span>
-            {% set ext = derived.get('source_analysis', {}).get('external_response_count', {}) %}{% if ext %}<span>External sources observed: {{ ext|length }}</span>{% endif %}
-            {% if comp.judge_status != 'success' %}<span>Comparison status: {{ comp.judge_status }}{% if comp.judge_error %} · {{ comp.judge_error }}{% endif %}</span>{% endif %}
-          </div>{% endif %}
-
-          {% if comp %}
-            {% if comp.judge_status == 'success' %}<details class="comparison-detail"><summary>Concept comparison</summary>
-              <div class="table-wrap report-table"><table><thead><tr><th>Concept</th>{% for p in derived.valid_providers %}<th>{{ p }}</th>{% endfor %}</tr></thead><tbody>
-                {% set judge = comp.raw_judge_json|fromjson if comp.raw_judge_json else {} %}{% for concept in judge.get('concepts', []) %}<tr><td>{{ concept.concept }}</td>{% for p in derived.valid_providers %}<td>{{ 'Yes' if concept.providers.get(p, {}).get('present') else 'No' }}</td>{% endfor %}</tr>{% endfor %}
-              </tbody></table></div>
-            </details>{% endif %}
-            <details class="comparison-detail"><summary>Source comparison</summary>{% set sa = derived.get('source_analysis', {}) %}
-              <div class="table-wrap report-table"><table><thead><tr><th>Provider</th><th>Company-controlled source</th><th>Company domains</th><th>External domains</th></tr></thead><tbody>{% for p, src in sa.get('providers', {}).items() %}<tr><td>{{ p }}</td><td>{% if src.company_controlled_source_present is none %}No usable metadata{% elif src.company_controlled_source_present %}Yes{% else %}No{% endif %}</td><td>{{ src.company_controlled_domains|join(', ') or '—' }}</td><td>{{ src.external_domains|join(', ') or '—' }}</td></tr>{% endfor %}</tbody></table></div>
-            </details>
-            {% if comp.judge_status == 'success' and (derived.get('direct_contradictions') or derived.get('potential_contradictions')) %}<details class="comparison-detail"><summary>Contradictions</summary>{% for item in derived.get('direct_contradictions', []) + derived.get('potential_contradictions', []) %}<div class="contradiction-item"><strong>{{ item.classification }}</strong> · {{ item.subject }} / {{ item.property }}<pre>{{ item|tojson(indent=2) }}</pre></div>{% endfor %}</details>{% endif %}
-            {% for r in state.get('responses', []) %}<details class="comparison-detail"><summary>{{ r.provider|title }} answer & raw citations</summary><div class="raw-provider-answer">{{ r.raw_answer }}</div>{% if r.citations %}<pre>{{ r.citations|tojson(indent=2) }}</pre>{% else %}<p>No citation metadata returned/stored.</p>{% endif %}</details>{% endfor %}
-          {% endif %}
-        </article>
-      {% endfor %}
-      {% endif %}
-    </section>
-  {% endif %}
 
   {% if family.kind == 'ai' %}
   {% if report.manual_ai.available %}
@@ -421,7 +334,7 @@
   {% endif %}
 </section>
 {% endfor %}
-\n<script>
+<script>
 (() => {
   const families=[...document.querySelectorAll('.report-family')];
   families.forEach(section=>{const b=section.querySelector(':scope > .family-collapse-toggle');if(!b)return;b.addEventListener('click',()=>{const c=section.classList.toggle('family-collapsed');b.setAttribute('aria-expanded',c?'false':'true');b.textContent=c?'Expand section':'Collapse section';});});

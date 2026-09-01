@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}{{ site.domain }} · Sources{% endblock %}
+{% block title %}{{ site.domain }} · Sources & Settings{% endblock %}
 {% block content %}
 <div class="heading">
   <div>
-    <h1>Sources</h1>
-    <p>Select data sources for {{ site.domain }}. Sources expand report coverage; they are not separate report steps.</p>
+    <h1>Sources & Settings</h1>
+    <p>Configure the domain identity and evidence sources used by reports for {{ site.domain }}.</p>
   </div>
   <a class="button primary" href="{{ url_for('reports', domain=site.domain) }}">Continue to Reports</a>
 </div>
@@ -15,6 +15,19 @@
   <div class="workflow-step"><span>4</span><strong>Run reports</strong><small>One report workflow</small></div>
 </div>
 {% if message %}<div class="notice">{{ message }}</div>{% endif %}
+
+<section class="panel source-domain-settings">
+  <h2>Domain settings</h2>
+  <p>Company name is used when Manual AI prompt defaults need a named entity. The actual AI questions and responses are managed only under Manual AI Responses.</p>
+  <form method="post" action="{{ url_for('save_source_company_name', domain=site.domain) }}" class="source-domain-settings-form">
+    <label>
+      <span>Company name</span>
+      <input type="text" name="company_name" value="{{ company_name }}" required>
+    </label>
+    <button type="submit">Save Domain Settings</button>
+  </form>
+</section>
+
 <form method="post" action="{{ url_for('domain_sources', domain=site.domain) }}">
   <div class="source-grid">
     {% for source in sources %}

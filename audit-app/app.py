@@ -28,17 +28,10 @@ RESEARCH_DB = Path(os.environ.get("RESEARCH_DB", "/data/dashboard/research.db"))
 from audits.geo_aeo.service import run_audit as run_geo_aeo_audit
 from reports.full_pdf import collect_report_data, build_full_report_pdf
 from reports.web_report import create_report_session, load_report_session, list_report_sessions, prepare_report_view
-from reports.cross_model import QUESTION_DEFS, QUESTION_TEMPLATES, QUESTION_TO_FAMILY, PROVIDER_STATUSES, controlled_domains, save_controlled_domains, upsert_response, run_comparison, load_question, report_rollups
 from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, list_models as list_manual_ai_analysis_models, run_analysis as run_manual_ai_analysis
 
 app = Flask(__name__)
 
-@app.template_filter("fromjson")
-def fromjson_filter(value):
-    try:
-        return json.loads(value or "{}")
-    except Exception:
-        return {}
 
 
 
@@ -470,11 +463,6 @@ def selected_source_keys(site):
     return [s["key"] for s in domain_sources_for_site(site) if s["selected"]]
 
 
-REPORT_FAMILY_SETTINGS = [
-    {"id": "ai-visibility", "name": "AI Visibility", "departments": "IR · Communications · Corporate Affairs · Marketing"},
-    {"id": "identity-authority", "name": "Identity & Authority", "departments": "IR · Communications · Brand"},
-    {"id": "evidence-trust", "name": "Evidence & Trust", "departments": "IR · Communications · Editorial · Legal/Review"},
-]
 
 REPORT_FAMILY_DEFAULT_QUESTIONS = {
     "ai-visibility": [
@@ -491,36 +479,7 @@ REPORT_FAMILY_DEFAULT_QUESTIONS = {
     ],
 }
 
-MANUAL_AI_PROVIDERS = [
-    {"id": "chatgpt", "name": "ChatGPT"},
-    {"id": "claude", "name": "Claude"},
-    {"id": "gemini", "name": "Gemini"},
-]
 
-def ensure_report_question_schema(con):
-    con.execute(
-        "CREATE TABLE IF NOT EXISTS domain_family_question ("
-        "domain TEXT NOT NULL COLLATE NOCASE,"
-        "family_id TEXT NOT NULL,"
-        "question_slot INTEGER NOT NULL,"
-        "question_text TEXT NOT NULL DEFAULT '',"
-        "updated_at TEXT NOT NULL,"
-        "PRIMARY KEY(domain,family_id,question_slot))"
-    )
-    con.execute(
-        "CREATE TABLE IF NOT EXISTS report_manual_ai_response ("
-        "domain TEXT NOT NULL COLLATE NOCASE,"
-        "report_id TEXT NOT NULL,"
-        "family_id TEXT NOT NULL,"
-        "question_slot INTEGER NOT NULL,"
-        "provider TEXT NOT NULL,"
-        "response_text TEXT NOT NULL DEFAULT '',"
-        "updated_at TEXT NOT NULL,"
-        "PRIMARY KEY(domain,report_id,family_id,question_slot,provider))"
-    )
-    con.execute("CREATE INDEX IF NOT EXISTS idx_family_question_domain ON domain_family_question(domain,family_id,question_slot)")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_manual_ai_response_report ON report_manual_ai_response(domain,report_id,family_id,question_slot)")
-    con.commit()
 
 
 def ensure_domain_company_schema(con):
@@ -577,77 +536,12 @@ def infer_company_name(domain):
     words = [w for w in re.split(r"[-_]+", label) if w]
     return " ".join(w.capitalize() for w in words) if words else domain
 
-def default_family_questions(domain):
-    company = infer_company_name(domain)
-    return {
-        family_id: {
-            index + 1: question.replace("[Company]", company)
-            for index, question in enumerate(questions)
-        }
-        for family_id, questions in REPORT_FAMILY_DEFAULT_QUESTIONS.items()
-    }
-
-def effective_domain_family_questions(domain):
-    defaults = default_family_questions(domain)
-    saved = load_domain_family_questions(domain)
-    for family_id, slots in saved.items():
-        if family_id not in defaults:
-            continue
-        for slot, value in slots.items():
-            if slot in (1, 2) and str(value).strip():
-                defaults[family_id][slot] = value
-    return defaults
-
-def load_domain_family_questions(domain):
-    with research_db() as con:
-        ensure_report_question_schema(con)
-        rows = con.execute(
-            "SELECT family_id,question_slot,question_text "
-            "FROM domain_family_question "
-            "WHERE domain=? COLLATE NOCASE AND TRIM(question_text)<>'' "
-            "ORDER BY family_id,question_slot",
-            (domain,),
-        ).fetchall()
-    out = {}
-    for row in rows:
-        out.setdefault(row["family_id"], {})[int(row["question_slot"])] = row["question_text"]
-    return out
-
-def load_report_manual_ai_responses(domain, report_id):
-    with research_db() as con:
-        ensure_report_question_schema(con)
-        rows = con.execute(
-            "SELECT family_id,question_slot,provider,response_text "
-            "FROM report_manual_ai_response "
-            "WHERE domain=? COLLATE NOCASE AND report_id=? "
-            "ORDER BY family_id,question_slot,provider",
-            (domain, report_id),
-        ).fetchall()
-    out = {}
-    for row in rows:
-        out.setdefault(row["family_id"], {}).setdefault(int(row["question_slot"]), {})[row["provider"]] = row["response_text"]
-    return out
 
 
 
-def load_cross_model_report_state(domain, report_id, snapshot):
-    out = {}
-    family_questions = snapshot.get("family_questions") or {}
-    with research_db() as con:
-        for family_id, defs in QUESTION_DEFS.items():
-            configured = family_questions.get(family_id) or {}
-            for slot, (question_id, template_question) in enumerate(defs, start=1):
-                rendered = configured.get(slot) or configured.get(str(slot))
-                if not rendered:
-                    continue
-                state = load_question(con, domain, report_id, question_id)
-                state["question_id"] = question_id
-                state["family_id"] = family_id
-                state["slot"] = slot
-                state["template_question"] = template_question
-                state["rendered_question"] = rendered
-                out[question_id] = state
-    return out
+
+
+
 
 def research_state_from_request(source):
     return {"q":source.get("q","").strip(),"sort":source.get("sort","keyword"),"dir":source.get("dir","asc"),"per_page":source.get("per_page","50"),"page":source.get("page","1"),"show_tag":source.getlist("show_tag"),"hide_tag":source.getlist("hide_tag")}
@@ -1491,7 +1385,33 @@ def domain_sources(domain):
                 con.execute("INSERT INTO domain_source(domain,source_key,source_name,selected,connection_status,detail,updated_at) VALUES (?,?,?,1,'not_connected',?,?) ON CONFLICT(domain,source_key) DO UPDATE SET source_name=excluded.source_name,selected=1,detail=excluded.detail,updated_at=excluded.updated_at",(domain,custom_key,custom_name,custom_detail,now))
             con.commit()
         return redirect(url_for("domain_sources",domain=domain,message="Sources saved. Domain is ready to run reports."))
-    return render_template("sources.html",sites=get_sites(),site=site,sources=domain_sources_for_site(site),readiness=readiness,message=message)
+    return render_template("sources.html",sites=get_sites(),site=site,sources=domain_sources_for_site(site),readiness=readiness,message=message,company_name=infer_company_name(domain))
+
+
+
+@app.post("/d/<domain>/sources/company-name")
+def save_source_company_name(domain):
+    get_site(domain)
+    company_name = request.form.get("company_name", "").strip() or domain
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with research_db() as con:
+        ensure_domain_company_schema(con)
+        con.execute(
+            """INSERT INTO domain_company_settings(domain,company_name,updated_at)
+               VALUES (?,?,?)
+               ON CONFLICT(domain) DO UPDATE SET
+                 company_name=excluded.company_name,
+                 updated_at=excluded.updated_at""",
+            (domain, company_name, now),
+        )
+        con.commit()
+    return redirect(url_for("domain_sources", domain=domain, message="Domain settings saved."))
+
+
+@app.get("/d/<domain>/settings")
+def domain_settings(domain):
+    get_site(domain)
+    return redirect(url_for("domain_sources", domain=domain))
 
 @app.route("/d/<domain>/sources/manual-ai", methods=["GET", "POST"])
 def manual_ai_source(domain):
@@ -1627,78 +1547,7 @@ def tools(domain):
 
 
 
-@app.post("/d/<domain>/settings/company-controlled-domains")
-def save_company_controlled_domains(domain):
-    get_site(domain)
-    raw = request.form.get("company_controlled_domains", "")
-    values = [line.strip() for line in raw.splitlines() if line.strip()]
-    with research_db() as con:
-        save_controlled_domains(con, domain, values)
-    return redirect(url_for("domain_settings", domain=domain, message="Company-controlled domains saved."))
 
-@app.route("/d/<domain>/settings", methods=["GET", "POST"])
-def domain_settings(domain):
-    site = get_site(domain)
-    message = request.args.get("message", "").strip()
-
-    if request.method == "POST":
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        company_name = request.form.get("company_name", "").strip() or infer_company_name(domain)
-        valid_family_ids = {f["id"] for f in REPORT_FAMILY_SETTINGS}
-
-        with research_db() as con:
-            ensure_report_question_schema(con)
-            ensure_domain_company_schema(con)
-
-            con.execute(
-                "INSERT INTO domain_company_settings(domain,company_name,updated_at) "
-                "VALUES (?,?,?) "
-                "ON CONFLICT(domain) DO UPDATE SET "
-                "company_name=excluded.company_name,updated_at=excluded.updated_at",
-                (domain, company_name, now),
-            )
-
-            placeholders = ",".join("?" for _ in valid_family_ids)
-            con.execute(
-                f"DELETE FROM domain_family_question WHERE domain=? COLLATE NOCASE "
-                f"AND (family_id NOT IN ({placeholders}) OR question_slot NOT IN (1,2))",
-                (domain, *sorted(valid_family_ids)),
-            )
-
-            defaults = {
-                family_id: {
-                    index + 1: q.replace("[Company]", company_name)
-                    for index, q in enumerate(REPORT_FAMILY_DEFAULT_QUESTIONS[family_id])
-                }
-                for family_id in valid_family_ids
-            }
-
-            for family_id in valid_family_ids:
-                for slot in (1, 2):
-                    value = request.form.get(f"q_{family_id}_{slot}", "").strip()
-                    if not value:
-                        value = defaults[family_id][slot]
-                    con.execute(
-                        "INSERT INTO domain_family_question(domain,family_id,question_slot,question_text,updated_at) "
-                        "VALUES (?,?,?,?,?) "
-                        "ON CONFLICT(domain,family_id,question_slot) DO UPDATE SET "
-                        "question_text=excluded.question_text,updated_at=excluded.updated_at",
-                        (domain, family_id, slot, value, now),
-                    )
-            con.commit()
-
-        return redirect(url_for("domain_settings", domain=domain, message="Domain questions saved."))
-
-    return render_template(
-        "domain_settings.html",
-        sites=get_sites(),
-        site=site,
-        families=REPORT_FAMILY_SETTINGS,
-        questions=effective_domain_family_questions(domain),
-        company_name=infer_company_name(domain),
-        message=message,
-        company_controlled_domains='\n'.join(controlled_domains(research_db(), domain)[1:]),
-    )
 
 @app.route("/d/<domain>/")
 def overview(domain):
@@ -2557,7 +2406,6 @@ def generate_full_web_report(domain):
         pass
     report_data=collect_report_data(domain=domain,site_id=_site_id_value(site),seo_db=SEO_DB,research_db=RESEARCH_DB)
     report_data["selected_sources"]=selected_source_keys(site); report_data["source_inventory"]=domain_sources_for_site(site)
-    report_id=report_data["family_questions"] = effective_domain_family_questions(domain)
     report_data["manual_ai_source"] = manual_ai_source_for_report(domain)
     report_data["manual_ai_source"]=manual_ai_source_for_report(domain)
     report_id=create_report_session(RESEARCH_DB,domain,report_data)
@@ -2592,127 +2440,20 @@ def report_session_view(domain, report_id):
     live_manual_ai = manual_ai_source_for_report(domain)
     report["manual_ai_source"] = live_manual_ai
     report["manual_ai"] = live_manual_ai
-
-    report["cross_model"] = load_cross_model_report_state(domain, report_id, session["snapshot"])
-    with research_db() as con:
-        report["cross_model_rollups"] = report_rollups(con, domain, report_id)
-        report["company_controlled_domains"] = controlled_domains(con, domain)
-    report["manual_ai_responses"] = load_report_manual_ai_responses(domain, report_id)
     return render_template(
         "full_report.html",
         sites=get_sites(),
         site=site,
         report_session=session,
         report=report,
-        manual_ai_providers=MANUAL_AI_PROVIDERS,
-        cross_model_question_defs=QUESTION_DEFS,
     )
 
 
 
-@app.post("/d/<domain>/reports/<report_id>/family/<family_id>/manual-ai-responses")
-def save_report_manual_ai_responses(domain, report_id, family_id):
-    get_site(domain)
-    session = load_report_session(RESEARCH_DB, domain, report_id)
-    if not session:
-        abort(404)
-
-    valid_family_ids = {f["id"] for f in REPORT_FAMILY_SETTINGS}
-    if family_id not in valid_family_ids:
-        abort(404)
-
-    snapshot_questions = session["snapshot"].get("family_questions") or {}
-    family_questions = snapshot_questions.get(family_id) or {}
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-    with research_db() as con:
-        ensure_report_question_schema(con)
-        for slot_key, question_text in family_questions.items():
-            try:
-                slot = int(slot_key)
-            except (TypeError, ValueError):
-                continue
-            if slot not in (1, 2, 3) or not str(question_text).strip():
-                continue
-
-            for provider in MANUAL_AI_PROVIDERS:
-                provider_id = provider["id"]
-                value = request.form.get(f"response_{slot}_{provider_id}", "").strip()
-                if value:
-                    con.execute(
-                        "INSERT INTO report_manual_ai_response("
-                        "domain,report_id,family_id,question_slot,provider,response_text,updated_at"
-                        ") VALUES (?,?,?,?,?,?,?) "
-                        "ON CONFLICT(domain,report_id,family_id,question_slot,provider) DO UPDATE SET "
-                        "response_text=excluded.response_text,updated_at=excluded.updated_at",
-                        (domain, report_id, family_id, slot, provider_id, value, now),
-                    )
-                else:
-                    con.execute(
-                        "DELETE FROM report_manual_ai_response "
-                        "WHERE domain=? COLLATE NOCASE AND report_id=? AND family_id=? "
-                        "AND question_slot=? AND provider=?",
-                        (domain, report_id, family_id, slot, provider_id),
-                    )
-        con.commit()
-
-    return redirect(url_for("report_session_view", domain=domain, report_id=report_id) + f"#{family_id}")
 
 
 
-@app.post("/d/<domain>/reports/<report_id>/cross-model/<question_id>")
-def save_cross_model_question(domain, report_id, question_id):
-    get_site(domain)
-    session = load_report_session(RESEARCH_DB, domain, report_id)
-    if not session:
-        abort(404)
-    if question_id not in QUESTION_TO_FAMILY:
-        abort(404)
 
-    family_id = QUESTION_TO_FAMILY[question_id]
-    defs = QUESTION_DEFS[family_id]
-    slot = next((i for i, (qid, _q) in enumerate(defs, start=1) if qid == question_id), None)
-    configured = (session["snapshot"].get("family_questions") or {}).get(family_id) or {}
-    rendered = configured.get(slot) or configured.get(str(slot))
-    if not rendered:
-        abort(400)
-
-    provider_ids = [p.strip() for p in request.form.get("providers", "chatgpt,claude,gemini").split(",") if p.strip()]
-    with research_db() as con:
-        for provider in provider_ids:
-            status = request.form.get(f"status_{provider}", "success").strip()
-            if status not in PROVIDER_STATUSES:
-                status = "provider_error"
-            upsert_response(con, {
-                "domain": domain,
-                "report_id": report_id,
-                "question_id": question_id,
-                "family_id": family_id,
-                "template_question": QUESTION_TEMPLATES[question_id],
-                "rendered_question": rendered,
-                "provider": provider,
-                "model": request.form.get(f"model_{provider}", "").strip(),
-                "raw_answer": request.form.get(f"answer_{provider}", ""),
-                "citations": request.form.get(f"citations_{provider}", ""),
-                "country": request.form.get(f"country_{provider}", "").strip(),
-                "city": request.form.get(f"city_{provider}", "").strip(),
-                "answer_language": request.form.get(f"language_{provider}", "").strip(),
-                "live_search_status": request.form.get(f"live_search_{provider}", "").strip(),
-                "provider_status": status,
-            })
-        run_comparison(con, domain, report_id, question_id)
-    return redirect(url_for("report_session_view", domain=domain, report_id=report_id) + f"#{family_id}-{question_id}")
-
-@app.post("/d/<domain>/reports/<report_id>/cross-model/<question_id>/rerun")
-def rerun_cross_model_question(domain, report_id, question_id):
-    get_site(domain)
-    session = load_report_session(RESEARCH_DB, domain, report_id)
-    if not session or question_id not in QUESTION_TO_FAMILY:
-        abort(404)
-    with research_db() as con:
-        run_comparison(con, domain, report_id, question_id)
-    family_id = QUESTION_TO_FAMILY[question_id]
-    return redirect(url_for("report_session_view", domain=domain, report_id=report_id) + f"#{family_id}-{question_id}")
 
 @app.get("/d/<domain>/reports/<report_id>/pdf")
 def report_session_pdf(domain, report_id):

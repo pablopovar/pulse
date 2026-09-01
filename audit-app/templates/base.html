@@ -28,9 +28,7 @@
 <nav class="nav">
   <a class="{% if request.endpoint == 'overview' %}active{% endif %}" href="{{ url_for('overview', domain=site.domain) }}">Overview</a>
   <a class="{% if request.endpoint in ['reports','report_session_view','report_session_pdf'] %}active{% endif %}" href="{{ url_for('reports', domain=site.domain) }}">Reports</a>
-  <a class="{% if request.endpoint == 'domain_sources' %}active{% endif %}" href="{{ url_for('domain_sources', domain=site.domain) }}">Sources</a>
-
-  <a class="{% if request.endpoint == 'domain_settings' %}active{% endif %}" href="{{ url_for('domain_settings', domain=site.domain) }}">Settings</a>
+  <a class="{% if request.endpoint in ['domain_sources','manual_ai_source','manual_ai_source_analyze','manual_ai_analysis_models','save_source_company_name'] %}active{% endif %}" href="{{ url_for('domain_sources', domain=site.domain) }}">Sources & Settings</a>
   <a class="{% if request.endpoint in ['tools','geo_aeo_integrated','seo_crawl','seo_crawl_run','seo_crawl_status','pages','page','page_workspace','keywords_dashboard','keywords','wanted','research','keyword_workspace'] or (request.endpoint and request.endpoint.startswith('dataforseo_')) %}active{% endif %}" href="{{ url_for('tools', domain=site.domain) }}">Tools</a>
   <a class="{% if request.endpoint == 'domain_new' %}active{% endif %}" href="{{ url_for('domain_new') }}">+ Domain</a>
 </nav>
