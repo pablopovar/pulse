@@ -2,13 +2,14 @@
 {% block title %}{{ site.domain }} · Domain Audit Report{% endblock %}
 {% block content %}
 {% set meta = report.get('report_metadata') or {} %}
+{% set mai_snapshot = report.get('manual_ai_snapshot') or report.get('manual_ai') or report.get('manual_ai_source') or {} %}
 <div class="report-document report-mode-{{ meta.get('report_mode') or 'baseline' }}">
 <style>
 .report-document .status-pill{display:inline-flex;align-items:center;padding:.18rem .5rem;border-radius:999px;font-size:.76rem;font-weight:700;letter-spacing:.02em}
 .report-document .status-pill-fail{background:#fee2e2;color:#991b1b}.report-document .status-pill-partial{background:#ffedd5;color:#9a3412}.report-document .status-pill-pass{background:#dcfce7;color:#166534}.report-document .status-pill-manual_review{background:#fef3c7;color:#92400e}.report-document .status-pill-not_applicable{background:#f1f5f9;color:#475569}.report-document .status-pill-data_unavailable{background:#e2e8f0;color:#334155}
 .report-document .review-required-block{border-left:4px solid #d97706;padding-left:1rem}.report-document .data-coverage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.65rem}.report-document .coverage-item{border:1px solid var(--border,#d9dee7);border-radius:8px;padding:.7rem}.report-document .coverage-connected{border-left:4px solid #15803d}.report-document .coverage-missing{border-left:4px solid #64748b}.report-document .coverage-stale{border-left:4px solid #b45309}.report-document .coverage-failed{border-left:4px solid #b91c1c}
 .report-document .delta-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:.65rem}.report-document .delta-card{border:1px solid var(--border,#d9dee7);border-radius:8px;padding:.75rem}.report-document .delta-card strong{display:block;font-size:1.45rem}.report-document .root-cause-card{border:1px solid var(--border,#d9dee7);border-radius:10px;padding:1rem;margin:.7rem 0}.report-document .root-cause-meta{display:flex;gap:.75rem;flex-wrap:wrap;font-size:.85rem;color:var(--muted,#64748b)}
-.report-document .quality-warning{border-left:4px solid #b45309;padding:.7rem 1rem;background:#fffbeb}.report-document .quality-error{border-left:4px solid #b91c1c;padding:.7rem 1rem;background:#fef2f2}.report-document .score-explain{font-size:.82rem;color:var(--muted,#64748b)}
+.report-document .quality-warning{border-left:4px solid #b45309;padding:.7rem 1rem;background:#fffbeb}.report-document .quality-error{border-left:4px solid #b91c1c;padding:.7rem 1rem;background:#fef2f2}.report-document .score-explain{font-size:.82rem;color:var(--muted,#64748b)}.report-document .export-blocked{opacity:.6;cursor:not-allowed}
 @media print{.report-mode-monthly .monthly-hide-print{display:none!important}.report-document details:not([open])>*:not(summary){display:none}.report-document .report-controls,.report-document .family-collapse-toggle{display:none!important}}
 </style>
 
@@ -17,7 +18,7 @@
     <div class="report-kicker">DOMAIN AUDIT REPORT</div>
     <h1>{{ site.domain }}</h1>
     <div class="report-meta">
-      <span>{{ (meta.get('report_mode') or 'baseline')|title }} report · {{ report_session.id }}</span>
+      <span>{{ (meta.get('report_mode') or 'baseline')|title }} snapshot · {{ report_session.id }}</span>
       <span>Generated {{ report_session.created_at }}</span>
       {% if report.audit %}
       <span>Audit run #{{ report.audit.id }} · {{ report.audit.completed_at or report.audit.started_at }}</span>
@@ -30,8 +31,8 @@
   </div>
   {% if request.endpoint != 'public_report' %}
   <div class="heading-actions">
-    <a class="button primary" href="{{ url_for('report_session_pdf', domain=site.domain, report_id=report_session.id) }}">Export PDF</a>
-    <a class="button" href="{{ url_for('reports', domain=site.domain) }}">Reports</a>
+    {% if report.report_quality and report.report_quality.blocking %}<span class="button export-blocked" title="Resolve report-quality blockers before export">Export blocked</span>{% else %}<a class="button primary" href="{{ url_for('report_session_pdf', domain=site.domain, report_id=report_session.id) }}">Export PDF</a>{% endif %}
+    <a class="button" href="{{ url_for('reports', domain=site.domain) }}">History</a>
   </div>
   {% endif %}
 </header>
@@ -55,6 +56,12 @@
   {% for item in report.regression_alerts[:10] %}<tr><td>{{ item.check }}</td><td>{{ item.page }}</td><td>{{ item.previous }}</td><td><span class="status-pill status-pill-{{ item.current|lower }}">{{ item.current }}</span></td></tr>{% endfor %}
   </tbody></table></div>
   {% endif %}
+  {% if report.unchanged_priorities %}
+  <h3>No movement on important findings</h3>
+  <div class="table-wrap report-table"><table><thead><tr><th>Finding</th><th>Severity</th><th>Pages still affected</th></tr></thead><tbody>
+  {% for item in report.unchanged_priorities %}<tr><td>{{ item.title }}</td><td>{{ item.severity }}</td><td>{{ item.pages }}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% endif %}
 </section>
 {% endif %}
 
@@ -63,7 +70,7 @@
   <h2>High-signal findings</h2>
   <div class="high-signal-list">
     {% for finding in report.high_signal_findings %}
-    <article class="high-signal-item"><strong>{{ finding.title }}</strong><p>{{ finding.message }}</p><small>{{ finding.source }}</small></article>
+    <article class="high-signal-item"><strong>{{ finding.title }}</strong><p>{{ finding.message }}</p><small>{{ finding.source }}{% if finding.confidence %} · {{ finding.confidence }} confidence{% endif %}</small></article>
     {% else %}<div class="panel"><p>No high-signal finding can be established from the current evidence yet.</p></div>{% endfor %}
   </div>
 </section>
@@ -103,6 +110,15 @@
   </div>
 </section>
 
+{% if report.trend_data and report.trend_data|length > 1 %}
+<section class="report-methodology">
+  <div style="grid-column:1/-1"><div class="report-kicker">HISTORY</div><h2>Category trend</h2>
+  <div class="table-wrap report-table"><table><thead><tr><th>Observed</th><th>AI Visibility</th><th>Identity & Authority</th><th>Evidence & Trust</th><th>Content & Answer Readiness</th><th>Machine Readability</th><th>SEO</th><th>Onsite</th></tr></thead><tbody>
+  {% for point in report.trend_data[-6:] %}<tr><td>{{ point.observed_at or '—' }}</td><td><span class="status-pill status-pill-{{ point['ai-visibility']|lower }}">{{ point['ai-visibility'] }}</span></td><td><span class="status-pill status-pill-{{ point['identity-authority']|lower }}">{{ point['identity-authority'] }}</span></td><td><span class="status-pill status-pill-{{ point['evidence-trust']|lower }}">{{ point['evidence-trust'] }}</span></td><td><span class="status-pill status-pill-{{ point['content-answer-readiness']|lower }}">{{ point['content-answer-readiness'] }}</span></td><td><span class="status-pill status-pill-{{ point['machine-readability-eligibility']|lower }}">{{ point['machine-readability-eligibility'] }}</span></td><td><span class="status-pill status-pill-{{ point['seo-audit']|lower }}">{{ point['seo-audit'] }}</span></td><td><span class="status-pill status-pill-{{ point['onsite-audit']|lower }}">{{ point['onsite-audit'] }}</span></td></tr>{% endfor %}
+  </tbody></table></div></div>
+</section>
+{% endif %}
+
 {% if report.report_quality.errors or report.report_quality.warnings %}
 <section class="report-methodology monthly-hide-print">
   <div style="grid-column:1/-1"><h3>Report quality validation</h3>
@@ -134,24 +150,23 @@
     <div class="ai-visibility-report-content">
       <section class="ai-source-overview ai-source-overview-embedded">
         <div class="section-head"><div><div class="report-kicker">AI RESPONSE SOURCE</div><h3>Manual AI response evidence</h3></div></div>
-        {% if report.manual_ai.available %}
+        {% if mai_snapshot.get('available') %}
         <div class="cards ai-source-cards">
-          <div class="card"><span>Providers</span><strong>{{ report.manual_ai.provider_count }}</strong></div>
-          <div class="card"><span>Question answers parsed</span><strong>{{ report.manual_ai.answer_count }}/{{ report.manual_ai.expected_answer_count }}</strong></div>
-          <div class="card"><span>Structured responses</span><strong>{{ report.manual_ai.valid_json_providers }}/{{ report.manual_ai.provider_count }}</strong></div>
-          <div class="card"><span>Last saved</span><strong class="small-value">{{ report.manual_ai.updated_at or '—' }}</strong></div>
+          <div class="card"><span>Providers</span><strong>{{ mai_snapshot.get('provider_count') or 0 }}</strong></div>
+          <div class="card"><span>Question answers parsed</span><strong>{{ mai_snapshot.get('answer_count') or 0 }}/{{ mai_snapshot.get('expected_answer_count') or 0 }}</strong></div>
+          <div class="card"><span>Structured responses</span><strong>{{ mai_snapshot.get('valid_json_providers') or 0 }}/{{ mai_snapshot.get('provider_count') or 0 }}</strong></div>
+          <div class="card"><span>Snapshot saved</span><strong class="small-value">{{ mai_snapshot.get('updated_at') or '—' }}</strong></div>
         </div>
-        {% if not report.manual_ai.complete %}<div class="notice">The AI response source is present but incomplete or partially unparsed. Missing or malformed responses are treated as unavailable evidence, never as entity absence.</div>{% endif %}
-        {% else %}<div class="panel source-required"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><strong> AI response source not available</strong><p>No Manual AI Responses source is attached to this report.</p></div>{% endif %}
+        {% if not mai_snapshot.get('complete') %}<div class="notice">The AI response source is present but incomplete or partially unparsed. Missing or malformed responses are treated as unavailable evidence, never as entity absence.</div>{% endif %}
+        {% else %}<div class="panel source-required"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><strong> AI response source not available</strong><p>No Manual AI Responses source was attached to this snapshot.</p></div>{% endif %}
       </section>
 
       <section class="ai-analysis-report ai-analysis-report-embedded">
         <div class="section-head"><div><div class="report-kicker">AI RESPONSE ANALYSIS</div><h3>Model interpretation</h3></div></div>
-        {% set mai = report.get('manual_ai') or report.get('manual_ai_source') or {} %}
-        {% if mai.get('analysis_status') == 'success' and mai.get('analysis_text') %}
-        <div class="panel analysis-text analysis-markdown" data-analysis-markdown>{{ mai.get('analysis_text') }}</div>
-        <div class="signal-small">Analysis {{ mai.get('analysis_provider') or 'ollama' }} · {{ mai.get('analysis_model') or '—' }} · reasoning {{ mai.get('analysis_reasoning_effort') or '—' }} · temperature {{ mai.get('analysis_temperature') if mai.get('analysis_temperature') is not none else '—' }} · top-p {{ mai.get('analysis_top_p') if mai.get('analysis_top_p') is not none else '—' }} · max {{ mai.get('analysis_max_output_tokens') or '—' }} · prompt v{{ mai.get('analysis_system_prompt_version') or 1 }} · question-set v{{ mai.get('question_set_version') or 1 }}{% if mai.get('analysis_updated_at') %} · {{ mai.get('analysis_updated_at') }}{% endif %}</div>
-        {% elif mai.get('available') %}<div class="panel"><p>AI response evidence is available, but model analysis has not yet been run.</p></div>{% else %}<div class="panel source-required"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><p>AI response source is not available.</p></div>{% endif %}
+        {% if mai_snapshot.get('analysis_status') == 'success' and mai_snapshot.get('analysis_text') %}
+        <div class="panel analysis-text analysis-markdown" data-analysis-markdown>{{ mai_snapshot.get('analysis_text') }}</div>
+        <div class="signal-small">Analysis {{ mai_snapshot.get('analysis_provider') or 'ollama' }} · {{ mai_snapshot.get('analysis_model') or '—' }} · reasoning {{ mai_snapshot.get('analysis_reasoning_effort') or '—' }} · temperature {{ mai_snapshot.get('analysis_temperature') if mai_snapshot.get('analysis_temperature') is not none else '—' }} · top-p {{ mai_snapshot.get('analysis_top_p') if mai_snapshot.get('analysis_top_p') is not none else '—' }} · max {{ mai_snapshot.get('analysis_max_output_tokens') or '—' }} · prompt v{{ mai_snapshot.get('analysis_system_prompt_version') or 1 }} · question-set v{{ mai_snapshot.get('question_set_version') or 1 }}{% if mai_snapshot.get('analysis_updated_at') %} · {{ mai_snapshot.get('analysis_updated_at') }}{% endif %}</div>
+        {% elif mai_snapshot.get('available') %}<div class="panel"><p>AI response evidence is available in this snapshot, but model analysis had not yet been run.</p></div>{% else %}<div class="panel source-required"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><p>AI response source is not available in this snapshot.</p></div>{% endif %}
       </section>
     </div>
 
