@@ -8,7 +8,32 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from reports.prioritization import GLOSSARY, METHODOLOGY, build_high_signal_findings, canonical_check_title, merge_duplicate_checks, value_to_fix
+from reports.prioritization import (
+    GLOSSARY,
+    METHODOLOGY,
+    SCORING_VERSION,
+    build_high_signal_findings,
+    canonical_check_title,
+    merge_duplicate_checks,
+    value_to_fix,
+    value_to_fix_components,
+)
+from reports.report_intelligence import (
+    ai_metrics,
+    build_trends,
+    compare_snapshots,
+    data_coverage,
+    enrich_check,
+    group_root_causes,
+    is_issue,
+    is_review,
+    monitoring_coverage_summary,
+    normalize_status,
+    root_cause_key,
+    rollup_status,
+    status_counts,
+    validate_report,
+)
 
 
 FAMILIES = [
@@ -21,8 +46,10 @@ FAMILIES = [
     {"id":"onsite-audit","name":"Onsite Audit","departments":"SEO · Web · Engineering","purpose":"Is the site technically crawlable, indexable, accessible and healthy?","kind":"onsite","categories":["Crawlability & Indexability","Technical Delivery & Consistency","Page Experience & Accessibility"]},
 ]
 
-STATUS_RANK = {"FAIL":0,"PARTIAL":1,"UNKNOWN":2,"MANUAL_REVIEW":3,"PASS":4,"NOT_APPLICABLE":5}
+STATUS_RANK = {"FAIL":0,"PARTIAL":1,"MANUAL_REVIEW":2,"DATA_UNAVAILABLE":3,"PASS":4,"NOT_APPLICABLE":5}
 SEVERITY_RANK = {"CRITICAL":0,"HIGH":1,"MEDIUM":2,"LOW":3}
+METHODOLOGY_VERSION = "report-methodology-v2"
+SNAPSHOT_VERSION = "report-snapshot-v2"
 
 # Lower = greater expected return from fixing. This is deliberately independent of severity.
 IMPACT_ORDER = {
@@ -54,10 +81,34 @@ def _connect(path: Path):
     con=sqlite3.connect(path); con.row_factory=sqlite3.Row
     return con
 
+
 def _ensure(con):
     con.execute("CREATE TABLE IF NOT EXISTS report_session (id TEXT PRIMARY KEY,domain TEXT NOT NULL,created_at TEXT NOT NULL,snapshot_json TEXT NOT NULL)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_report_session_domain_created ON report_session(domain,created_at DESC)")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS client_report_config (
+            domain TEXT PRIMARY KEY COLLATE NOCASE,
+            competitors_json TEXT NOT NULL DEFAULT '[]',
+            priority_pages_json TEXT NOT NULL DEFAULT '[]',
+            target_topics_json TEXT NOT NULL DEFAULT '[]',
+            page_groups_json TEXT NOT NULL DEFAULT '[]',
+            integrations_json TEXT NOT NULL DEFAULT '[]',
+            monitored_ai_prompts_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS recommendation_tracking (
+            domain TEXT NOT NULL COLLATE NOCASE,
+            finding_key TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            note TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(domain,finding_key)
+        )
+    """)
     con.commit()
+
 
 def _json_default(value: Any):
     if isinstance(value,datetime): return value.isoformat()
@@ -65,14 +116,79 @@ def _json_default(value: Any):
     if isinstance(value,set): return sorted(value)
     raise TypeError(type(value).__name__)
 
+
+def _load_client_config(con, domain: str) -> dict[str, Any]:
+    row = con.execute("SELECT * FROM client_report_config WHERE domain=? COLLATE NOCASE", (domain,)).fetchone()
+    if not row:
+        return {"competitors": [], "priority_pages": [], "target_topics": [], "page_groups": [], "integrations": [], "monitored_ai_prompts": []}
+    def parsed(name):
+        try:
+            value=json.loads(row[name] or "[]")
+            return value if isinstance(value,list) else []
+        except Exception:
+            return []
+    return {
+        "competitors": parsed("competitors_json"),
+        "priority_pages": parsed("priority_pages_json"),
+        "target_topics": parsed("target_topics_json"),
+        "page_groups": parsed("page_groups_json"),
+        "integrations": parsed("integrations_json"),
+        "monitored_ai_prompts": parsed("monitored_ai_prompts_json"),
+        "updated_at": row["updated_at"],
+    }
+
+
+def _load_recommendation_tracking(con, domain: str) -> dict[str, dict[str, Any]]:
+    rows=con.execute("SELECT finding_key,status,note,updated_at FROM recommendation_tracking WHERE domain=? COLLATE NOCASE",(domain,)).fetchall()
+    return {r["finding_key"]:{"status":r["status"],"note":r["note"],"updated_at":r["updated_at"]} for r in rows}
+
+
 def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any])->str:
     report_id=secrets.token_urlsafe(12).replace("-","").replace("_","")[:16]
     now=datetime.now(timezone.utc).isoformat(timespec="seconds")
+    immutable=dict(snapshot)
     with _connect(db_path) as con:
         _ensure(con)
-        con.execute("INSERT INTO report_session(id,domain,created_at,snapshot_json) VALUES (?,?,?,?)",(report_id,domain,now,json.dumps(snapshot,default=_json_default,separators=(",",":"))))
+        previous_rows=con.execute("SELECT id,created_at,snapshot_json FROM report_session WHERE domain=? COLLATE NOCASE ORDER BY created_at DESC LIMIT 24",(domain,)).fetchall()
+        previous_snapshot=json.loads(previous_rows[0]["snapshot_json"]) if previous_rows else None
+        oldest=con.execute("SELECT created_at FROM report_session WHERE domain=? COLLATE NOCASE ORDER BY created_at ASC LIMIT 1",(domain,)).fetchone()
+        comparison=compare_snapshots(immutable,previous_snapshot)
+        history=[json.loads(r["snapshot_json"]) for r in reversed(previous_rows)]
+        history.append(immutable)
+        coverage=data_coverage(immutable)
+        manual_ai=dict(immutable.get("manual_ai_source") or {})
+        source_used=[x.get("label") for x in coverage if x.get("state")=="connected"]
+        source_missing=[x.get("label") for x in coverage if x.get("state") in {"missing","failed"}]
+        audit=immutable.get("audit") or {}
+        audit_summary=immutable.get("audit_summary") or {}
+        immutable["client_config"]=_load_client_config(con,domain)
+        immutable["recommendation_tracking"]=_load_recommendation_tracking(con,domain)
+        immutable["comparison"]=comparison
+        immutable["trend_data"]=build_trends(history,FAMILIES)
+        immutable["snapshot_contract"]={
+            "version":SNAPSHOT_VERSION,
+            "immutable":True,
+            "stored_at":now,
+            "contains":["inputs","check_outputs","evidence","page_set","source_inventory","scoring_version","methodology_version","ai_prompt_and_question_versions"],
+        }
+        immutable["report_metadata"]={
+            "report_mode":"monthly" if previous_rows else "baseline",
+            "audit_date":audit.get("completed_at") or audit.get("started_at") or now,
+            "baseline_date":oldest["created_at"] if oldest else now,
+            "comparison_period":({"from":previous_rows[0]["created_at"],"to":now} if previous_rows else None),
+            "pages_crawled":audit_summary.get("pages_audited") or ((immutable.get("crawl") or {}).get("pages_crawled")) or 0,
+            "data_sources_used":source_used,
+            "missing_sources":source_missing,
+            "methodology_version":METHODOLOGY_VERSION,
+            "scoring_version":SCORING_VERSION,
+            "question_set_version":manual_ai.get("question_set_version") or 1,
+            "analysis_prompt_version":manual_ai.get("analysis_system_prompt_version") or 1,
+            "snapshot_version":SNAPSHOT_VERSION,
+        }
+        con.execute("INSERT INTO report_session(id,domain,created_at,snapshot_json) VALUES (?,?,?,?)",(report_id,domain,now,json.dumps(immutable,default=_json_default,separators=(",",":"))))
         con.commit()
     return report_id
+
 
 def load_report_session(db_path:Path,domain:str,report_id:str):
     with _connect(db_path) as con:
@@ -80,11 +196,13 @@ def load_report_session(db_path:Path,domain:str,report_id:str):
         row=con.execute("SELECT id,domain,created_at,snapshot_json FROM report_session WHERE id=? AND domain=? COLLATE NOCASE",(report_id,domain)).fetchone()
     return None if not row else {"id":row["id"],"domain":row["domain"],"created_at":row["created_at"],"snapshot":json.loads(row["snapshot_json"])}
 
+
 def list_report_sessions(db_path:Path,domain:str,limit:int=12):
     with _connect(db_path) as con:
         _ensure(con)
         rows=con.execute("SELECT id,domain,created_at FROM report_session WHERE domain=? COLLATE NOCASE ORDER BY created_at DESC LIMIT ?",(domain,limit)).fetchall()
     return [dict(r) for r in rows]
+
 
 def _impact(signal):
     title=signal.get("title") or ""
@@ -95,13 +213,15 @@ def _impact(signal):
     except Exception: pass
     return 70
 
+
 def _rollup_status(details):
-    if not details: return "UNKNOWN"
-    return min(((d.get("observed_status") or "UNKNOWN").upper() for d in details),key=lambda x:STATUS_RANK.get(x,99))
+    return rollup_status([d.get("observed_status") for d in details])
+
 
 def _rollup_severity(details):
     vals=[(d.get("severity") or "").upper() for d in details if d.get("severity")]
     return "" if not vals else min(vals,key=lambda x:SEVERITY_RANK.get(x,99))
+
 
 def _audit_family(defn,signals,data=None):
     data = data or {}
@@ -111,29 +231,43 @@ def _audit_family(defn,signals,data=None):
         by_check=defaultdict(list)
         for s in selected:
             if s.get("category")==category_name:
-                by_check[(canonical_check_title(s.get("title") or ""),)].append(s)
+                copy=dict(s)
+                copy["observed_status"]=normalize_status(copy.get("observed_status"))
+                by_check[(canonical_check_title(copy.get("title") or ""),)].append(copy)
         checks=[]
         for (title,),details in by_check.items():
             signal_key = details[0].get("signal_key") or ""
             details=sorted(details,key=lambda d:d.get("path") or "")
-            affected=[d for d in details if (d.get("observed_status") or "").upper() in {"FAIL","PARTIAL","UNKNOWN","MANUAL_REVIEW"}]
+            affected=[d for d in details if is_issue(d.get("observed_status"))]
+            reviews=[d for d in details if is_review(d.get("observed_status"))]
+            unavailable=[d for d in details if normalize_status(d.get("observed_status"))=="DATA_UNAVAILABLE"]
             sample=details[0]
             checks.append({
                 "signal_key":signal_key,"title":title,"category":category_name,"family":sample.get("family") or "",
                 "status":_rollup_status(details),"severity":_rollup_severity(details),"impact_rank":_impact(sample),
                 "pages_affected":len({d.get("path") or "/" for d in affected}),
+                "pages_review_required":len({d.get("path") or "/" for d in reviews}),
+                "pages_data_unavailable":len({d.get("path") or "/" for d in unavailable}),
                 "pages_tested":len({d.get("path") or "/" for d in details}),
                 "recommendation":sample.get("recommendation") or "","details":details,
             })
         checks = merge_duplicate_checks(checks, data)
         for check in checks:
+            check["value_score_explanation"] = value_to_fix_components(check, data)
             check["value_score"] = value_to_fix(check, data)
-        checks.sort(key=lambda c:(-float(c.get("value_score") or 0),c["title"]))
-        categories.append({"name":category_name,"status":_rollup_status([{"observed_status":c["status"]} for c in checks]) if checks else "UNKNOWN","checks":checks})
-    priority=[c for cat in categories for c in cat["checks"] if c["status"]!="PASS"]
+            enrich_check(check,defn.get("name") or "")
+        checks.sort(key=lambda c:(-float(c.get("value_score") or 0),STATUS_RANK.get(c.get("status"),99),c["title"]))
+        categories.append({"name":category_name,"status":rollup_status([c["status"] for c in checks]),"checks":checks})
+    all_checks=[c for cat in categories for c in cat["checks"]]
+    priority=[c for c in all_checks if is_issue(c["status"])]
+    reviews=[c for c in all_checks if is_review(c["status"])]
+    unavailable=[c for c in all_checks if normalize_status(c["status"])=="DATA_UNAVAILABLE"]
     priority.sort(key=lambda c:(-float(c.get("value_score") or 0),STATUS_RANK.get(c["status"],99),c["category"],c["title"]))
-    return {**defn,"categories_data":categories,"priority_findings":priority,
-            "snapshot":{"checks":sum(len(c["checks"]) for c in categories),"affected_checks":sum(1 for c in priority),"pages":len({s.get("path") or "/" for s in selected})}}
+    reviews.sort(key=lambda c:(SEVERITY_RANK.get(c.get("severity"),99),c["category"],c["title"]))
+    counts=status_counts(all_checks)
+    return {**defn,"categories_data":categories,"priority_findings":priority,"review_findings":reviews,"unavailable_findings":unavailable,
+            "snapshot":{"checks":len(all_checks),"affected_checks":counts["confirmed_issues"],"confirmed_issues":counts["confirmed_issues"],"review_required":counts["review_required"],"data_unavailable":counts["data_unavailable"],"not_applicable":counts["not_applicable"],"passed":counts["passed"],"pages":len({s.get("path") or "/" for s in selected})}}
+
 
 def _ai_family(data,defn):
     rows=list(data.get("ai_visibility_checks") or [])
@@ -154,7 +288,8 @@ def _ai_family(data,defn):
     return {**defn,"overview":{"questions_tested":len({r.get("question") for r in rows if r.get("question")}),"systems_tested":len(engines),"checks":len(rows),"cited":counts["cited"],"mentioned":counts["mentioned"],"absent":counts["absent"],"citation_frequency":round(len(cited)*100/len(rows),1) if rows else 0,"company_pages_cited":len({r.get("url") for r in cited if r.get("url")}),"live_search_checks":sum(1 for r in rows if r.get("searched"))},
             "engine_summary":engine_summary,"answers":sorted(rows,key=lambda r:(r.get("question") or "",r.get("engine") or "")),
             "brand_visibility":{"linked_mentions":len(cited),"unlinked_mentions":len(mentioned),"company_pages":sorted({r.get("url") for r in cited if r.get("url")}),"chatgpt":next((x for x in engine_summary if x["engine"]=="chatgpt"),None),"google_ai_overview":None},
-            "other_domains":other.most_common(20)}
+            "other_domains":other.most_common(20),"metrics":ai_metrics(data)}
+
 
 def _seo_family(data,defn):
     seo=dict(data.get("seo") or {})
@@ -171,6 +306,7 @@ def _seo_family(data,defn):
             "competitor_keywords":list(data.get("competitor_keywords") or []),"backlinks":list(data.get("backlinks") or []),
             "ref_domains":list(data.get("ref_domains") or []),"backlink_summary":data.get("backlink_summary"),
             "domain_metrics":data.get("domain_metrics"),"clarity":data.get("clarity")}
+
 
 def _onsite_family(data,defn,signals):
     out=_audit_family(defn,signals,data)
@@ -190,34 +326,70 @@ def _merge_answer_readiness_executive_findings(findings):
     }
     clustered = []
     kept = []
-
     for finding in findings or []:
         title = str(finding.get("title") or "").strip().lower()
         if title in cluster_titles:
             clustered.append(finding)
         else:
             kept.append(finding)
-
     if clustered:
         max_score = max(float(x.get("value_score") or 0) for x in clustered)
         kept.append({
             "title": "Content is not consistently structured for answer retrieval",
             "message": (
-                "Several related answer-readiness checks fail broadly across the site. "
-                "Rather than a single FAQ or heading problem, the pattern indicates that "
-                "much of the content is not consistently organized around clear questions, "
-                "direct answers, and reusable answer blocks."
+                "Several related answer-readiness checks fail broadly across the site. Rather than a single FAQ or heading problem, the pattern indicates that much of the content is not consistently organized around clear questions, direct answers, and reusable answer blocks."
             ),
             "value_score": max_score + 1.0,
             "source": "Content & Answer Readiness",
         })
-
     kept.sort(key=lambda x: -float(x.get("value_score") or 0))
     return kept[:5]
 
 
+def _dedupe_executive_root_causes(findings, root_causes):
+    root_by_key={r.get("id"):r for r in root_causes}
+    out=[]
+    seen=set()
+    for finding in findings or []:
+        key,label=root_cause_key(str(finding.get("title") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        root=root_by_key.get(key)
+        if root and len(root.get("supporting_checks") or [])>1:
+            out.append({
+                "title":root.get("title") or label,
+                "message":f"One underlying pattern is supported by {len(root.get('supporting_checks') or [])} related checks and affects {root.get('pages_affected') or 0} page(s). The detailed checks remain available as supporting evidence.",
+                "value_score":max(float(finding.get("value_score") or 0),float(root.get("value_score") or 0)),
+                "source":" · ".join(root.get("family_names") or []),
+                "root_cause_id":key,
+            })
+        else:
+            out.append(finding)
+    out.sort(key=lambda x:-float(x.get("value_score") or 0))
+    return out[:5]
+
+
+def _apply_recommendation_tracking(root_causes, tracking):
+    for root in root_causes:
+        state=tracking.get(root.get("id") or "") or {}
+        rec=root.get("recommendation_object") or {}
+        if state:
+            rec["status"]=state.get("status") or rec.get("status") or "open"
+            rec["tracking_note"]=state.get("note") or ""
+            rec["tracking_updated_at"]=state.get("updated_at") or ""
+        root["recommendation_object"]=rec
+    return root_causes
+
+
 def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
-    data=dict(snapshot); signals=list(data.get("audit_signals") or [])
+    data=dict(snapshot)
+    signals=[]
+    for raw in data.get("audit_signals") or []:
+        signal=dict(raw)
+        signal["observed_status"]=normalize_status(signal.get("observed_status"))
+        signals.append(signal)
+    data["audit_signals"]=signals
     families=[]
     for defn in FAMILIES:
         if defn["kind"]=="ai": families.append(_ai_family(data,defn))
@@ -228,28 +400,32 @@ def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
     providers = list(manual_ai.get("providers") or [])
     manual_ai["available"] = bool(manual_ai.get("available") and providers)
     manual_ai["provider_count"] = int(manual_ai.get("provider_count") or len(providers))
-    manual_ai["answer_count"] = int(
-        manual_ai.get("answer_count")
-        or sum(int(p.get("result_count") or 0) for p in providers)
-    )
-    manual_ai["valid_json_providers"] = sum(
-        1 for p in providers if isinstance(p.get("parsed"), dict)
-    )
-    manual_ai["expected_answer_count"] = int(
-        manual_ai.get("expected_answer_count")
-        or (manual_ai.get("provider_count", 0) * 4)
-    )
-    manual_ai["complete"] = bool(
-        manual_ai.get("available")
-        and manual_ai.get("provider_count", 0) > 0
-        and manual_ai.get("answer_count", 0) >= manual_ai["expected_answer_count"]
-    )
+    manual_ai["answer_count"] = int(manual_ai.get("answer_count") or sum(int(p.get("result_count") or 0) for p in providers))
+    manual_ai["valid_json_providers"] = sum(1 for p in providers if isinstance(p.get("parsed"), dict))
+    manual_ai["expected_answer_count"] = int(manual_ai.get("expected_answer_count") or (manual_ai.get("provider_count", 0) * 4))
+    manual_ai["complete"] = bool(manual_ai.get("available") and manual_ai.get("provider_count", 0) > 0 and manual_ai.get("answer_count", 0) >= manual_ai["expected_answer_count"])
     data["manual_ai"] = manual_ai
     data["families"]=families
     data["family_by_id"]={f["id"]:f for f in families}
+    roots=group_root_causes(families)
+    roots=_apply_recommendation_tracking(roots,data.get("recommendation_tracking") or {})
+    data["root_causes"]=roots
+    data["top_actions"]=roots[:10]
+    data["review_required_findings"]=[c for f in families if f.get("kind") in {"audit","onsite"} for c in f.get("review_findings") or []]
+    data["data_unavailable_checks"]=[c for f in families if f.get("kind") in {"audit","onsite"} for c in f.get("unavailable_findings") or []]
+    coverage=data.get("data_coverage") or data_coverage(data)
+    data["data_coverage"]=coverage
+    data["monitoring_coverage"]=monitoring_coverage_summary(coverage)
     data["high_signal_findings"] = build_high_signal_findings(data, families, limit=5)
     data["high_signal_findings"] = _merge_answer_readiness_executive_findings(data.get("high_signal_findings"))
+    data["high_signal_findings"] = _dedupe_executive_root_causes(data.get("high_signal_findings"),roots)
     data["methodology"] = METHODOLOGY
+    data["methodology_version"] = METHODOLOGY_VERSION
+    data["scoring_version"] = SCORING_VERSION
     data["glossary"] = GLOSSARY
     data["technical_family_ids"] = ["seo-audit", "onsite-audit"]
+    data["report_quality"] = validate_report(data,families,roots)
+    comparison=data.get("comparison") or {"available":False,"summary":{}}
+    data["monthly_delta"] = comparison.get("summary") or {}
+    data["regression_alerts"] = comparison.get("regression_alerts") or []
     return data
