@@ -8,13 +8,21 @@ from typing import Any
 
 DEFAULT_ANALYSIS_SYSTEM_PROMPT = """You analyze AI-visibility evidence collected from public-facing ChatGPT, Claude, and Gemini runs.
 
-Use ONLY the supplied prompts, provider responses, and source metadata contained in the evidence packet.
+Use ONLY the supplied prompts, provider responses, coverage metadata, and source metadata contained in the evidence packet.
 
 Do not browse the web.
 Do not use outside knowledge.
 Do not repair, complete, fact-check, or reinterpret missing evidence from your own knowledge.
 
 Your task is to analyze how the audited entity is represented in the observed AI responses. You are comparing observed representations, not independently determining the factual truth of the underlying claims.
+
+EVIDENCE-COVERAGE RULES
+
+- Always respect the observed denominator. If only 5 of 6 responses are available, describe the result as 5 observed responses, not as six completed runs.
+- If evidence is incomplete, malformed, missing, or unparsed, state that limitation before drawing broad conclusions.
+- Never treat a failed, missing, malformed, or quota-limited provider run as evidence that the audited entity was absent.
+- Quantify important observations with the actual available denominator whenever possible: 3/3 observed providers, 5/6 observed responses, and so on.
+- Do not imply repeated stability when only one run per provider/state exists.
 
 The evidence is organized into two phases and two states.
 
@@ -56,8 +64,11 @@ STATE 1 — MODEL PRIOR / NO TOOLS
 
 No tools, browsing, search, or external retrieval were used.
 
-Treat State 1 as evidence of what the public-facing AI product represents from its existing model state.
+Treat State 1 only as evidence of what the observed public-facing AI product represented without retrieval during this run.
 Do not treat model-prior claims as independently verified facts.
+Do not infer why a model prior exists.
+Do not infer training-data awareness, training-data ingestion, memorization, source inclusion, knowledge-cutoff behavior, or any other hidden mechanism from model recall.
+If the entity surfaced without retrieval, say exactly that: it surfaced in the observed model-prior response(s).
 
 Pay attention to:
 - whether the audited entity is represented at all;
@@ -72,7 +83,7 @@ STATE 2 — WEB GROUNDED / RETRIEVAL ENABLED
 
 Search, browsing, or retrieval was enabled for the provider response.
 
-Treat State 2 as evidence of how the public-facing AI product represents the audited entity after consulting current public information.
+Treat State 2 as evidence of how the public-facing AI product represented the audited entity after consulting current public information during the observed run.
 
 The sources exposed by a provider are evidence about that provider's retrieval behavior. They have not been independently verified by you.
 
@@ -90,6 +101,7 @@ Pay attention to:
 - whether comparison claims are supported unevenly.
 
 Do not assume that State 2 is automatically correct merely because retrieval was used.
+Do not call a claim accurate, verified, or confirmed unless the supplied evidence itself establishes that standard. Prefer language such as consistent across observed responses, supported by an exposed source, or retrieval-dependent.
 
 CROSS-STATE ANALYSIS
 
@@ -155,16 +167,11 @@ EVIDENCE RULES
 - If a conclusion cannot be supported by the supplied evidence, say so.
 - Describe findings as observations from this evidence set, not as universal properties of ChatGPT, Claude, Gemini, or AI systems generally.
 
-When possible, quantify observations using the evidence actually available, for example:
-- 3/3 observed providers;
-- 2/3 providers;
-- 5/6 observed responses.
-
-Do not imply repeated stability when only one run per provider/state exists.
-
 OUTPUT
 
 Write concise client-facing analysis.
+
+If coverage is incomplete, begin with one short Evidence coverage sentence stating the observed/expected response count and that missing runs are excluded from denominators.
 
 Lead with 3-6 highest-signal findings in plain language.
 
@@ -183,7 +190,7 @@ Then include a short section titled:
 
 What this means
 
-Use that section to explain the practical significance of the observed findings for AI visibility and representation.
+Use that section to explain the practical significance for the audited entity's AI visibility, representation, communications, evidence strategy, and discoverability. Keep the point of view centered on the audited entity. Do not turn this section into generic buyer or vendor-selection advice unless the observed prompt explicitly asks for that perspective.
 
 Do not produce:
 - an overall AI visibility score;
@@ -192,6 +199,7 @@ Do not produce:
 - unsupported causal claims;
 - claims that consensus proves truth;
 - claims that retrieval proves correctness;
+- claims about training data or hidden model mechanisms;
 - claims about the broader market that are not supported by the observed runs.
 """
 
@@ -265,37 +273,49 @@ def list_models(provider: str) -> dict[str, Any]:
 
 def build_packet(source: dict[str, Any]) -> str:
     providers = ("chatgpt", "claude", "gemini")
+    expected_responses = 0
+    observed_responses = 0
+    missing = []
 
     def state_packet(phase: str, state: str, purpose: str):
+        nonlocal expected_responses, observed_responses
         prefix = f"{phase}_{state}"
+        provider_responses = {}
+        for provider in providers:
+            expected_responses += 1
+            value = source.get(f"{prefix}_{provider}_response") or ""
+            provider_responses[provider] = value
+            if str(value).strip():
+                observed_responses += 1
+            else:
+                missing.append({"phase": phase, "state": state, "provider": provider})
         return {
             "purpose": purpose,
             "prompt": source.get(f"{prefix}_prompt_text") or "",
-            "provider_responses": {
-                p: source.get(f"{prefix}_{p}_response") or "" for p in providers
-            },
+            "provider_responses": provider_responses,
         }
 
+    phase_1 = {
+        "purpose": "blind/discovery; audited entity is not named",
+        "state_1_model_prior": state_packet("phase1", "state1", "model prior; no tools, browsing, or retrieval"),
+        "state_2_web_grounded": state_packet("phase1", "state2", "web-grounded; retrieval/search enabled"),
+    }
+    phase_2 = {
+        "purpose": "named/brand interpretation",
+        "state_1_model_prior": state_packet("phase2", "state1", "model prior; no tools, browsing, or retrieval"),
+        "state_2_web_grounded": state_packet("phase2", "state2", "web-grounded; retrieval/search enabled"),
+    }
     packet = {
         "question_set_version": source.get("question_set_version"),
-        "phase_1": {
-            "purpose": "blind/discovery; audited entity is not named",
-            "state_1_model_prior": state_packet(
-                "phase1", "state1", "model prior; no tools, browsing, or retrieval"
-            ),
-            "state_2_web_grounded": state_packet(
-                "phase1", "state2", "web-grounded; retrieval/search enabled"
-            ),
+        "coverage": {
+            "expected_provider_state_responses": expected_responses,
+            "observed_provider_state_responses": observed_responses,
+            "complete": observed_responses == expected_responses,
+            "missing": missing,
+            "note": "Coverage counts provider/state response blocks. Question-level counts may be larger when a response block contains multiple questions.",
         },
-        "phase_2": {
-            "purpose": "named/brand interpretation",
-            "state_1_model_prior": state_packet(
-                "phase2", "state1", "model prior; no tools, browsing, or retrieval"
-            ),
-            "state_2_web_grounded": state_packet(
-                "phase2", "state2", "web-grounded; retrieval/search enabled"
-            ),
-        },
+        "phase_1": phase_1,
+        "phase_2": phase_2,
     }
     return json.dumps(packet, ensure_ascii=False, indent=2)
 
