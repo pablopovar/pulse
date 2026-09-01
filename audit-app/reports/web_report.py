@@ -477,6 +477,50 @@ def _apply_recommendation_tracking(root_causes, tracking):
     return root_causes
 
 
+def _normalize_manual_ai_snapshot(manual_ai: dict[str, Any]) -> dict[str, Any]:
+    """Normalize both legacy and four-state Manual AI source shapes for report rendering."""
+    manual_ai = dict(manual_ai or {})
+    provider_rows = []
+
+    # Current shape: phases -> states -> providers. Each provider row represents
+    # one provider/state execution and may contain four question results.
+    for phase in manual_ai.get("phases") or []:
+        for state in phase.get("states") or []:
+            provider_rows.extend(list(state.get("providers") or []))
+
+    # Legacy snapshots stored providers at the top level. Keep them readable.
+    if not provider_rows:
+        provider_rows = list(manual_ai.get("providers") or [])
+
+    provider_run_count = int(manual_ai.get("provider_runs") or len(provider_rows))
+    answer_count = int(manual_ai.get("answer_count") or sum(int(p.get("result_count") or 0) for p in provider_rows))
+    valid_json_provider_runs = int(
+        manual_ai.get("valid_json_providers")
+        if manual_ai.get("valid_json_providers") is not None
+        else sum(1 for p in provider_rows if isinstance(p.get("parsed"), dict))
+    )
+    expected_answer_count = int(manual_ai.get("expected_answer_count") or (provider_run_count * 4))
+    unique_providers = sorted({str(p.get("provider") or "").strip() for p in provider_rows if p.get("provider")})
+
+    # Availability is evidence-based: provider execution rows are sufficient.
+    # Do not invalidate a four-state source merely because the legacy top-level
+    # providers array is absent.
+    manual_ai["available"] = bool(provider_rows or manual_ai.get("available"))
+    manual_ai["provider_runs"] = provider_run_count
+    manual_ai["provider_count"] = len(unique_providers) if unique_providers else provider_run_count
+    manual_ai["provider_names"] = unique_providers
+    manual_ai["answer_count"] = answer_count
+    manual_ai["valid_json_providers"] = valid_json_provider_runs
+    manual_ai["expected_answer_count"] = expected_answer_count
+    manual_ai["complete"] = bool(
+        manual_ai["available"]
+        and provider_run_count > 0
+        and expected_answer_count > 0
+        and answer_count >= expected_answer_count
+    )
+    return manual_ai
+
+
 def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
     data=dict(snapshot)
     signals=[]
@@ -491,14 +535,9 @@ def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
         elif defn["kind"]=="audit": families.append(_audit_family(defn,signals,data))
         elif defn["kind"]=="seo": families.append(_seo_family(data,defn))
         else: families.append(_onsite_family(data,defn,signals))
-    manual_ai = dict(data.get("manual_ai_snapshot") or data.get("manual_ai_source") or {})
-    providers = list(manual_ai.get("providers") or [])
-    manual_ai["available"] = bool(manual_ai.get("available") and providers)
-    manual_ai["provider_count"] = int(manual_ai.get("provider_count") or len(providers))
-    manual_ai["answer_count"] = int(manual_ai.get("answer_count") or sum(int(p.get("result_count") or 0) for p in providers))
-    manual_ai["valid_json_providers"] = sum(1 for p in providers if isinstance(p.get("parsed"), dict))
-    manual_ai["expected_answer_count"] = int(manual_ai.get("expected_answer_count") or (manual_ai.get("provider_count", 0) * 4))
-    manual_ai["complete"] = bool(manual_ai.get("available") and manual_ai.get("provider_count", 0) > 0 and manual_ai.get("answer_count", 0) >= manual_ai["expected_answer_count"])
+    manual_ai = _normalize_manual_ai_snapshot(
+        dict(data.get("manual_ai_snapshot") or data.get("manual_ai_source") or {})
+    )
     data["manual_ai_snapshot"] = manual_ai
     data["manual_ai"] = manual_ai
     data["families"]=families
