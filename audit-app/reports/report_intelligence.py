@@ -328,6 +328,7 @@ def group_root_causes(families: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "pages_affected": c.get("pages_affected"),
                     "pages_tested": c.get("pages_tested"),
                     "confidence": c.get("confidence"),
+                    "signal_key": c.get("signal_key"),
                 }
                 for c in checks
             ],

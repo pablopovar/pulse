@@ -2429,29 +2429,173 @@ def public_report(report_id):
     return report_session_view(row["domain"], report_id)
 
 
+
+def _ensure_report_workflow_schema(con):
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS report_exclusion ("
+        "domain TEXT NOT NULL COLLATE NOCASE,"
+        "scope TEXT NOT NULL,"
+        "item_key TEXT NOT NULL,"
+        "page_id INTEGER NOT NULL DEFAULT -1,"
+        "created_at TEXT NOT NULL,"
+        "PRIMARY KEY(domain,scope,item_key,page_id))"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_report_exclusion_domain "
+        "ON report_exclusion(domain,scope)"
+    )
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS report_human_interpretation ("
+        "domain TEXT NOT NULL COLLATE NOCASE,"
+        "report_id TEXT NOT NULL,"
+        "content TEXT NOT NULL DEFAULT '',"
+        "updated_at TEXT NOT NULL,"
+        "PRIMARY KEY(domain,report_id))"
+    )
+    con.commit()
+
+
+def _load_report_exclusions(domain):
+    with research_db() as con:
+        _ensure_report_workflow_schema(con)
+        rows = con.execute(
+            "SELECT scope,item_key,page_id FROM report_exclusion "
+            "WHERE domain=? COLLATE NOCASE",
+            (domain,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _apply_report_exclusions(snapshot, domain):
+    # Work on a detached copy. Stored report_session snapshots stay immutable.
+    data = json.loads(json.dumps(snapshot))
+    exclusions = _load_report_exclusions(domain)
+    check_keys = {r["item_key"] for r in exclusions if r["scope"] == "check"}
+    categories = {r["item_key"] for r in exclusions if r["scope"] == "category"}
+    page_checks = {
+        (r["item_key"], int(r["page_id"]))
+        for r in exclusions
+        if r["scope"] == "page_check"
+    }
+
+    filtered = []
+    for signal in data.get("audit_signals") or []:
+        signal_key = str(signal.get("signal_key") or "")
+        category = str(signal.get("category") or "")
+        try:
+            page_id = int(signal.get("page_id"))
+        except Exception:
+            page_id = -1
+        if signal_key and signal_key in check_keys:
+            continue
+        if category and category in categories:
+            continue
+        if signal_key and (signal_key, page_id) in page_checks:
+            continue
+        filtered.append(signal)
+    data["audit_signals"] = filtered
+    return data
+
+
+def _load_human_interpretation(domain, report_id):
+    with research_db() as con:
+        _ensure_report_workflow_schema(con)
+        row = con.execute(
+            "SELECT content,updated_at FROM report_human_interpretation "
+            "WHERE domain=? COLLATE NOCASE AND report_id=?",
+            (domain, report_id),
+        ).fetchone()
+    return dict(row) if row else {"content": "", "updated_at": None}
+
+
+@app.post("/d/<domain>/report-workflow/exclusion")
+def report_workflow_exclusion(domain):
+    get_site(domain)
+    payload = request.get_json(silent=True) or {}
+    action = str(payload.get("action") or "exclude").strip().lower()
+    scope = str(payload.get("scope") or "").strip()
+    key = str(payload.get("key") or "").strip()
+    keys = [str(x).strip() for x in (payload.get("keys") or []) if str(x).strip()]
+    try:
+        page_id = int(payload.get("page_id") or -1)
+    except Exception:
+        page_id = -1
+
+    if scope not in {"check", "category", "page_check", "checks"}:
+        return {"ok": False, "error": "invalid scope"}, 400
+
+    if scope == "checks":
+        target_rows = [("check", x, -1) for x in keys]
+    elif key:
+        target_rows = [(scope, key, page_id if scope == "page_check" else -1)]
+    else:
+        return {"ok": False, "error": "missing key"}, 400
+
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with research_db() as con:
+        _ensure_report_workflow_schema(con)
+        for row_scope, row_key, row_page_id in target_rows:
+            if action == "include":
+                con.execute(
+                    "DELETE FROM report_exclusion "
+                    "WHERE domain=? COLLATE NOCASE AND scope=? AND item_key=? AND page_id=?",
+                    (domain, row_scope, row_key, row_page_id),
+                )
+            else:
+                con.execute(
+                    "INSERT OR IGNORE INTO report_exclusion"
+                    "(domain,scope,item_key,page_id,created_at) VALUES (?,?,?,?,?)",
+                    (domain, row_scope, row_key, row_page_id, now),
+                )
+        con.commit()
+    return {"ok": True, "action": action, "count": len(target_rows)}
+
+
+@app.post("/d/<domain>/reports/<report_id>/human-interpretation")
+def save_report_human_interpretation(domain, report_id):
+    get_site(domain)
+    session = load_report_session(RESEARCH_DB, domain, report_id)
+    if not session:
+        abort(404)
+    payload = request.get_json(silent=True) or {}
+    content = str(payload.get("content") or "")
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with research_db() as con:
+        _ensure_report_workflow_schema(con)
+        con.execute(
+            "INSERT INTO report_human_interpretation(domain,report_id,content,updated_at) "
+            "VALUES (?,?,?,?) "
+            "ON CONFLICT(domain,report_id) DO UPDATE SET "
+            "content=excluded.content,updated_at=excluded.updated_at",
+            (domain, report_id, content, now),
+        )
+        con.commit()
+    return {"ok": True, "updated_at": now}
+
+
 @app.get("/d/<domain>/reports/<report_id>")
 def report_session_view(domain, report_id):
     site = get_site(domain)
     session = load_report_session(RESEARCH_DB, domain, report_id)
     if not session:
         abort(404)
-    report = prepare_report_view(session["snapshot"])
+
+    effective_snapshot = _apply_report_exclusions(session["snapshot"], domain)
+    report = prepare_report_view(effective_snapshot)
 
     live_manual_ai = manual_ai_source_for_report(domain)
     report["manual_ai_source"] = live_manual_ai
     report["manual_ai"] = live_manual_ai
+    human_interpretation = _load_human_interpretation(domain, report_id)
+
     return render_template(
         "full_report.html",
         sites=get_sites(),
         site=site,
         report_session=session,
         report=report,
+        human_interpretation=human_interpretation,
     )
-
-
-
-
-
 
 
 
@@ -2465,7 +2609,7 @@ def report_session_pdf(domain, report_id):
     safe_domain = re.sub(r"[^A-Za-z0-9._-]+", "-", domain).strip("-") or "domain"
     filename = f"{safe_domain}-audit-{report_id}.pdf"
     output_path = REPORTS_DIR / filename
-    build_full_report_pdf(session["snapshot"], output_path)
+    effective_snapshot = _apply_report_exclusions(session["snapshot"], domain)\n    build_full_report_pdf(effective_snapshot, output_path)
     return send_file(
         output_path,
         mimetype="application/pdf",

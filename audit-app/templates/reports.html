@@ -12,7 +12,7 @@
 <h2>Current pulse</h2>
 <div class="panel">
   <p><strong>Latest observation:</strong> {{ current.created_at }}</p>
-  <p><a class="button primary" href="https://visible-to-ai.povarchik.com/reports/{{ current.id }}" target="_blank" rel="noopener">Open current pulse</a></p>
+  <p><a class="button primary" href="{{ url_for('report_session_view', domain=site.domain, report_id=current.id) }}">Open full report</a></p>
 </div>
 
 {% if report_sessions|length > 1 %}
@@ -21,10 +21,10 @@
 <ul class="reports large">
 {% for r in report_sessions[1:] %}
   <li>
-    <a href="https://visible-to-ai.povarchik.com/reports/{{ r.id }}" target="_blank" rel="noopener">
+    <a href="{{ url_for('report_session_view', domain=site.domain, report_id=r.id) }}">
       {{ r.created_at }} | <code>{{ r.id }}</code>
     </a>
-    <a class="button small" href="https://visible-to-ai.povarchik.com/reports/{{ r.id }}" target="_blank" rel="noopener">View observation</a>
+    <a class="button small" href="{{ url_for('report_session_view', domain=site.domain, report_id=r.id) }}">View full observation</a>
   </li>
 {% endfor %}
 </ul>

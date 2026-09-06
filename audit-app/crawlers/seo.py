@@ -419,15 +419,32 @@ def discover_seed_urls(base_url: str, domain: str):
 
 
 def build_robot_parser(base_url: str):
+    # Fetch robots.txt with the same HTTP client/user-agent used for page crawling.
+    #
+    # RobotFileParser.read() performs its own urllib request. If a CDN/WAF
+    # returns 401/403 to that different request, RobotFileParser interprets it
+    # as "disallow all", creating false site-wide robots blocks.
+    #
+    # Only a successfully retrieved 2xx robots.txt is parsed. A failed or
+    # ambiguous robots fetch is unavailable evidence, never a block.
     p = urllib.parse.urlsplit(base_url)
     robots_url = urllib.parse.urlunsplit((p.scheme, p.netloc, "/robots.txt", "", ""))
-    rp = urllib.robotparser.RobotFileParser()
-    rp.set_url(robots_url)
+
+    result = fetch(robots_url)
+    status = result.get("status")
+
+    if not result.get("ok") or not status or not (200 <= status < 300):
+        detail = result.get("error") or (f"HTTP {status}" if status else "robots.txt unavailable")
+        return None, robots_url, detail
+
     try:
-        rp.read()
+        body = decode_body(result.get("body") or b"", result.get("content_type") or "")
+        rp = urllib.robotparser.RobotFileParser()
+        rp.set_url(robots_url)
+        rp.parse(body.splitlines())
         return rp, robots_url, None
     except Exception as exc:
-        return None, robots_url, str(exc)
+        return None, robots_url, f"robots.txt parse failed: {exc}"
 
 
 def ensure_schema(con):
