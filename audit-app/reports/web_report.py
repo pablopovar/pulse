@@ -509,7 +509,7 @@ def _apply_recommendation_tracking(root_causes, tracking):
 
 
 def _normalize_manual_ai_snapshot(manual_ai: dict[str, Any]) -> dict[str, Any]:
-    """Normalize both legacy and four-state Manual AI source shapes for report rendering."""
+    """Normalize Manual AI evidence for the active two-phase report model."""
     manual_ai = dict(manual_ai or {})
     provider_rows = []
 
@@ -598,16 +598,6 @@ def _normalize_manual_ai_snapshot(manual_ai: dict[str, Any]) -> dict[str, Any]:
         active_runs == 6
         and active_valid_json_runs == 6
         and active_answer_count == 24
-    )
-    manual_ai["expected_provider_runs"] = int(
-        manual_ai.get("expected_provider_runs") or
-        ((expected_answer_count // 4) if expected_answer_count else provider_run_count)
-    )
-    manual_ai["complete"] = bool(
-        manual_ai["available"]
-        and provider_run_count > 0
-        and expected_answer_count > 0
-        and answer_count >= expected_answer_count
     )
     return manual_ai
 

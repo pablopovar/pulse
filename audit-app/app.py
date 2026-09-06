@@ -425,25 +425,92 @@ def _parse_manual_provider_payload(raw):
 
 
 def manual_ai_source_for_report(domain):
-    source=load_manual_ai_source(domain); phase_rows=[]; total_answers=0; parsed_runs=0
-    for phase in ("phase1","phase2"):
-        states=[]
-        for state in ("state1","state2"):
-            providers=[]; prefix=f"{phase}_{state}"
-            for provider in ("chatgpt","claude","gemini"):
-                raw=str(source.get(f"{prefix}_{provider}_response") or "").strip()
-                if not raw: continue
-                parsed,err=_parse_manual_provider_payload(raw)
-                results=parsed.get("results",[]) if isinstance(parsed,dict) and isinstance(parsed.get("results"),list) else []
-                if parsed: parsed_runs+=1
-                total_answers+=len(results)
-                providers.append({"provider":provider,"raw_response":raw,"parsed":parsed,"parse_error":err,"result_count":len(results),"phase":phase,"state":state})
-            states.append({"state":state,"providers":providers,"provider_count":len(providers)})
-        phase_rows.append({"phase":phase,"states":states})
-    provider_runs=sum(s["provider_count"] for p in phase_rows for s in p["states"])
-    source["available"]=provider_runs>0; source["phases"]=phase_rows; source["provider_runs"]=provider_runs
-    source["answer_count"]=total_answers; source["expected_answer_count"]=provider_runs*4; source["valid_json_providers"]=parsed_runs
+    # Build report evidence from the active two-phase Manual AI workflow only.
+    source = load_manual_ai_source(domain)
+    phase_rows = []
+    total_answers = 0
+    parsed_runs = 0
+    provider_runs = 0
+
+    def parse_payload(raw):
+        text = str(raw or "").strip()
+        if not text:
+            return None
+
+        fence = re.match(r"^```(?:json)?\s*([\s\S]*?)\s*```$", text, re.I)
+        if fence:
+            text = fence.group(1).strip()
+
+        try:
+            value = json.loads(text)
+            return value if isinstance(value, dict) else None
+        except Exception:
+            pass
+
+        start = text.find("{")
+        if start < 0:
+            return None
+        try:
+            value, _end = json.JSONDecoder().raw_decode(text[start:])
+        except Exception:
+            return None
+        return value if isinstance(value, dict) else None
+
+    for phase in ("phase1", "phase2"):
+        prefix = f"{phase}_state2"
+        providers = []
+
+        for provider in ("chatgpt", "claude", "gemini"):
+            raw = source.get(f"{prefix}_{provider}_response") or ""
+            parsed = parse_payload(raw)
+            results = parsed.get("results") if isinstance(parsed, dict) else None
+            result_count = len(results) if isinstance(results, list) else 0
+
+            if str(raw).strip():
+                provider_runs += 1
+            if parsed is not None:
+                parsed_runs += 1
+                total_answers += result_count
+
+            providers.append({
+                "provider": provider,
+                "response": raw,
+                "parsed": parsed,
+                "result_count": result_count,
+            })
+
+        phase_rows.append({
+            "phase": phase,
+            "states": [{
+                "state": "retrieval_enabled",
+                "providers": providers,
+                "provider_count": sum(
+                    1 for p in providers if str(p["response"]).strip()
+                ),
+            }],
+        })
+
+    source["available"] = provider_runs > 0
+    source["phases"] = phase_rows
+    source["provider_runs"] = provider_runs
+    source["expected_provider_runs"] = 6
+    source["provider_count"] = len({
+        p["provider"]
+        for phase_row in phase_rows
+        for state in phase_row["states"]
+        for p in state["providers"]
+        if str(p["response"]).strip()
+    })
+    source["answer_count"] = total_answers
+    source["expected_answer_count"] = 24
+    source["valid_json_providers"] = parsed_runs
+    source["complete"] = bool(
+        provider_runs == 6
+        and parsed_runs == 6
+        and total_answers == 24
+    )
     return source
+
 
 def ensure_domain_ready(domain):
     now=datetime.now(timezone.utc).isoformat(timespec="seconds")

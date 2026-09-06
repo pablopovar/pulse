@@ -788,7 +788,7 @@
         <div class="cards ai-source-cards">
           <div class="card"><span>Providers</span><strong>{{ mai_snapshot.get('provider_count') or 0 }}</strong></div>
           <div class="card"><span>Question answers parsed</span><strong>{{ mai_snapshot.get('answer_count') or 0 }}/{{ mai_snapshot.get('expected_answer_count') or 0 }}</strong></div>
-          <div class="card"><span>Structured responses</span><strong>{{ mai_snapshot.get('valid_json_providers') or 0 }}/{{ mai_snapshot.get('expected_provider_runs') or mai_snapshot.get('provider_runs') or 0 }}</strong></div>
+          <div class="card"><span>Structured provider-phase runs</span><strong>{{ mai_snapshot.get('valid_json_providers') or 0 }}/{{ mai_snapshot.get('expected_provider_runs') or 6 }}</strong></div>
           <div class="card"><span>Observed</span><strong class="small-value">{{ mai_snapshot.get('updated_at') or '—' }}</strong></div>
         </div>
         {% if not mai_snapshot.get('complete') %}<div class="notice">The AI response source is present but incomplete or partially unparsed. Missing or malformed responses are treated as unavailable evidence, never as entity absence.</div>{% endif %}
