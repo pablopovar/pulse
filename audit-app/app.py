@@ -2417,6 +2417,52 @@ def public_report_static(filename):
     return send_from_directory(APP_DIR / "static", filename)
 
 
+
+@app.post("/reports/<report_id>/reply")
+def public_report_note_reply(report_id):
+    payload = request.get_json(silent=True) or {}
+    key = str(payload.get("key") or "").strip()
+    content = str(payload.get("content") or "").strip()
+
+    if not key or not content:
+        return {"ok": False, "error": "missing note key or reply"}, 400
+
+    with research_db() as con:
+        _ensure_report_conversation_schema(con)
+
+        report_row = con.execute(
+            "SELECT domain FROM report_session WHERE id=? LIMIT 1",
+            (report_id,),
+        ).fetchone()
+        if not report_row:
+            return {"ok": False, "error": "report not found"}, 404
+
+        domain = report_row["domain"]
+        note = con.execute(
+            "SELECT discussion_enabled FROM report_note "
+            "WHERE domain=? COLLATE NOCASE AND note_key=?",
+            (domain, key),
+        ).fetchone()
+
+        if not note or not bool(note["discussion_enabled"]):
+            return {"ok": False, "error": "discussion is not enabled for this note"}, 403
+
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        cur = con.execute(
+            "INSERT INTO report_note_reply(domain,note_key,author_role,content,created_at) "
+            "VALUES (?,?,?,?,?)",
+            (domain, key, "client", content, now),
+        )
+        con.commit()
+
+    return {
+        "ok": True,
+        "id": cur.lastrowid,
+        "created_at": now,
+        "author_role": "client",
+    }
+
+
 @app.get("/reports/<report_id>")
 def public_report(report_id):
     with research_db() as con:
@@ -2472,6 +2518,7 @@ def _apply_report_exclusions(snapshot, domain):
     exclusions = _load_report_exclusions(domain)
     check_keys = {r["item_key"] for r in exclusions if r["scope"] == "check"}
     categories = {r["item_key"] for r in exclusions if r["scope"] == "category"}
+    families = {r["item_key"] for r in exclusions if r["scope"] == "family"}
     page_checks = {
         (r["item_key"], int(r["page_id"]))
         for r in exclusions
@@ -2481,12 +2528,15 @@ def _apply_report_exclusions(snapshot, domain):
     filtered = []
     for signal in data.get("audit_signals") or []:
         signal_key = str(signal.get("signal_key") or "")
+        family = str(signal.get("family") or "")
         category = str(signal.get("category") or "")
         try:
             page_id = int(signal.get("page_id"))
         except Exception:
             page_id = -1
         if signal_key and signal_key in check_keys:
+            continue
+        if family and family in families:
             continue
         if category and category in categories:
             continue
@@ -2521,7 +2571,7 @@ def report_workflow_exclusion(domain):
     except Exception:
         page_id = -1
 
-    if scope not in {"check", "category", "page_check", "checks"}:
+    if scope not in {"check", "category", "page_check", "checks", "family"}:
         return {"ok": False, "error": "invalid scope"}, 400
 
     if scope == "checks":
@@ -2573,6 +2623,139 @@ def save_report_human_interpretation(domain, report_id):
     return {"ok": True, "updated_at": now}
 
 
+
+def _ensure_report_conversation_schema(con):
+    _ensure_report_workflow_schema(con)
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS report_note ("
+        "domain TEXT NOT NULL COLLATE NOCASE,"
+        "note_key TEXT NOT NULL,"
+        "content TEXT NOT NULL DEFAULT '',"
+        "discussion_enabled INTEGER NOT NULL DEFAULT 0,"
+        "updated_at TEXT NOT NULL,"
+        "PRIMARY KEY(domain,note_key))"
+    )
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS report_note_reply ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "domain TEXT NOT NULL COLLATE NOCASE,"
+        "note_key TEXT NOT NULL,"
+        "author_role TEXT NOT NULL,"
+        "content TEXT NOT NULL,"
+        "created_at TEXT NOT NULL)"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_report_note_reply_lookup "
+        "ON report_note_reply(domain,note_key,id)"
+    )
+    con.commit()
+
+
+def _load_report_notes(domain):
+    with research_db() as con:
+        _ensure_report_conversation_schema(con)
+        rows = con.execute(
+            "SELECT note_key,content,discussion_enabled,updated_at "
+            "FROM report_note WHERE domain=? COLLATE NOCASE",
+            (domain,),
+        ).fetchall()
+        replies = con.execute(
+            "SELECT id,note_key,author_role,content,created_at "
+            "FROM report_note_reply WHERE domain=? COLLATE NOCASE ORDER BY id",
+            (domain,),
+        ).fetchall()
+
+    notes = {
+        row["note_key"]: {
+            "content": row["content"],
+            "discussion_enabled": bool(row["discussion_enabled"]),
+            "updated_at": row["updated_at"],
+            "replies": [],
+        }
+        for row in rows
+    }
+    for row in replies:
+        notes.setdefault(
+            row["note_key"],
+            {"content": "", "discussion_enabled": False, "updated_at": None, "replies": []},
+        )["replies"].append(dict(row))
+    return notes
+
+
+@app.post("/d/<domain>/report-notes")
+def save_report_note(domain):
+    get_site(domain)
+    payload = request.get_json(silent=True) or {}
+    key = str(payload.get("key") or "").strip()
+    if not key:
+        return {"ok": False, "error": "missing note key"}, 400
+
+    content = str(payload.get("content") or "")
+    discussion_enabled = 1 if payload.get("discussion_enabled") else 0
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    with research_db() as con:
+        _ensure_report_conversation_schema(con)
+        con.execute(
+            "INSERT INTO report_note(domain,note_key,content,discussion_enabled,updated_at) "
+            "VALUES (?,?,?,?,?) "
+            "ON CONFLICT(domain,note_key) DO UPDATE SET "
+            "content=excluded.content,"
+            "discussion_enabled=excluded.discussion_enabled,"
+            "updated_at=excluded.updated_at",
+            (domain, key, content, discussion_enabled, now),
+        )
+        con.commit()
+
+    return {
+        "ok": True,
+        "updated_at": now,
+        "has_note": bool(content.strip()),
+        "discussion_enabled": bool(discussion_enabled),
+    }
+
+
+@app.post("/d/<domain>/report-notes/reply")
+def save_report_note_reply(domain):
+    get_site(domain)
+    payload = request.get_json(silent=True) or {}
+    key = str(payload.get("key") or "").strip()
+    content = str(payload.get("content") or "").strip()
+    author_role = str(payload.get("author_role") or "client").strip().lower()
+
+    if author_role not in {"owner", "client"}:
+        author_role = "client"
+    if not key or not content:
+        return {"ok": False, "error": "missing note key or reply"}, 400
+
+    with research_db() as con:
+        _ensure_report_conversation_schema(con)
+        note = con.execute(
+            "SELECT discussion_enabled FROM report_note "
+            "WHERE domain=? COLLATE NOCASE AND note_key=?",
+            (domain, key),
+        ).fetchone()
+        if not note or not bool(note["discussion_enabled"]):
+            return {"ok": False, "error": "discussion is not enabled for this note"}, 403
+
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        cur = con.execute(
+            "INSERT INTO report_note_reply(domain,note_key,author_role,content,created_at) "
+            "VALUES (?,?,?,?,?)",
+            (domain, key, author_role, content, now),
+        )
+        con.commit()
+
+    return {"ok": True, "id": cur.lastrowid, "created_at": now, "author_role": author_role}
+
+
+
+@app.get("/d/<domain>/report-notes.json")
+def report_notes_json(domain):
+    get_site(domain)
+    return {"ok": True, "notes": _load_report_notes(domain)}
+
+
 @app.get("/d/<domain>/reports/<report_id>")
 def report_session_view(domain, report_id):
     site = get_site(domain)
@@ -2587,6 +2770,7 @@ def report_session_view(domain, report_id):
     report["manual_ai_source"] = live_manual_ai
     report["manual_ai"] = live_manual_ai
     human_interpretation = _load_human_interpretation(domain, report_id)
+    report_notes = _load_report_notes(domain)
 
     return render_template(
         "full_report.html",
@@ -2595,6 +2779,7 @@ def report_session_view(domain, report_id):
         report_session=session,
         report=report,
         human_interpretation=human_interpretation,
+        report_notes=report_notes,
     )
 
 
@@ -2609,7 +2794,8 @@ def report_session_pdf(domain, report_id):
     safe_domain = re.sub(r"[^A-Za-z0-9._-]+", "-", domain).strip("-") or "domain"
     filename = f"{safe_domain}-audit-{report_id}.pdf"
     output_path = REPORTS_DIR / filename
-    effective_snapshot = _apply_report_exclusions(session["snapshot"], domain)\n    build_full_report_pdf(effective_snapshot, output_path)
+    effective_snapshot = _apply_report_exclusions(session["snapshot"], domain)
+    build_full_report_pdf(effective_snapshot, output_path)
     return send_file(
         output_path,
         mimetype="application/pdf",

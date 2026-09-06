@@ -350,7 +350,38 @@ def _audit_family(defn,signals,data=None):
             attach_history_to_check(check,finding_history)
         checks.sort(key=lambda c:(-float(c.get("value_score") or 0),STATUS_RANK.get(c.get("status"),99),c["title"]))
         categories.append({"name":category_name,"status":rollup_status([c["status"] for c in checks]),"checks":checks})
-    all_checks=[c for cat in categories for c in cat["checks"]]
+    # A logical check may be emitted into more than one category. It is still
+    # one finding: count, score and render it once per family, while retaining
+    # every category membership as metadata.
+    logical_checks = {}
+    deduped_categories = []
+    for category in categories:
+        kept = []
+        for check in category["checks"]:
+            logical_key = canonical_check_title(check.get("title") or check.get("signal_key") or "").strip().lower()
+            if not logical_key:
+                kept.append(check)
+                continue
+            existing = logical_checks.get(logical_key)
+            if existing is None:
+                check["category_memberships"] = [category["name"]]
+                logical_checks[logical_key] = check
+                kept.append(check)
+            else:
+                memberships = existing.setdefault("category_memberships", [existing.get("category") or category["name"]])
+                if category["name"] not in memberships:
+                    memberships.append(category["name"])
+        if kept:
+            category = dict(category)
+            category["checks"] = kept
+            category["status"] = rollup_status([c["status"] for c in kept])
+            deduped_categories.append(category)
+    categories = deduped_categories
+
+    all_checks=list(logical_checks.values()) + [
+        c for cat in categories for c in cat["checks"]
+        if not canonical_check_title(c.get("title") or c.get("signal_key") or "").strip()
+    ]
     priority=[c for c in all_checks if is_issue(c["status"])]
     reviews=[c for c in all_checks if is_review(c["status"])]
     unavailable=[c for c in all_checks if normalize_status(c["status"])=="DATA_UNAVAILABLE"]
@@ -512,6 +543,66 @@ def _normalize_manual_ai_snapshot(manual_ai: dict[str, Any]) -> dict[str, Any]:
     manual_ai["answer_count"] = answer_count
     manual_ai["valid_json_providers"] = valid_json_provider_runs
     manual_ai["expected_answer_count"] = expected_answer_count
+
+    # Active AI Visibility evidence model:
+    # 2 phases × 3 providers × 4 questions = 6 provider-phase runs / 24 answers.
+    # Legacy State 1 evidence may remain stored but does not count.
+    active_manual_ai_fields = [
+        ("phase1_state2", "chatgpt"),
+        ("phase1_state2", "claude"),
+        ("phase1_state2", "gemini"),
+        ("phase2_state2", "chatgpt"),
+        ("phase2_state2", "claude"),
+        ("phase2_state2", "gemini"),
+    ]
+
+    def _active_manual_ai_json(raw):
+        text = str(raw or "").strip()
+        if text.startswith("```") and text.endswith("```"):
+            lines = text.splitlines()
+            if len(lines) >= 3:
+                text = "\n".join(lines[1:-1]).strip()
+        try:
+            value = json.loads(text)
+            return value if isinstance(value, dict) else None
+        except Exception:
+            return None
+
+    active_runs = 0
+    active_valid_json_runs = 0
+    active_answer_count = 0
+    active_provider_names = set()
+
+    for prefix, provider in active_manual_ai_fields:
+        raw = manual_ai.get(f"{prefix}_{provider}_response") or ""
+        if not str(raw).strip():
+            continue
+        active_runs += 1
+        active_provider_names.add(provider)
+        parsed = _active_manual_ai_json(raw)
+        if parsed is None:
+            continue
+        active_valid_json_runs += 1
+        results = parsed.get("results")
+        if isinstance(results, list):
+            active_answer_count += len(results)
+
+    manual_ai["provider_runs"] = active_runs
+    manual_ai["expected_provider_runs"] = 6
+    manual_ai["provider_count"] = len(active_provider_names)
+    manual_ai["provider_names"] = sorted(active_provider_names)
+    manual_ai["answer_count"] = active_answer_count
+    manual_ai["valid_json_providers"] = active_valid_json_runs
+    manual_ai["expected_answer_count"] = 24
+    manual_ai["complete"] = bool(
+        active_runs == 6
+        and active_valid_json_runs == 6
+        and active_answer_count == 24
+    )
+    manual_ai["expected_provider_runs"] = int(
+        manual_ai.get("expected_provider_runs") or
+        ((expected_answer_count // 4) if expected_answer_count else provider_run_count)
+    )
     manual_ai["complete"] = bool(
         manual_ai["available"]
         and provider_run_count > 0

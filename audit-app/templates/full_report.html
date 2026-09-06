@@ -1,6 +1,53 @@
 {% extends "base.html" %}
 {% block title %}{{ site.domain }} · Living Domain Pulse{% endblock %}
 {% block content %}
+
+{% macro note_marker(note_key) -%}
+  {% set note = report_notes.get(note_key) or {} %}
+  <span class="pablo-note-marker{% if note.get('content') %} visible{% endif %}"
+        data-note-marker="{{ note_key }}"
+        title="Pablo's note">💬</span>
+{%- endmacro %}
+
+{% macro note_panel(note_key, label="Pablo's note", compact=True) -%}
+  {% set note = report_notes.get(note_key) or {} %}
+  <div class="pablo-note-panel{% if compact %} compact{% endif %}" data-note-panel="{{ note_key }}">
+    {% if request.endpoint != 'public_report' %}
+      <details class="pablo-note-edit"{% if note.get('content') %} open{% endif %}>
+        <summary>{{ label }} {{ note_marker(note_key) }}</summary>
+        <textarea data-note-text="{{ note_key }}" placeholder="Add a note…">{{ note.get('content') or '' }}</textarea>
+        <div class="pablo-note-tools">
+          <label><input type="checkbox" data-note-discussion="{{ note_key }}" {% if note.get('discussion_enabled') %}checked{% endif %}> Discussion</label>
+          <button type="button" class="button" data-save-note="{{ note_key }}">Save</button>
+          <span data-note-status="{{ note_key }}">{% if note.get('updated_at') %}Saved {{ note.get('updated_at') }}{% endif %}</span>
+        </div>
+      </details>
+    {% elif note.get('content') %}
+      <div class="pablo-note-public">
+        <strong>{{ label }}</strong>
+        <div>{{ note.get('content') }}</div>
+      </div>
+    {% endif %}
+
+    {% if note.get('discussion_enabled') %}
+      <div class="pablo-discussion" data-discussion="{{ note_key }}">
+        {% for reply in note.get('replies') or [] %}
+          <div class="pablo-discussion-message {{ reply.author_role }}">
+            <strong>{{ 'Pablo' if reply.author_role == 'owner' else 'Client' }}</strong>
+            <span>{{ reply.content }}</span>
+          </div>
+        {% endfor %}
+        <div class="pablo-discussion-reply">
+          <textarea data-reply-text="{{ note_key }}" placeholder="Reply…"></textarea>
+          <button type="button" class="button" data-send-reply="{{ note_key }}"
+                  data-author-role="{{ 'client' if request.endpoint == 'public_report' else 'owner' }}">Send</button>
+          <span data-reply-status="{{ note_key }}"></span>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+{%- endmacro %}
+
 {% set meta = report.get('report_metadata') or {} %}
 {% set mai_snapshot = report.get('manual_ai_snapshot') or report.get('manual_ai') or report.get('manual_ai_source') or {} %}
 <div class="report-document report-mode-living">
@@ -207,6 +254,413 @@
 .human-interpretation-actions{display:flex;gap:.65rem;align-items:center;margin-top:.55rem}
 .human-interpretation-status{font-size:.78rem;color:var(--muted,#64748b)}
 
+
+.pablo-note-marker{display:none;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;margin-left:.35rem;background:var(--brand-orange,#f04422);color:#fff;font-size:.72rem;font-weight:900;line-height:1;vertical-align:middle}
+.pablo-note-marker.visible{display:inline-flex}
+.pablo-note-panel{margin:.55rem 0 .8rem}
+.pablo-note-edit{border:1px solid var(--brand-line,#dedfe4);border-left:4px solid var(--family-accent,var(--brand-blue,#185ed8));border-radius:9px;background:#fff;padding:.65rem .8rem}
+.pablo-note-edit summary{cursor:pointer;font-size:.82rem;font-weight:750}
+.pablo-note-edit textarea,.pablo-discussion-reply textarea{width:100%;min-height:82px;resize:vertical;border:1px solid #cfd4dc;border-radius:8px;padding:.65rem;font:inherit;line-height:1.45;background:#fff;color:inherit;margin-top:.55rem}
+.pablo-note-tools{display:flex;align-items:center;gap:.65rem;flex-wrap:wrap;margin-top:.45rem;font-size:.76rem;color:var(--brand-muted,#626a78)}
+.pablo-note-tools label{display:inline-flex;align-items:center;gap:.35rem}
+.pablo-note-public{border-left:4px solid var(--family-accent,var(--brand-blue,#185ed8));padding:.6rem .8rem;background:#fff;margin:.55rem 0;white-space:pre-wrap}
+.pablo-discussion{border-top:1px solid var(--brand-line,#dedfe4);margin-top:.65rem;padding-top:.55rem}
+.pablo-discussion-message{display:grid;grid-template-columns:70px 1fr;gap:.5rem;padding:.42rem 0;font-size:.84rem}
+.pablo-discussion-message strong{font-size:.76rem}
+.pablo-discussion-reply{display:grid;grid-template-columns:1fr auto;gap:.5rem;align-items:end;margin-top:.45rem}
+.pablo-discussion-reply textarea{min-height:58px;margin:0}
+.pablo-discussion-reply span{grid-column:1/-1;font-size:.74rem;color:var(--brand-muted,#626a78)}
+.executive-lead-edit{margin:.35rem 0 1rem}
+.executive-lead-edit summary{cursor:pointer;color:var(--brand-blue,#185ed8);font-size:.78rem;font-weight:700}
+.family-note-slot{margin:.25rem 0 .9rem}
+.check-note-row td{padding-top:0!important;border-top:0!important}
+
+
+/* Compact per-check controls: keep rows clean; actions live at far right. */
+.report-document .report-table .pablo-note-marker{display:none!important}
+.report-document .check-note-row{display:none!important}
+.report-document .check-actions-head,.report-document .check-actions-cell{
+  width:64px;text-align:right;white-space:nowrap
+}
+.report-document .check-actions{
+  display:inline-flex;align-items:center;justify-content:flex-end;gap:.4rem
+}
+.report-document .check-action-toggle{
+  width:16px;height:16px;margin:0;cursor:pointer;
+  accent-color:var(--family-accent,var(--brand-blue,#185ed8))
+}
+.report-document .check-note-action{
+  width:18px;height:18px;border:0;border-radius:50%;padding:0;
+  display:inline-flex;align-items:center;justify-content:center;
+  cursor:pointer;font-size:.72rem;font-weight:900;line-height:1;
+  background:#eef1f5;color:#7b8492
+}
+.report-document .check-note-action.has-note{
+  background:var(--brand-orange,#f04422);color:#fff
+}
+.report-document .check-note-action:hover{outline:2px solid rgba(24,94,216,.18)}
+.report-document .report-include-label{cursor:default}
+.report-document .check-note-popover{
+  position:fixed;z-index:9999;right:28px;bottom:28px;width:min(520px,calc(100vw - 40px));
+  max-height:70vh;overflow:auto;background:#fff;border:1px solid var(--brand-line,#dedfe4);
+  border-top:4px solid var(--brand-orange,#f04422);border-radius:12px;
+  box-shadow:0 18px 50px rgba(17,19,26,.18);padding:1rem;display:none
+}
+.report-document .check-note-popover.open{display:block}
+.report-document .check-note-popover-head{
+  display:flex;justify-content:space-between;gap:1rem;align-items:center;margin-bottom:.65rem
+}
+.report-document .check-note-popover-head strong{font-size:.95rem}
+.report-document .check-note-popover-close{
+  border:0;background:transparent;font-size:1.25rem;line-height:1;cursor:pointer;color:#626a78
+}
+.report-document .check-note-popover textarea{
+  width:100%;min-height:130px;resize:vertical;border:1px solid #cfd4dc;border-radius:8px;
+  padding:.7rem;font:inherit;line-height:1.45;background:#fff;color:inherit
+}
+.report-document .check-note-popover-tools{
+  display:flex;align-items:center;gap:.65rem;flex-wrap:wrap;margin-top:.55rem;
+  font-size:.78rem;color:var(--brand-muted,#626a78)
+}
+.report-document .check-note-popover-tools label{
+  display:inline-flex;align-items:center;gap:.35rem
+}
+@media(max-width:700px){
+  .report-document .check-note-popover{right:12px;bottom:12px;width:calc(100vw - 24px)}
+}
+
+
+/* Compact report actions: annotations live behind tiny icons, not permanent bars. */
+.report-document .high-signal-item > .pablo-note-panel,
+.report-document .root-cause-card > .pablo-note-panel,
+.report-document .family-note-slot,
+.report-document .check-note-row{
+  display:none!important;
+}
+.report-document .high-signal-item,
+.report-document .root-cause-card,
+.report-document .family-header{
+  position:relative;
+}
+.report-document .compact-object-actions{
+  position:absolute;right:.65rem;bottom:.55rem;
+  display:inline-flex;align-items:center;gap:.42rem;z-index:3;
+}
+.report-document .family-header .compact-object-actions{
+  right:.35rem;bottom:.55rem;
+}
+.report-document .compact-object-actions .report-include-toggle{
+  width:16px;height:16px;margin:0;cursor:pointer;
+  accent-color:var(--family-accent,var(--brand-blue,#185ed8));
+}
+.report-document .compact-note-action{
+  width:18px;height:18px;border:0;border-radius:50%;padding:0;
+  display:inline-flex;align-items:center;justify-content:center;
+  cursor:pointer;font-size:.72rem;font-weight:900;line-height:1;
+  background:#eef1f5;color:#7b8492;
+}
+.report-document .compact-note-action.has-note{
+  background:var(--brand-orange,#f04422);color:#fff;
+}
+.report-document .compact-note-action:hover{
+  outline:2px solid rgba(24,94,216,.18);
+}
+.report-document .high-signal-item{padding-bottom:2.2rem!important}
+.report-document .root-cause-card{padding-bottom:2.35rem!important}
+.report-document .family-header{padding-bottom:1.7rem}
+
+
+/* Client report view: report only, no admin/workflow controls. */
+.public-report-view .report-include-toggle,
+.public-report-view .report-include-label > input,
+.public-report-view .check-action-toggle,
+.public-report-view .compact-object-actions input[type="checkbox"],
+.public-report-view .pablo-note-edit,
+.public-report-view .family-note-slot,
+.public-report-view .check-note-row,
+.public-report-view .check-note-inline-row,
+.public-report-view .high-signal-item > .pablo-note-panel,
+.public-report-view .root-cause-card > .pablo-note-panel{
+  display:none!important;
+}
+.public-report-view .pablo-note-marker{
+  display:none!important;
+}
+.public-report-view .compact-note-action:not(.has-note),
+.public-report-view .check-note-action:not(.has-note){
+  display:none!important;
+}
+.public-report-view .client-note-trigger{
+  width:18px;height:18px;border:0;border-radius:50%;padding:0;
+  display:inline-flex;align-items:center;justify-content:center;
+  cursor:pointer;font-size:.72rem;font-weight:900;line-height:1;
+  background:var(--brand-orange,#f04422);color:#fff;
+}
+.public-report-view .client-note-trigger:hover{
+  outline:2px solid rgba(240,68,34,.18);
+}
+.public-report-view .client-object-actions{
+  position:absolute;right:.65rem;bottom:.55rem;
+  display:inline-flex;align-items:center;z-index:4;
+}
+.public-report-view .family-header .client-object-actions{
+  right:.35rem;bottom:.55rem;
+}
+.public-report-view .high-signal-item,
+.public-report-view .root-cause-card,
+.public-report-view .family-header{
+  position:relative;
+}
+.public-report-view .client-note-overlay{
+  position:fixed;inset:0;z-index:10000;display:none;
+  align-items:center;justify-content:center;padding:24px;
+  background:rgba(17,19,26,.34);
+}
+.public-report-view .client-note-overlay.open{display:flex}
+.public-report-view .client-note-dialog{
+  width:min(680px,100%);max-height:80vh;overflow:auto;
+  background:#fff;border:1px solid var(--brand-line,#dedfe4);
+  border-top:5px solid var(--brand-orange,#f04422);
+  border-radius:14px;box-shadow:0 22px 70px rgba(17,19,26,.24);
+  padding:1rem 1.1rem 1.15rem;
+}
+.public-report-view .client-note-dialog-head{
+  display:flex;justify-content:space-between;align-items:center;gap:1rem;
+  margin-bottom:.75rem;
+}
+.public-report-view .client-note-dialog-head strong{font-size:1rem}
+.public-report-view .client-note-dialog-close{
+  border:0;background:transparent;color:#626a78;cursor:pointer;
+  font-size:1.35rem;line-height:1;
+}
+.public-report-view .client-note-dialog .pablo-note-public{
+  display:block!important;margin:.35rem 0 .8rem;
+}
+.public-report-view .client-note-dialog .pablo-discussion{
+  display:block!important;
+}
+.public-report-view .client-note-dialog textarea{
+  width:100%;min-height:70px;resize:vertical;
+  border:1px solid #cfd4dc;border-radius:8px;padding:.65rem;
+  font:inherit;line-height:1.45;background:#fff;color:inherit;
+}
+
+
+.report-document .executive-fold{
+  display:grid;grid-template-columns:150px 150px minmax(0,1fr);
+  gap:1rem;align-items:stretch;margin:1rem 0 1.15rem
+}
+.report-document .headline-number-card,
+.report-document .severity-ring-card,
+.report-document .verdict-card{
+  border:1px solid var(--brand-line,#dedfe4);border-radius:14px;background:#fff
+}
+.report-document .headline-number-card{
+  display:flex;flex-direction:column;justify-content:center;padding:1rem 1.05rem
+}
+.report-document .headline-number-card strong{
+  font-size:3rem;line-height:.9;letter-spacing:-.055em;color:var(--brand-navy,#171044)
+}
+.report-document .headline-number-card span{
+  margin-top:.55rem;color:var(--brand-muted,#626a78);font-size:.77rem;line-height:1.25
+}
+.report-document .severity-ring-card{
+  display:flex;align-items:center;justify-content:center;padding:.7rem
+}
+.report-document .severity-ring{
+  --ring:#185ed8;width:104px;height:104px;border-radius:50%;
+  background:conic-gradient(var(--ring) 0 78%,#e8ebf0 78% 100%);
+  position:relative;display:flex;align-items:center;justify-content:center
+}
+.report-document .severity-ring:after{
+  content:"";position:absolute;inset:9px;border-radius:50%;background:#fff
+}
+.report-document .severity-ring span{
+  position:relative;z-index:1;text-align:center;font-weight:850;font-size:.82rem;
+  letter-spacing:.04em;text-transform:uppercase
+}
+.report-document .severity-ring.severity-critical{--ring:#b42318}
+.report-document .severity-ring.severity-high{--ring:#f04422}
+.report-document .severity-ring.severity-medium{--ring:#a85a00}
+.report-document .severity-ring.severity-low{--ring:#185ed8}
+.report-document .verdict-card{
+  display:flex;flex-direction:column;justify-content:center;padding:1.15rem 1.35rem;
+  border-left:5px solid var(--brand-blue,#185ed8)
+}
+.report-document .verdict-card .verdict-label{
+  font-size:.7rem;text-transform:uppercase;letter-spacing:.12em;
+  font-weight:800;color:var(--brand-blue,#185ed8);margin-bottom:.45rem
+}
+.report-document .verdict-card h2{
+  font-size:clamp(1.35rem,2.5vw,2rem);line-height:1.16;margin:0;
+  letter-spacing:-.035em
+}
+.report-document .verdict-card .executive-lead-edit{margin:.55rem 0 0}
+.report-document .movement-strip{
+  display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:.55rem;margin:0 0 1.4rem
+}
+.report-document .movement-item{
+  border:1px solid var(--brand-line,#dedfe4);border-radius:10px;
+  background:#fff;padding:.7rem .8rem
+}
+.report-document .movement-item span{
+  display:block;font-size:.7rem;color:var(--brand-muted,#626a78);
+  text-transform:uppercase;letter-spacing:.07em;font-weight:750
+}
+.report-document .movement-item strong{display:block;font-size:1.55rem;margin-top:.15rem}
+.report-document .movement-item.improved,
+.report-document .movement-item.resolved{border-top:3px solid #157f3d}
+.report-document .movement-item.worsened{border-top:3px solid #b42318}
+.report-document .movement-item.new{border-top:3px solid var(--brand-blue,#185ed8)}
+.report-document .movement-item.unchanged{border-top:3px solid #8b93a1}
+@media(max-width:850px){
+  .report-document .executive-fold{grid-template-columns:1fr 1fr}
+  .report-document .verdict-card{grid-column:1/-1}
+}
+@media(max-width:620px){
+  .report-document .executive-fold{grid-template-columns:1fr}
+  .report-document .verdict-card{grid-column:auto}
+  .report-document .movement-strip{grid-template-columns:1fr 1fr}
+}
+
+
+/* Notes/discussion are human conversation, not audit failures. */
+.report-document .compact-note-action,
+.report-document .check-note-action,
+.report-document .client-note-trigger,
+.report-document .pablo-note-marker{
+  background:#eef0ff!important;
+  color:#4f46a5!important;
+}
+.report-document .compact-note-action.has-note,
+.report-document .check-note-action.has-note,
+.report-document .client-note-trigger,
+.report-document .pablo-note-marker.visible{
+  background:#5b52c7!important;
+  color:#fff!important;
+}
+.report-document .compact-note-action:hover,
+.report-document .check-note-action:hover,
+.report-document .client-note-trigger:hover{
+  outline:2px solid rgba(91,82,199,.20)!important;
+}
+
+/* Client discussion drawer: report remains visible while conversation is open. */
+.public-report-view .client-note-overlay{
+  position:fixed!important;
+  inset:auto 0 0 auto!important;
+  z-index:10000!important;
+  display:block!important;
+  width:min(460px,92vw)!important;
+  height:100vh!important;
+  padding:0!important;
+  background:transparent!important;
+  pointer-events:none!important;
+  transform:translateX(102%)!important;
+  transition:transform .22s ease!important;
+}
+.public-report-view .client-note-overlay.open{
+  display:block!important;
+  transform:translateX(0)!important;
+}
+.public-report-view .client-note-dialog{
+  width:100%!important;
+  height:100%!important;
+  max-height:none!important;
+  overflow:auto!important;
+  border:0!important;
+  border-left:1px solid var(--brand-line,#dedfe4)!important;
+  border-top:5px solid #5b52c7!important;
+  border-radius:0!important;
+  box-shadow:-18px 0 50px rgba(17,19,26,.14)!important;
+  padding:1.1rem 1.15rem 1.3rem!important;
+  pointer-events:auto!important;
+  background:#fff!important;
+}
+.public-report-view .client-note-dialog-head{
+  position:sticky!important;
+  top:0!important;
+  z-index:2!important;
+  background:#fff!important;
+  padding:.15rem 0 .8rem!important;
+  margin-bottom:.85rem!important;
+  border-bottom:1px solid var(--brand-line,#dedfe4)!important;
+}
+.public-report-view .client-note-dialog-close{
+  width:32px!important;height:32px!important;border-radius:50%!important;
+  background:#f3f4f7!important;
+}
+.public-report-view .client-note-dialog .pablo-note-public{
+  border-left-color:#5b52c7!important;
+}
+@media(max-width:760px){
+  .public-report-view .client-note-overlay{
+    width:100vw!important;
+  }
+}
+
+
+/* Highest-value actions: compact by default, details on demand. */
+.report-document .root-cause-card.compact-action-card{
+  min-height:0!important;
+  padding-bottom:1rem!important;
+}
+.report-document .root-cause-card.compact-action-card .action-details{
+  margin-top:.65rem!important;
+  border-top:1px solid var(--brand-line,#dedfe4);
+  padding-top:.55rem;
+}
+.report-document .root-cause-card.compact-action-card .action-details > summary{
+  cursor:pointer;
+  font-weight:750;
+  color:var(--brand-blue,#185ed8);
+  font-size:.8rem;
+  list-style:none;
+}
+.report-document .root-cause-card.compact-action-card .action-details > summary::-webkit-details-marker{
+  display:none;
+}
+.report-document .root-cause-card.compact-action-card .action-details > summary:before{
+  content:"▸";
+  display:inline-block;
+  margin-right:.35rem;
+  transition:transform .15s ease;
+}
+.report-document .root-cause-card.compact-action-card .action-details[open] > summary:before{
+  transform:rotate(90deg);
+}
+.report-document .root-cause-card.compact-action-card .action-details-body{
+  margin-top:.55rem;
+}
+.report-document .root-cause-card.compact-action-card .action-details-body p{
+  margin:.42rem 0;
+}
+.report-document .root-cause-card.compact-action-card .action-details-body > p:first-child{
+  display:none;
+}
+
+/* Admin note thread: show client replies inside the same note editor. */
+.report-document .admin-note-thread{
+  margin-top:.7rem;
+  padding-top:.65rem;
+  border-top:1px solid var(--brand-line,#dedfe4);
+}
+.report-document .admin-note-thread:empty{display:none}
+.report-document .admin-thread-message{
+  display:grid;
+  grid-template-columns:70px 1fr;
+  gap:.55rem;
+  padding:.4rem 0;
+  font-size:.82rem;
+}
+.report-document .admin-thread-message strong{
+  font-size:.74rem;
+  color:var(--brand-muted,#626a78);
+}
+.report-document .admin-thread-message.client strong{color:#5b52c7}
+.report-document .admin-thread-message.owner strong{color:var(--brand-blue,#185ed8)}
+
 @media print{.report-document details:not([open])>*:not(summary){display:none}.report-document .report-controls,.report-document .family-collapse-toggle,.report-document .interactive-evidence,.report-document .report-quality-ui{display:none!important}}
 </style>
 
@@ -214,36 +668,64 @@
   <div>
     <div class="report-kicker">LIVING DOMAIN PULSE</div>
     <h1>{{ site.domain }}</h1>
-    <div class="report-meta">
-      <span>Current observation · {{ report_session.id }}</span>
-      <span>Updated {{ meta.get('pulse_updated_at') or report_session.created_at }}</span>
-      {% if report.audit %}
-      <span>Audit run #{{ report.audit.id }} · {{ report.audit.completed_at or report.audit.started_at }}</span>
-      <span>{{ report.audit.scope }} · {{ report.audit_summary.pages_audited if report.audit_summary else 0 }} pages analyzed</span>
-      {% endif %}
-      <span>Baseline {{ meta.get('baseline_date') or '—' }}</span>
-      <span>Methodology {{ meta.get('methodology_version') or report.methodology_version }} · scoring {{ meta.get('scoring_version') or report.scoring_version }}</span>
-    </div>
   </div>
   {% if request.endpoint != 'public_report' %}
   <div class="heading-actions">
     {% if report.report_quality and report.report_quality.blocking %}<span class="button export-blocked" title="Resolve report-quality blockers before export">Export blocked</span>{% else %}<a class="button primary" href="{{ url_for('report_session_pdf', domain=site.domain, report_id=report_session.id) }}">Export PDF</a>{% endif %}
     <a class="button" href="{{ url_for('reports', domain=site.domain) }}">Observation history</a>
+    <a class="button" href="https://visible-to-ai.povarchik.com/reports/{{ report_session.id }}" target="_blank" rel="noopener">Client view</a>
     <a class="button about-report-link" href="#about-this-report">About this report</a>
   </div>
   {% endif %}
 </header>
 
-{% if report.high_signal_findings %}
-<div class="executive-lead">{{ report.high_signal_findings[0].message }}</div>
-{% endif %}
+
+{% set opening_note = report_notes.get('executive:lead') or {} %}
+{% set executive_finding = report.high_signal_findings[0] if report.high_signal_findings else {} %}
+{% set executive_action = report.top_actions[0] if report.top_actions else {} %}
+{% set pulse = report.pulse_summary or {} %}
+<section class="executive-fold" aria-label="Executive summary">
+  <div class="headline-number-card">
+    <strong>{{ executive_action.pages_affected or (report.audit_summary.pages_audited if report.audit_summary else 0) or 0 }}</strong>
+    <span>pages affected by the highest-priority observed pattern</span>
+  </div>
+  <div class="severity-ring-card">
+    <div class="severity-ring severity-{{ (executive_action.severity or 'observed')|lower }}">
+      <span>{{ executive_action.severity or 'Observed' }}</span>
+    </div>
+  </div>
+  <div class="verdict-card">
+    <div class="verdict-label">Current verdict</div>
+    <h2>{{ opening_note.get('content') or executive_finding.get('title') or 'Current observations are available for review.' }}</h2>
+    {% if request.endpoint != 'public_report' %}
+    <details class="executive-lead-edit">
+      <summary>Edit opening statement</summary>
+      {{ note_panel('executive:lead', 'Opening statement', True) }}
+    </details>
+    {% endif %}
+  </div>
+</section>
+
+<section class="movement-strip" aria-label="Change since prior observation">
+  <div class="movement-item resolved"><span>Resolved</span><strong>{{ pulse.get('resolved',0) }}</strong></div>
+  <div class="movement-item improved"><span>Improved</span><strong>{{ pulse.get('improved',0) }}</strong></div>
+  <div class="movement-item worsened"><span>Worsened</span><strong>{{ pulse.get('worsened',0) }}</strong></div>
+  <div class="movement-item new"><span>New</span><strong>{{ pulse.get('new',0) }}</strong></div>
+  <div class="movement-item unchanged"><span>No movement</span><strong>{{ pulse.get('unchanged',0) }}</strong></div>
+</section>
 
 <section class="report-high-signal">
   <div class="report-kicker">WHAT MATTERS MOST NOW</div>
   <h2>High-signal findings</h2>
   <div class="high-signal-list">
-    {% for finding in report.high_signal_findings[:4] %}
-    <article class="high-signal-item"><strong>{{ finding.title }}</strong><p>{{ finding.message }}</p><small>{{ finding.source }}{% if finding.confidence %} · {{ finding.confidence }} confidence{% endif %}</small></article>
+    {% for finding in report.high_signal_findings[1:5] %}
+    {% set finding_note_key = 'top-finding:' ~ (finding.get('root_cause_id') or finding.title) %}
+    <article class="high-signal-item">
+      <strong>{{ finding.title }} {{ note_marker(finding_note_key) }}</strong>
+      <p>{{ finding.message }}</p>
+      <small>{{ finding.source }}{% if finding.confidence %} · {{ finding.confidence }} confidence{% endif %}</small>
+      {{ note_panel(finding_note_key, "Pablo's note", True) }}
+    </article>
     {% else %}<div class="panel"><p>No high-signal finding can be established from the current evidence yet.</p></div>{% endfor %}
   </div>
 </section>
@@ -252,7 +734,8 @@
 <section class="report-high-signal">
   <div class="report-kicker">TOP ACTIONS</div>
   <h2>Highest-value actions</h2>
-  <div class="top-actions-grid">\n  {% for root in report.top_actions[:5] %}
+  <div class="top-actions-grid">
+  {% for root in report.top_actions[:5] %}
   {% set rec = root.recommendation_object or {} %}
   <article class="root-cause-card" data-family="{{ (root.family_names or [])|join(' | ') }}" data-workflow-block>
     <label class="report-include-label">
@@ -260,8 +743,10 @@
              data-ignore-scope="checks"
              data-ignore-keys="{{ root.supporting_checks|map(attribute='signal_key')|select|join(',') }}"
              aria-label="Include {{ root.title }} in report">
-      <span>{{ root.title }}</span>
+      {% set action_note_key = 'action:' ~ root.id %}
+      <span>{{ root.title }} {{ note_marker(action_note_key) }}</span>
     </label>
+    {{ note_panel(action_note_key, "Pablo's note", True) }}
     <div class="root-cause-meta"><span>{{ root.pages_affected }} affected pages</span><span>{{ root.supporting_checks|length }} supporting checks</span><span>{{ root.confidence }} confidence</span><span>Recommendation: {{ rec.status or 'open' }}</span></div>
     <p><strong>Problem:</strong> {{ rec.problem }}</p>
     <p><strong>Why it matters:</strong> {{ rec.why_it_matters }}</p>
@@ -290,7 +775,9 @@
 
 {% for family in report.families %}
 <section id="{{ family.id }}" class="report-family family-{{ family.id }} {% if family.id in report.technical_family_ids %}family-collapsed{% endif %}" data-family="{{ family.id }}">
-  <header class="family-header"><div><div class="family-number">{{ loop.index }}</div><h2>{{ family.name }}</h2><div class="department-tags">{{ family.departments }}</div><p>{{ family.purpose }}</p></div></header>
+  {% set family_note_key = 'section:' ~ family.id %}
+  <header class="family-header"><div><div class="family-number">{{ loop.index }}</div><h2>{{ family.name }} {{ note_marker(family_note_key) }}</h2><div class="department-tags">{{ family.departments }}</div><p>{{ family.purpose }}</p></div></header>
+  <div class="family-note-slot">{{ note_panel(family_note_key, "Pablo's note", True) }}</div>
   <button type="button" class="family-collapse-toggle interactive-evidence" aria-expanded="{% if family.id in report.technical_family_ids %}false{% else %}true{% endif %}">{% if family.id in report.technical_family_ids %}Expand section{% else %}Collapse section{% endif %}</button>
 
   {% if family.kind == 'ai' %}
@@ -301,7 +788,7 @@
         <div class="cards ai-source-cards">
           <div class="card"><span>Providers</span><strong>{{ mai_snapshot.get('provider_count') or 0 }}</strong></div>
           <div class="card"><span>Question answers parsed</span><strong>{{ mai_snapshot.get('answer_count') or 0 }}/{{ mai_snapshot.get('expected_answer_count') or 0 }}</strong></div>
-          <div class="card"><span>Structured responses</span><strong>{{ mai_snapshot.get('valid_json_providers') or 0 }}/{{ mai_snapshot.get('provider_count') or 0 }}</strong></div>
+          <div class="card"><span>Structured responses</span><strong>{{ mai_snapshot.get('valid_json_providers') or 0 }}/{{ mai_snapshot.get('expected_provider_runs') or mai_snapshot.get('provider_runs') or 0 }}</strong></div>
           <div class="card"><span>Observed</span><strong class="small-value">{{ mai_snapshot.get('updated_at') or '—' }}</strong></div>
         </div>
         {% if not mai_snapshot.get('complete') %}<div class="notice">The AI response source is present but incomplete or partially unparsed. Missing or malformed responses are treated as unavailable evidence, never as entity absence.</div>{% endif %}
@@ -349,8 +836,10 @@
                      data-ignore-scope="check"
                      data-ignore-key="{{ check.signal_key }}"
                      aria-label="Include {{ check.title }} in report">
-              <span>{{ check.title }}</span>
-            </label><div class="history-note">{{ check.category }}</div></td><td><span class="status-pill status-pill-{{ check.status|lower }}">{{ check.status }}</span></td><td><span class="change-pill change-{{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span>{% if check.observed_at %}<div class="history-note">Observed {{ check.observed_at }}</div>{% endif %}</td><td>{{ check.pages_affected }} of {{ check.pages_tested }}</td><td class="value-score" data-value="{{ check.value_score or 0 }}">{{ '%.2f'|format(check.value_score or 0) }}{% if check.value_score_explanation.partial_inputs %}<div class="score-explain">Traffic data unavailable; score uses severity + prevalence only.</div>{% endif %}</td></tr>
+              {% set check_note_key = 'check:' ~ check.signal_key %}
+              <span>{{ check.title }} {{ note_marker(check_note_key) }}</span>
+            </label><div class="history-note">{{ (check.category_memberships or [check.category])|join(' · ') }}</div></td><td><span class="status-pill status-pill-{{ check.status|lower }}">{{ check.status }}</span></td><td><span class="change-pill change-{{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span>{% if check.observed_at %}<div class="history-note">Observed {{ check.observed_at }}</div>{% endif %}</td><td>{{ check.pages_affected }} of {{ check.pages_tested }}</td><td class="value-score" data-value="{{ check.value_score or 0 }}">{{ '%.2f'|format(check.value_score or 0) }}{% if check.value_score_explanation.partial_inputs %}<div class="score-explain">Traffic data unavailable; score uses severity + prevalence only.</div>{% endif %}</td></tr>
+      <tr class="check-note-row"><td colspan="5">{{ note_panel(check_note_key, "Pablo's note", True) }}</td></tr>
       {% else %}<tr><td colspan="5">No confirmed fail/partial findings currently require attention.</td></tr>{% endfor %}
       </tbody></table>
     </div>
@@ -359,7 +848,11 @@
     <div class="review-required-block">
       <h3>Review required</h3><p>These are not detected failures. A human determination is required before they can become confirmed findings.</p>
       <div class="table-wrap report-table"><table><thead><tr><th>Check</th><th>Status</th><th>Latest movement</th><th>Pages awaiting review</th></tr></thead><tbody>
-      {% for check in family.review_findings %}<tr><td><label class="report-include-label"><input class="report-include-toggle" type="checkbox" checked data-ignore-scope="check" data-ignore-key="{{ check.signal_key }}" aria-label="Include {{ check.title }} in report"><span>{{ check.title }}</span></label><div class="history-note">{{ check.category }}</div></td><td><span class="status-pill status-pill-manual_review">MANUAL_REVIEW</span></td><td><span class="change-pill change-{{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span></td><td>{{ check.pages_review_required }} of {{ check.pages_tested }}</td></tr>{% endfor %}
+      {% for check in family.review_findings %}
+      {% set review_note_key = 'check:' ~ check.signal_key %}
+      <tr><td><label class="report-include-label"><input class="report-include-toggle" type="checkbox" checked data-ignore-scope="check" data-ignore-key="{{ check.signal_key }}" aria-label="Include {{ check.title }} in report"><span>{{ check.title }} {{ note_marker(review_note_key) }}</span></label><div class="history-note">{{ (check.category_memberships or [check.category])|join(' · ') }}</div></td><td><span class="status-pill status-pill-manual_review">MANUAL_REVIEW</span></td><td><span class="change-pill change-{{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span></td><td>{{ check.pages_review_required }} of {{ check.pages_tested }}</td></tr>
+      <tr class="check-note-row"><td colspan="4">{{ note_panel(review_note_key, "Pablo's note", True) }}</td></tr>
+      {% endfor %}
       </tbody></table></div>
     </div>
     {% endif %}
@@ -375,7 +868,7 @@
                      data-ignore-scope="check"
                      data-ignore-key="{{ check.signal_key }}"
                      aria-label="Include {{ check.title }} in report">
-              <span>{{ check.title }}</span>
+              <span>{{ check.title }} {{ note_marker('check:' ~ check.signal_key) }}</span>
             </label></td><td><span class="status-pill status-pill-{{ check.status|lower }}">{{ check.status }}</span></td><td><span class="change-pill change-{{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span></td><td>{% if check.status == 'MANUAL_REVIEW' %}{{ check.pages_review_required }} review{% elif check.status == 'DATA_UNAVAILABLE' %}{{ check.pages_data_unavailable }} unavailable{% elif check.status == 'NOT_APPLICABLE' %}—{% else %}{{ check.pages_affected }} of {{ check.pages_tested }}{% endif %}</td><td>{% if check.is_confirmed_issue %}{{ '%.2f'|format(check.value_score or 0) }}{% else %}—{% endif %}</td></tr>
       <tr class="check-detail-row"><td colspan="5"><details><summary>Current evidence & history · {{ check.history_count }} observation{{ '' if check.history_count == 1 else 's' }}</summary>
         <div class="finding-pulse">
@@ -451,6 +944,21 @@
     <a href="#" class="button">Back to top ↑</a>
   </div>
   <p>Methodology, terminology, monitoring coverage, and report-quality notes are kept here so they remain available without competing with the executive findings.</p>
+  <details>
+    <summary>Observation metadata</summary>
+    <dl>
+      <dt>Observation ID</dt><dd>{{ report_session.id }}</dd>
+      <dt>Updated</dt><dd>{{ meta.get('pulse_updated_at') or report_session.created_at }}</dd>
+      {% if report.audit %}
+      <dt>Audit run</dt><dd>#{{ report.audit.id }} · {{ report.audit.completed_at or report.audit.started_at }}</dd>
+      <dt>Scope</dt><dd>{{ report.audit.scope }} · {{ report.audit_summary.pages_audited if report.audit_summary else 0 }} pages analyzed</dd>
+      {% endif %}
+      <dt>Baseline</dt><dd>{{ meta.get('baseline_date') or '—' }}</dd>
+      <dt>Methodology</dt><dd>{{ meta.get('methodology_version') or report.methodology_version }}</dd>
+      <dt>Scoring</dt><dd>{{ meta.get('scoring_version') or report.scoring_version }}</dd>
+    </dl>
+  </details>
+
 
   <details open>
     <summary>Methodology &amp; scope</summary>
@@ -481,8 +989,634 @@
   {% endif %}
 </section>
 
+
+<div id="check-note-popover" class="check-note-popover" aria-hidden="true">
+  <div class="check-note-popover-head">
+    <strong id="check-note-popover-title">Pablo's note</strong>
+    <button type="button" class="check-note-popover-close" id="check-note-popover-close" aria-label="Close">×</button>
+  </div>
+  <textarea id="check-note-popover-text" placeholder="Add a note…"></textarea>
+  <div id="check-note-popover-thread" class="admin-note-thread"></div>
+  <div class="check-note-popover-tools">
+    <label><input type="checkbox" id="check-note-popover-discussion"> Discussion</label>
+    <button type="button" class="button" id="check-note-popover-save">Save</button>
+    <span id="check-note-popover-status"></span>
+  </div>
+</div>
+
+
+<div id="client-note-overlay" class="client-note-overlay" aria-hidden="true">
+  <aside class="client-note-dialog" role="complementary" aria-labelledby="client-note-dialog-title">
+    <div class="client-note-dialog-head">
+      <strong id="client-note-dialog-title">Pablo's note</strong>
+      <button type="button" class="client-note-dialog-close" id="client-note-dialog-close" aria-label="Close">×</button>
+    </div>
+    <div id="client-note-dialog-body"></div>
+  </aside>
+</div>
+
 <script>
 (() => {
+
+
+
+  function compactNoteState(key){
+    const marker=document.querySelector(`[data-note-marker="${CSS.escape(key)}"]`);
+    const panel=document.querySelector(`[data-note-panel="${CSS.escape(key)}"]`);
+    const text=panel?.querySelector(`[data-note-text="${CSS.escape(key)}"]`);
+    return {
+      hasNote:!!marker?.classList.contains('visible') || !!text?.value.trim()
+    };
+  }
+
+  function makeCompactNoteButton(key,title){
+    const state=compactNoteState(key);
+    const button=document.createElement('button');
+    button.type='button';
+    button.className='compact-note-action' + (state.hasNote ? ' has-note' : '');
+    button.textContent='💬';
+    button.title="Note / discussion";
+    button.setAttribute('aria-label',`Pablo's note for ${title}`);
+    button.dataset.compactNoteKey=key;
+    button.addEventListener('click',()=>{
+      if(typeof openCheckNote==='function'){
+        openCheckNote(key,title,button);
+      }
+    });
+    return button;
+  }
+
+  function makeIncludeToggle(scope,key,keys,title){
+    const input=document.createElement('input');
+    input.type='checkbox';
+    input.checked=true;
+    input.className='report-include-toggle';
+    input.dataset.ignoreScope=scope;
+    if(key) input.dataset.ignoreKey=key;
+    if(keys) input.dataset.ignoreKeys=keys;
+    input.setAttribute('aria-label',`Include ${title} in report`);
+    input.addEventListener('change',()=>{
+      if(!input.checked && typeof excludeFromReport==='function') excludeFromReport(input);
+    });
+    return input;
+  }
+
+  // High-signal findings: tiny include + note icons at bottom-right.
+  document.querySelectorAll('.high-signal-item').forEach(card=>{
+    if(card.querySelector(':scope > .compact-object-actions')) return;
+    const title=(card.querySelector('strong')?.textContent || 'Finding').replace('!','').trim();
+    const marker=card.querySelector('[data-note-marker]');
+    const noteKey=marker?.dataset.noteMarker || ('top-finding:' + title);
+
+    const actions=document.createElement('span');
+    actions.className='compact-object-actions';
+
+    // High-signal finding itself is a presentation summary, so only note action here.
+    // Suppression is performed on its underlying Highest-value action/checks.
+    actions.appendChild(makeCompactNoteButton(noteKey,title));
+    card.appendChild(actions);
+  });
+
+  // Highest-value actions: existing checkbox moves to tiny bottom-right control + note icon.
+  document.querySelectorAll('.root-cause-card').forEach(card=>{
+    if(card.querySelector(':scope > .compact-object-actions')) return;
+    const title=(card.querySelector('.report-include-label span')?.textContent || card.querySelector('strong')?.textContent || 'Action').replace('!','').trim();
+    const existing=card.querySelector(':scope > .report-include-label .report-include-toggle');
+    const marker=card.querySelector('[data-note-marker]');
+    const noteKey=marker?.dataset.noteMarker || '';
+    const actions=document.createElement('span');
+    actions.className='compact-object-actions';
+
+    if(existing){
+      const label=existing.closest('.report-include-label');
+      actions.appendChild(existing);
+      if(label && !label.querySelector('input')) label.classList.remove('report-include-label');
+    }
+    if(noteKey) actions.appendChild(makeCompactNoteButton(noteKey,title));
+    card.appendChild(actions);
+  });
+
+  // Family headers: tiny whole-family include checkbox + note icon.
+  document.querySelectorAll('.report-family').forEach(section=>{
+    const header=section.querySelector(':scope > .family-header');
+    if(!header || header.querySelector('.compact-object-actions')) return;
+
+    const familyName=(header.querySelector('h2')?.textContent || section.dataset.family || 'Section').replace('!','').trim();
+    const marker=header.querySelector('[data-note-marker]');
+    const noteKey=marker?.dataset.noteMarker || ('section:' + (section.dataset.family || familyName));
+
+    const actions=document.createElement('span');
+    actions.className='compact-object-actions';
+    actions.appendChild(makeIncludeToggle('family',familyName,'',familyName));
+    actions.appendChild(makeCompactNoteButton(noteKey,familyName));
+    header.appendChild(actions);
+  });
+
+  // Keep compact ! state synchronized after a note is saved in the shared popover.
+  const originalPopoverSave=document.getElementById('check-note-popover-save');
+  originalPopoverSave?.addEventListener('click',()=>{
+    setTimeout(()=>{
+      const key=activeCheckNoteKey;
+      if(!key) return;
+      const has=!!checkNoteText?.value.trim();
+      document.querySelectorAll(`[data-compact-note-key="${CSS.escape(key)}"]`)
+        .forEach(btn=>btn.classList.toggle('has-note',has));
+    },250);
+  });
+
+
+  // Compact all per-check controls without changing the underlying report data.
+  const checkNotePopover=document.getElementById('check-note-popover');
+  const checkNoteTitle=document.getElementById('check-note-popover-title');
+  const checkNoteText=document.getElementById('check-note-popover-text');
+  const checkNoteDiscussion=document.getElementById('check-note-popover-discussion');
+  const checkNoteSave=document.getElementById('check-note-popover-save');
+  const checkNoteStatus=document.getElementById('check-note-popover-status');
+  let activeCheckNoteKey='';
+  let activeCheckNoteButton=null;
+
+  function reportNoteState(key){
+    const marker=document.querySelector(`[data-note-marker="${CSS.escape(key)}"]`);
+    const panel=document.querySelector(`[data-note-panel="${CSS.escape(key)}"]`);
+    const text=panel?.querySelector(`[data-note-text="${CSS.escape(key)}"]`);
+    const discussion=panel?.querySelector(`[data-note-discussion="${CSS.escape(key)}"]`);
+    return {
+      content:text?.value || '',
+      discussion:!!discussion?.checked,
+      hasNote:!!marker?.classList.contains('visible') || !!text?.value.trim()
+    };
+  }
+
+  function openCheckNote(key,title,button){
+    activeCheckNoteKey=key;
+    activeCheckNoteButton=button;
+    const state=reportNoteState(key);
+    checkNoteTitle.textContent=`Pablo's note · ${title}`;
+    checkNoteText.value=state.content;
+    checkNoteDiscussion.checked=state.discussion;
+    checkNoteStatus.textContent='';
+    checkNotePopover.classList.add('open');
+    checkNotePopover.setAttribute('aria-hidden','false');
+    checkNoteText.focus();
+  }
+
+  function closeCheckNote(){
+    checkNotePopover.classList.remove('open');
+    checkNotePopover.setAttribute('aria-hidden','true');
+    activeCheckNoteKey='';
+    activeCheckNoteButton=null;
+  }
+
+  document.getElementById('check-note-popover-close')?.addEventListener('click',closeCheckNote);
+
+  checkNoteSave?.addEventListener('click',async()=>{
+    if(!activeCheckNoteKey) return;
+    checkNoteSave.disabled=true;
+    checkNoteStatus.textContent='Saving…';
+    try{
+      const response=await fetch(reportNoteSaveUrl,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          key:activeCheckNoteKey,
+          content:checkNoteText.value,
+          discussion_enabled:!!checkNoteDiscussion.checked
+        })
+      });
+      const data=await response.json();
+      if(!response.ok || !data.ok) throw new Error(data.error || 'Could not save note');
+      checkNoteStatus.textContent='Saved ' + data.updated_at;
+      activeCheckNoteButton?.classList.toggle('has-note',!!data.has_note);
+
+      // Keep hidden legacy note controls synchronized for persistence/UI consistency.
+      document.querySelectorAll(`[data-note-text="${CSS.escape(activeCheckNoteKey)}"]`)
+        .forEach(el=>{el.value=checkNoteText.value});
+      document.querySelectorAll(`[data-note-discussion="${CSS.escape(activeCheckNoteKey)}"]`)
+        .forEach(el=>{el.checked=!!checkNoteDiscussion.checked});
+      document.querySelectorAll(`[data-note-marker="${CSS.escape(activeCheckNoteKey)}"]`)
+        .forEach(el=>el.classList.toggle('visible',!!data.has_note));
+    }catch(err){
+      checkNoteStatus.textContent=err.message || 'Could not save note';
+    }finally{
+      checkNoteSave.disabled=false;
+    }
+  });
+
+  document.querySelectorAll('.report-table table').forEach(table=>{
+    const rows=[...table.querySelectorAll('tbody > tr')];
+
+    // Add Actions heading only when this table actually contains check controls.
+    const hasCheckInputs=rows.some(row=>row.querySelector('.report-include-toggle[data-ignore-scope="check"]'));
+    if(!hasCheckInputs) return;
+    const headRow=table.querySelector('thead tr');
+    if(headRow && !headRow.querySelector('.check-actions-head')){
+      const th=document.createElement('th');
+      th.className='check-actions-head';
+      th.textContent='Actions';
+      headRow.appendChild(th);
+    }
+
+    rows.forEach(row=>{
+      const input=row.querySelector('.report-include-toggle[data-ignore-scope="check"]');
+      if(!input) return;
+
+      const signalKey=input.dataset.ignoreKey || '';
+      if(!signalKey) return;
+      const noteKey='check:' + signalKey;
+
+      // Pull the check title from the original label/first cell before moving the checkbox.
+      const firstCell=row.querySelector('td');
+      const titleText=(firstCell?.querySelector('span')?.textContent || firstCell?.textContent || 'Check')
+        .replace('!','').trim().split('\n')[0].trim();
+
+      // Remove empty wrapper label styling once checkbox moves out.
+      const oldLabel=input.closest('.report-include-label');
+
+      let actionCell=row.querySelector('.check-actions-cell');
+      if(!actionCell){
+        actionCell=document.createElement('td');
+        actionCell.className='check-actions-cell';
+        row.appendChild(actionCell);
+      }
+
+      const actions=document.createElement('span');
+      actions.className='check-actions';
+
+      input.classList.add('check-action-toggle');
+      actions.appendChild(input);
+
+      const state=reportNoteState(noteKey);
+      const noteButton=document.createElement('button');
+      noteButton.type='button';
+      noteButton.className='check-note-action' + (state.hasNote ? ' has-note' : '');
+      noteButton.textContent='💬';
+      noteButton.title="Note / discussion";
+      noteButton.setAttribute('aria-label',`Pablo's note for ${titleText}`);
+      noteButton.addEventListener('click',()=>openCheckNote(noteKey,titleText,noteButton));
+      actions.appendChild(noteButton);
+
+      actionCell.appendChild(actions);
+
+      if(oldLabel && !oldLabel.querySelector('input')){
+        oldLabel.classList.remove('report-include-label');
+      }
+    });
+  });
+
+  const reportNoteSaveUrl = {{ url_for('save_report_note', domain=site.domain)|tojson }};
+  {% if request.endpoint == 'public_report' %}
+  const reportNoteReplyUrl = {{ url_for('public_report_note_reply', report_id=report_session.id)|tojson }};
+  {% else %}
+  const reportNoteReplyUrl = {{ url_for('save_report_note_reply', domain=site.domain)|tojson }};
+  {% endif %}
+
+  async function saveReportNote(key){
+    const text = document.querySelector(`[data-note-text="${CSS.escape(key)}"]`);
+    const discussion = document.querySelector(`[data-note-discussion="${CSS.escape(key)}"]`);
+    const status = document.querySelector(`[data-note-status="${CSS.escape(key)}"]`);
+    if(!text) return;
+
+    if(status) status.textContent = 'Saving…';
+    try{
+      const response = await fetch(reportNoteSaveUrl,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          key,
+          content:text.value,
+          discussion_enabled:!!discussion?.checked
+        })
+      });
+      const data = await response.json();
+      if(!response.ok || !data.ok) throw new Error(data.error || 'Could not save note');
+
+      if(status) status.textContent = 'Saved ' + data.updated_at;
+      document.querySelectorAll(`[data-note-marker="${CSS.escape(key)}"]`)
+        .forEach(marker=>marker.classList.toggle('visible',!!data.has_note));
+
+      if(key === 'executive:lead'){
+        const lead = document.querySelector('.executive-lead');
+        if(lead && text.value.trim()) lead.textContent = text.value.trim();
+      }
+    }catch(err){
+      if(status) status.textContent = err.message || 'Could not save note';
+    }
+  }
+
+  document.querySelectorAll('[data-save-note]').forEach(button=>{
+    button.addEventListener('click',()=>saveReportNote(button.dataset.saveNote));
+  });
+  document.querySelectorAll('[data-note-discussion]').forEach(input=>{
+    input.addEventListener('change',()=>saveReportNote(input.dataset.noteDiscussion));
+  });
+
+  document.querySelectorAll('[data-send-reply]').forEach(button=>{
+    button.addEventListener('click',async()=>{
+      const key = button.dataset.sendReply;
+      const text = document.querySelector(`[data-reply-text="${CSS.escape(key)}"]`);
+      const status = document.querySelector(`[data-reply-status="${CSS.escape(key)}"]`);
+      if(!text || !text.value.trim()) return;
+
+      button.disabled = true;
+      if(status) status.textContent = 'Sending…';
+      try{
+        const response = await fetch(reportNoteReplyUrl,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({
+            key,
+            content:text.value.trim(),
+            author_role:button.dataset.authorRole || 'client'
+          })
+        });
+        const data = await response.json();
+        if(!response.ok || !data.ok) throw new Error(data.error || 'Could not send reply');
+
+        const discussion = document.querySelector(`[data-discussion="${CSS.escape(key)}"]`);
+        if(discussion){
+          const message = document.createElement('div');
+          message.className = 'pablo-discussion-message ' + data.author_role;
+          const who = document.createElement('strong');
+          who.textContent = data.author_role === 'owner' ? 'Pablo' : 'Client';
+          const body = document.createElement('span');
+          body.textContent = text.value.trim();
+          message.append(who, body);
+          discussion.insertBefore(message, discussion.querySelector('.pablo-discussion-reply'));
+        }
+        text.value = '';
+        if(status) status.textContent = 'Sent';
+      }catch(err){
+        if(status) status.textContent = err.message || 'Could not send reply';
+      }finally{
+        button.disabled = false;
+      }
+    });
+  });
+
+
+
+
+  async function parseReportJson(response){
+    const raw=await response.text();
+    let data=null;
+    try{
+      data=raw ? JSON.parse(raw) : {};
+    }catch(_err){
+      throw new Error(
+        response.ok
+          ? 'The server returned an invalid response.'
+          : `Reply failed (${response.status}).`
+      );
+    }
+    return data;
+  }
+
+  const isClientReport=document.body.classList.contains('public-report-view');
+
+  function clientNoteSource(key){
+    return document.querySelector(`[data-note-panel="${CSS.escape(key)}"]`);
+  }
+
+  function openClientNote(key,title){
+    const source=clientNoteSource(key);
+    if(!source) return;
+
+    const overlay=document.getElementById('client-note-overlay');
+    const body=document.getElementById('client-note-dialog-body');
+    const heading=document.getElementById('client-note-dialog-title');
+    if(!overlay || !body || !heading) return;
+
+    heading.textContent=`Discussion · ${title}`;
+    body.innerHTML='';
+    const clone=source.cloneNode(true);
+
+    // Client never gets owner editing controls.
+    clone.querySelectorAll('.pablo-note-edit,[data-save-note],[data-note-discussion]').forEach(el=>el.remove());
+    body.appendChild(clone);
+
+    // Rebind client reply button on the cloned discussion UI.
+    clone.querySelectorAll('[data-send-reply]').forEach(button=>{
+      button.addEventListener('click',async()=>{
+        const replyKey=button.dataset.sendReply;
+        const text=clone.querySelector(`[data-reply-text="${CSS.escape(replyKey)}"]`);
+        const status=clone.querySelector(`[data-reply-status="${CSS.escape(replyKey)}"]`);
+        if(!text || !text.value.trim()) return;
+
+        button.disabled=true;
+        if(status) status.textContent='Sending…';
+        try{
+          const response=await fetch(reportNoteReplyUrl,{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+              key:replyKey,
+              content:text.value.trim(),
+              author_role:'client'
+            })
+          });
+          const data=await parseReportJson(response);
+          if(!response.ok || !data.ok) throw new Error(data.error || 'Could not send reply');
+
+          const discussion=clone.querySelector(`[data-discussion="${CSS.escape(replyKey)}"]`);
+          if(discussion){
+            const message=document.createElement('div');
+            message.className='pablo-discussion-message client';
+            const who=document.createElement('strong');
+            who.textContent='Client';
+            const messageBody=document.createElement('span');
+            messageBody.textContent=text.value.trim();
+            message.append(who,messageBody);
+            discussion.insertBefore(message,discussion.querySelector('.pablo-discussion-reply'));
+          }
+          text.value='';
+          if(status) status.textContent='Sent';
+        }catch(err){
+          if(status) status.textContent=err.message || 'Could not send reply';
+        }finally{
+          button.disabled=false;
+        }
+      });
+    });
+
+    overlay.classList.add('open');
+    overlay.setAttribute('aria-hidden','false');
+  }
+
+  function closeClientNote(){
+    const overlay=document.getElementById('client-note-overlay');
+    overlay?.classList.remove('open');
+    overlay?.setAttribute('aria-hidden','true');
+  }
+
+  document.getElementById('client-note-dialog-close')?.addEventListener('click',closeClientNote);
+
+  if(isClientReport){
+    // Hide all admin-generated compact controls first.
+    document.querySelectorAll('.report-include-toggle').forEach(el=>el.remove());
+
+    // Any visible server-rendered marker means a note actually exists.
+    document.querySelectorAll('[data-note-marker].visible').forEach(marker=>{
+      const key=marker.dataset.noteMarker;
+      if(!key) return;
+
+      const source=clientNoteSource(key);
+      if(!source) return;
+
+      let container=marker.closest('.high-signal-item,.root-cause-card,.family-header,tr');
+      if(!container) return;
+
+      const title=(
+        container.querySelector('h2,strong,.finding-name,td')?.textContent ||
+        'Report item'
+      ).replace('!','').trim().split('\n')[0].trim();
+
+      // Check rows use the existing right-side action cell when present.
+      if(container.tagName==='TR'){
+        let cell=container.querySelector('.check-actions-cell');
+        if(!cell){
+          cell=document.createElement('td');
+          cell.className='check-actions-cell';
+          container.appendChild(cell);
+        }
+        if(cell.querySelector(`[data-client-note-key="${CSS.escape(key)}"]`)) return;
+
+        const button=document.createElement('button');
+        button.type='button';
+        button.className='client-note-trigger';
+        button.textContent='💬';
+        button.dataset.clientNoteKey=key;
+        button.title="Note / discussion";
+        button.setAttribute('aria-label',`Pablo's note for ${title}`);
+        button.addEventListener('click',()=>openClientNote(key,title));
+        cell.appendChild(button);
+        return;
+      }
+
+      if(container.querySelector(`.client-object-actions [data-client-note-key="${CSS.escape(key)}"]`)) return;
+      let actions=container.querySelector(':scope > .client-object-actions');
+      if(!actions){
+        actions=document.createElement('span');
+        actions.className='client-object-actions';
+        container.appendChild(actions);
+      }
+
+      const button=document.createElement('button');
+      button.type='button';
+      button.className='client-note-trigger';
+      button.textContent='💬';
+      button.dataset.clientNoteKey=key;
+      button.title="Note / discussion";
+      button.setAttribute('aria-label',`Pablo's note for ${title}`);
+      button.addEventListener('click',()=>openClientNote(key,title));
+      actions.appendChild(button);
+    });
+
+    // No administrative note icons survive on the client page.
+    document.querySelectorAll('.compact-note-action,.check-note-action').forEach(button=>{
+      button.style.display='none';
+    });
+  }
+
+
+
+  // Compact Highest-value action cards. Keep title + chips visible;
+  // collapse repeated explanatory copy and diagnostics behind one disclosure.
+  document.querySelectorAll('.root-cause-card').forEach(card=>{
+    if(card.classList.contains('compact-action-card')) return;
+
+    const directPs=[...card.children].filter(el=>el.tagName==='P');
+    const directDetails=[...card.children].filter(el=>el.tagName==='DETAILS');
+
+    if(!directPs.length && !directDetails.length){
+      card.classList.add('compact-action-card');
+      return;
+    }
+
+    const details=document.createElement('details');
+    details.className='action-details';
+
+    const summary=document.createElement('summary');
+    summary.textContent='Details';
+    details.appendChild(summary);
+
+    const body=document.createElement('div');
+    body.className='action-details-body';
+
+    [...directPs,...directDetails].forEach(el=>body.appendChild(el));
+    details.appendChild(body);
+
+    const actions=card.querySelector(':scope > .compact-object-actions');
+    if(actions) card.insertBefore(details,actions);
+    else card.appendChild(details);
+
+    card.classList.add('compact-action-card');
+  });
+
+  // Admin-side conversation refresh. Client replies are stored server-side;
+  // fetch the latest thread whenever a note opens, and keep it live while open.
+  const adminNotesUrl = {% if request.endpoint != 'public_report' %}{{ url_for('report_notes_json', domain=site.domain)|tojson }}{% else %}null{% endif %};
+  const adminThread=document.getElementById('check-note-popover-thread');
+  let adminThreadTimer=null;
+
+  function renderAdminThread(note){
+    if(!adminThread) return;
+    adminThread.innerHTML='';
+    const replies=note?.replies || [];
+    replies.forEach(reply=>{
+      const row=document.createElement('div');
+      row.className='admin-thread-message ' + (reply.author_role || 'client');
+
+      const who=document.createElement('strong');
+      who.textContent=reply.author_role==='owner' ? 'Pablo' : 'Client';
+
+      const body=document.createElement('span');
+      body.textContent=reply.content || '';
+
+      row.append(who,body);
+      adminThread.appendChild(row);
+    });
+  }
+
+  async function refreshAdminThread(key){
+    if(!adminNotesUrl || !key || !adminThread) return;
+    try{
+      const response=await fetch(adminNotesUrl,{headers:{'Accept':'application/json'}});
+      const raw=await response.text();
+      const data=raw ? JSON.parse(raw) : {};
+      if(!response.ok || !data.ok) return;
+      renderAdminThread((data.notes || {})[key] || {});
+    }catch(_err){
+      // Do not interrupt note editing if refresh fails.
+    }
+  }
+
+  const originalOpenCheckNote = typeof openCheckNote==='function' ? openCheckNote : null;
+  if(originalOpenCheckNote){
+    openCheckNote = function(key,title,button){
+      originalOpenCheckNote(key,title,button);
+      refreshAdminThread(key);
+
+      if(adminThreadTimer) clearInterval(adminThreadTimer);
+      adminThreadTimer=setInterval(()=>{
+        const popover=document.getElementById('check-note-popover');
+        if(!popover?.classList.contains('open')){
+          clearInterval(adminThreadTimer);
+          adminThreadTimer=null;
+          return;
+        }
+        refreshAdminThread(key);
+      },5000);
+    };
+  }
+
+  const originalClose=document.getElementById('check-note-popover-close');
+  originalClose?.addEventListener('click',()=>{
+    if(adminThreadTimer){
+      clearInterval(adminThreadTimer);
+      adminThreadTimer=null;
+    }
+  });
+
 
   const workflowUrl = {{ url_for('report_workflow_exclusion', domain=site.domain)|tojson }};
   async function excludeFromReport(input){

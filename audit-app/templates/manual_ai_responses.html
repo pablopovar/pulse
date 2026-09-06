@@ -16,21 +16,20 @@
   ('phase1','Phase 1 — Blind / Discovery','The audited brand, person, and domain are not named.'),
   ('phase2','Phase 2 — Named / Brand Interpretation','The brand is named. The comparison set remains human-controlled.')
 ] %}
-{% set states=[
-  ('state1','State 1 — Model Prior / No Tools','Answer from the provider’s existing model state. No tools, browsing, retrieval, or live search.'),
-  ('state2','State 2 — Web Grounded / Retrieval Enabled','Run the same phase with the provider’s available web/search/retrieval tools.')
-] %}
 
 {% for phase,phase_title,phase_desc in phases %}
 <section class="panel manual-ai-phase">
   <h2>{{ phase_title }}</h2>
   <p>{{ phase_desc }}</p>
   <div class="manual-ai-state-grid">
-  {% for state_key,state_title,state_desc in states %}
-    {% set prefix=phase ~ '_' ~ state_key %}
+    {# state2 is retained only as a legacy storage key. Product semantics are phase-only. #}
+    {% set prefix=phase ~ '_state2' %}
     <section class="manual-ai-state">
       <div class="section-head">
-        <div><h3>{{ state_title }}</h3><p>{{ state_desc }}</p></div>
+        <div>
+          <h3>Retrieval-enabled observation</h3>
+          <p>Use the provider’s available web/search/retrieval tools.</p>
+        </div>
         <button type="button" class="copy-prompt" data-target="{{ prefix }}-prompt">Copy Prompt</button>
       </div>
       <textarea id="{{ prefix }}-prompt" name="{{ prefix }}_prompt_text" class="manual-ai-prompt" rows="18">{{ state.get(prefix ~ '_prompt_text','') }}</textarea>
@@ -47,7 +46,7 @@
             rows="13"
             wrap="off"
             spellcheck="false"
-            placeholder="Paste the complete {{ label }} response for {{ state_title }}"
+            placeholder="Paste the complete {{ label }} response for {{ phase_title }}"
           >{{ state.get(prefix ~ '_' ~ provider ~ '_response','') }}</textarea>
           <label class="manual-ai-upload">
             Or upload response
@@ -62,7 +61,6 @@
       {% endfor %}
       </div>
     </section>
-  {% endfor %}
   </div>
 </section>
 {% endfor %}
@@ -77,7 +75,7 @@
   <div class="section-head">
     <div>
       <h2>AI Response Analysis</h2>
-      <p>One controlled analysis model comparing all four evidence states.</p>
+      <p>One grounded analysis model interpreting the two AI-visibility phases.</p>
     </div>
   </div>
 

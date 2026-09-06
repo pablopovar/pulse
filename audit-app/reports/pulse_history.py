@@ -109,9 +109,30 @@ def classify_change(current: dict[str, Any], previous: dict[str, Any] | None) ->
     return "not_comparable"
 
 
+def _dedupe_audit_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    position_by_run: dict[str, int] = {}
+
+    for record in records:
+        snapshot = record.get("snapshot") or {}
+        audit_run_id = str((snapshot.get("audit") or {}).get("id") or "").strip()
+
+        if not audit_run_id:
+            deduped.append(record)
+            continue
+
+        if audit_run_id in position_by_run:
+            deduped[position_by_run[audit_run_id]] = record
+        else:
+            position_by_run[audit_run_id] = len(deduped)
+            deduped.append(record)
+
+    return deduped
+
+
 def build_finding_history(records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     history: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for record in records:
+    for record in _dedupe_audit_records(records):
         snapshot = record.get("snapshot") or {}
         observed_at = str(
             (snapshot.get("audit") or {}).get("completed_at")
@@ -166,10 +187,19 @@ def attach_history_to_check(check: dict[str, Any], history: dict[str, list[dict[
 
 def pulse_summary(history: dict[str, list[dict[str, Any]]]) -> dict[str, int]:
     counts = defaultdict(int)
+    seen_logical = set()
     for rows in history.values():
         if not rows:
             continue
-        counts[str(rows[-1].get("change") or "new")] += 1
+        latest = rows[-1]
+        logical_key = (
+            str(latest.get("family") or "").strip().lower(),
+            canonical_check_title(latest.get("title") or "").strip().lower(),
+        )
+        if logical_key in seen_logical:
+            continue
+        seen_logical.add(logical_key)
+        counts[str(latest.get("change") or "new")] += 1
     return {
         "improved": counts["improved"],
         "worsened": counts["worsened"],

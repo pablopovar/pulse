@@ -18,7 +18,7 @@ STATUS_FACTOR = {
     # not as a detected defect.
     "UNKNOWN": 0.0,
 }
-SCORING_VERSION = "value-to-fix-v2"
+SCORING_VERSION = "value-to-fix-v3"
 
 # Report-presentation aliases only. Raw observations remain intact.
 CHECK_ALIASES = {
@@ -64,21 +64,60 @@ def traffic_by_page(data: dict[str, Any]) -> dict[str, float]:
     return dict(totals)
 
 
-def _detail_exposure(details: list[dict[str, Any]], data: dict[str, Any]) -> float:
+def _affected_page_exposure(details: list[dict[str, Any]], data: dict[str, Any]) -> dict[str, Any]:
     page_traffic = traffic_by_page(data)
     if not page_traffic:
-        return 0.0
+        return {"exposure": 0.0, "affected_pages": 0, "matched_pages": 0}
+
     max_imp = max(page_traffic.values(), default=0.0)
     if max_imp <= 0:
-        return 0.0
-    observed = 0.0
+        return {"exposure": 0.0, "affected_pages": 0, "matched_pages": 0}
+
+    affected_refs: dict[str, tuple[str, str]] = {}
     for d in details:
-        url = str(d.get("url") or "").strip()
+        status = str(d.get("observed_status") or "").strip().upper()
+        if status not in {"FAIL", "PARTIAL"}:
+            continue
+        url = str(d.get("url") or d.get("source_url") or "").strip()
         path = str(d.get("path") or "").strip()
-        for page, imp in page_traffic.items():
-            if (url and page == url) or (path and page.endswith(path)):
-                observed += imp
-    return min(1.0, math.log1p(observed) / math.log1p(max_imp))
+        ref = url or path
+        if not ref:
+            continue
+        affected_refs.setdefault(ref, (url, path))
+
+    if not affected_refs:
+        return {"exposure": 0.0, "affected_pages": 0, "matched_pages": 0}
+
+    normalized = []
+    matched_pages = 0
+    for url, path in affected_refs.values():
+        matched_impressions = 0.0
+        if url and url in page_traffic:
+            matched_impressions = float(page_traffic[url] or 0.0)
+        elif path:
+            matched_impressions = sum(
+                float(imp or 0.0)
+                for page, imp in page_traffic.items()
+                if str(page).endswith(path)
+            )
+
+        if matched_impressions > 0:
+            matched_pages += 1
+            normalized.append(
+                min(1.0, math.log1p(matched_impressions) / math.log1p(max_imp))
+            )
+        else:
+            normalized.append(0.0)
+
+    return {
+        "exposure": sum(normalized) / len(normalized),
+        "affected_pages": len(affected_refs),
+        "matched_pages": matched_pages,
+    }
+
+
+def _detail_exposure(details: list[dict[str, Any]], data: dict[str, Any]) -> float:
+    return float(_affected_page_exposure(details, data)["exposure"])
 
 
 def value_to_fix_components(check: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
@@ -91,7 +130,12 @@ def value_to_fix_components(check: dict[str, Any], data: dict[str, Any]) -> dict
     prevalence = affected / tested if tested else 0.0
     page_traffic = traffic_by_page(data)
     traffic_available = bool(page_traffic)
-    exposure = _detail_exposure(check.get("details") or [], data) if traffic_available else 0.0
+    exposure_info = (
+        _affected_page_exposure(check.get("details") or [], data)
+        if traffic_available
+        else {"exposure": 0.0, "affected_pages": 0, "matched_pages": 0}
+    )
+    exposure = float(exposure_info["exposure"])
     score = severity * status * (1.0 + 2.0 * exposure) * (1.0 + prevalence)
     return {
         "scoring_version": SCORING_VERSION,
@@ -102,6 +146,8 @@ def value_to_fix_components(check: dict[str, Any], data: dict[str, Any]) -> dict
         "prevalence": round(prevalence, 3),
         "traffic_available": traffic_available,
         "traffic_exposure": round(exposure, 3),
+        "traffic_affected_pages": int(exposure_info["affected_pages"]),
+        "traffic_matched_pages": int(exposure_info["matched_pages"]),
         "partial_inputs": not traffic_available,
         "formula": "severity_factor × status_factor × (1 + 2×traffic_exposure) × (1 + prevalence)",
         "score": round(score, 3),
@@ -215,7 +261,7 @@ GLOSSARY = [
     ("AIO / AI visibility", "What AI systems actually say, cite, omit, or attribute about the entity."),
     ("Manual review", "A check that cannot be established automatically and requires a human determination; it is not a confirmed defect."),
     ("Data unavailable", "A source or observation required for the check was not available; it is not a failed check."),
-    ("Value to fix", "severity × status factor × (1 + 2×traffic exposure) × (1 + site-wide prevalence). If search exposure is unavailable, the report marks the score as based on partial inputs and uses zero traffic exposure rather than inventing it."),
+    ("Value to fix", "severity × status factor × (1 + 2×traffic exposure) × (1 + site-wide prevalence). Traffic exposure is the mean normalized search visibility of the pages where the finding is actually FAIL/PARTIAL; prevalence is measured separately. If search exposure is unavailable, the report marks the score as based on partial inputs and uses zero traffic exposure rather than inventing it."),
 ]
 
 
