@@ -18,7 +18,7 @@ from reports.prioritization import (
     value_to_fix,
     value_to_fix_components,
 )
-from reports.pulse_history import attach_history_to_check, build_finding_history, pulse_summary
+from reports.pulse_history import attach_history_to_check, build_finding_history, family_pulse_summary, pulse_summary
 from reports.report_intelligence import (
     RECOMMENDATION_STATES,
     ai_metrics,
@@ -208,7 +208,11 @@ def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any])->str:
     report_id=secrets.token_urlsafe(12).replace("-","").replace("_","")[:16]
     now=datetime.now(timezone.utc).isoformat(timespec="seconds")
     immutable=dict(snapshot)
-    immutable["manual_ai_snapshot"]=dict(immutable.get("manual_ai_source") or {})
+    immutable["manual_ai_snapshot"]=dict(
+        immutable.get("manual_ai_snapshot")
+        or immutable.get("manual_ai_source")
+        or {}
+    )
     with _connect(db_path) as con:
         _ensure(con)
         oldest=con.execute("SELECT created_at FROM report_session WHERE domain=? COLLATE NOCASE ORDER BY created_at ASC LIMIT 1",(domain,)).fetchone()
@@ -264,6 +268,7 @@ def _session_with_history(con, row):
     history=build_finding_history(records)
     snapshot["finding_history"]=history
     snapshot["pulse_summary"]=pulse_summary(history)
+    snapshot["family_pulse_summary"]=family_pulse_summary(history, FAMILIES)
     snapshot.setdefault("report_metadata",{})["report_mode"]="living"
     snapshot["report_metadata"]["pulse_updated_at"]=row["created_at"]
     return {"id":row["id"],"domain":row["domain"],"created_at":row["created_at"],"snapshot":snapshot}
@@ -572,33 +577,52 @@ def _normalize_manual_ai_snapshot(manual_ai: dict[str, Any]) -> dict[str, Any]:
     active_valid_json_runs = 0
     active_answer_count = 0
     active_provider_names = set()
+    active_shape_present = False
 
     for prefix, provider in active_manual_ai_fields:
-        raw = manual_ai.get(f"{prefix}_{provider}_response") or ""
+        field_name = f"{prefix}_{provider}_response"
+        raw = manual_ai.get(field_name) or ""
         if not str(raw).strip():
             continue
+
+        active_shape_present = True
         active_runs += 1
         active_provider_names.add(provider)
+
         parsed = _active_manual_ai_json(raw)
         if parsed is None:
             continue
+
         active_valid_json_runs += 1
         results = parsed.get("results")
         if isinstance(results, list):
             active_answer_count += len(results)
 
-    manual_ai["provider_runs"] = active_runs
-    manual_ai["expected_provider_runs"] = 6
-    manual_ai["provider_count"] = len(active_provider_names)
-    manual_ai["provider_names"] = sorted(active_provider_names)
-    manual_ai["answer_count"] = active_answer_count
-    manual_ai["valid_json_providers"] = active_valid_json_runs
-    manual_ai["expected_answer_count"] = 24
-    manual_ai["complete"] = bool(
-        active_runs == 6
-        and active_valid_json_runs == 6
-        and active_answer_count == 24
-    )
+    # Only apply the current 2-phase/6-run calculation when the snapshot
+    # actually contains current-schema response fields. Historical/legacy
+    # snapshots must remain readable using their persisted provider rows/counts.
+    if active_shape_present:
+        manual_ai["provider_runs"] = active_runs
+        manual_ai["expected_provider_runs"] = 6
+        manual_ai["provider_count"] = len(active_provider_names)
+        manual_ai["provider_names"] = sorted(active_provider_names)
+        manual_ai["answer_count"] = active_answer_count
+        manual_ai["valid_json_providers"] = active_valid_json_runs
+        manual_ai["expected_answer_count"] = 24
+        manual_ai["complete"] = bool(
+            active_runs == 6
+            and active_valid_json_runs == 6
+            and active_answer_count == 24
+        )
+    else:
+        # Legacy snapshots already had their counts normalized above.
+        manual_ai["complete"] = bool(
+            manual_ai.get("available")
+            and int(manual_ai.get("provider_runs") or 0) > 0
+            and int(manual_ai.get("answer_count") or 0)
+                >= int(manual_ai.get("expected_answer_count") or 0)
+        )
+
     return manual_ai
 
 

@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-import requests
 from bs4 import BeautifulSoup, Tag
+from services.safe_fetcher import SafeFetchError, safe_fetcher
 
 STATUS_VALUES = {"PASS": 1.0, "PARTIAL": 0.5, "FAIL": 0.0}
 SEVERITY_WEIGHTS = {"CRITICAL": 3.0, "HIGH": 2.0, "MEDIUM": 1.0, "LOW": 0.5}
@@ -55,10 +55,7 @@ def _property(soup: BeautifulSoup, name: str) -> str:
     return str(tag.get("content", "")).strip() if isinstance(tag, Tag) else ""
 
 
-def _decode_response(response: requests.Response) -> str:
-    encoding = (response.encoding or "").lower()
-    if not encoding or encoding in {"iso-8859-1", "latin-1"}:
-        response.encoding = response.apparent_encoding or "utf-8"
+def _decode_response(response) -> str:
     return response.text
 
 
@@ -117,9 +114,14 @@ def _page_type(selected: str, final_url: str, types: set[str], text: str) -> str
 
 def _supporting_file(url: str, user_agent: str) -> tuple[int | None, str]:
     try:
-        response = requests.get(url, headers={"User-Agent": user_agent}, timeout=(4, 10), allow_redirects=True)
+        response = safe_fetcher.get(
+            url,
+            headers={"User-Agent": user_agent},
+            max_response_bytes=2 * 1024 * 1024,
+            allowed_content_types={"text/plain", "text/html", "application/xml", "text/xml", "application/gzip", "application/x-gzip", "application/octet-stream"},
+        )
         return response.status_code, _decode_response(response)
-    except requests.RequestException:
+    except SafeFetchError:
         return None, ""
 
 
@@ -140,7 +142,16 @@ def _robots_blocks(robots_text: str, path: str) -> bool:
 def capture_page(raw_url: str, selected_page_type: str = "auto") -> dict[str, Any]:
     url = normalize_url(raw_url)
     user_agent = "PersonalGeoAeoAuditor/1.0 (+local evidence-grounded audit)"
-    response = requests.get(url, headers={"User-Agent": user_agent}, timeout=(5, 25), allow_redirects=True)
+    try:
+        response = safe_fetcher.get(
+            url,
+            headers={"User-Agent": user_agent},
+            max_response_bytes=5 * 1024 * 1024,
+            allowed_content_types={"text/html", "application/xhtml+xml"},
+        )
+    except SafeFetchError as exc:
+        raise ValueError(f"Unable to safely fetch the URL: {exc}") from exc
+
     content_type = response.headers.get("content-type", "")
     if "html" not in content_type.lower():
         raise ValueError(f"The URL did not return HTML ({content_type or 'unknown type'}).")

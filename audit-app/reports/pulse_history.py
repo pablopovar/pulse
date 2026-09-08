@@ -185,27 +185,137 @@ def attach_history_to_check(check: dict[str, Any], history: dict[str, list[dict[
     return check
 
 
+def _movement_weight(
+    latest: dict[str, Any],
+    previous: dict[str, Any] | None,
+    change: str,
+) -> int:
+    current_affected = int(latest.get("pages_affected") or 0)
+    current_tested = int(latest.get("pages_tested") or 0)
+    previous_affected = int((previous or {}).get("pages_affected") or 0)
+    previous_tested = int((previous or {}).get("pages_tested") or 0)
+
+    if change == "resolved":
+        return previous_affected or previous_tested or current_tested or 1
+    if change == "improved":
+        reduction = max(previous_affected - current_affected, 0)
+        return reduction or current_affected or previous_affected or current_tested or previous_tested or 1
+    if change == "worsened":
+        increase = max(current_affected - previous_affected, 0)
+        return increase or current_affected or previous_affected or current_tested or previous_tested or 1
+    if change == "new":
+        return current_affected or current_tested or 1
+    if change == "unchanged":
+        return current_tested or current_affected or 1
+    if change in {"not_comparable", "no_longer_applicable"}:
+        return current_tested or previous_tested or current_affected or previous_affected or 1
+    return 1
+
+
+def _summary_result(counts: dict[str, int]) -> dict[str, int]:
+    return {
+        "improved": int(counts.get("improved") or 0),
+        "worsened": int(counts.get("worsened") or 0),
+        "resolved": int(counts.get("resolved") or 0),
+        "new": int(counts.get("new") or 0),
+        "unchanged": int(counts.get("unchanged") or 0),
+        "not_comparable": int(counts.get("not_comparable") or 0),
+        "no_longer_applicable": int(counts.get("no_longer_applicable") or 0),
+    }
+
+
 def pulse_summary(history: dict[str, list[dict[str, Any]]]) -> dict[str, int]:
     counts = defaultdict(int)
     seen_logical = set()
+
     for rows in history.values():
         if not rows:
             continue
         latest = rows[-1]
-        logical_key = (
-            str(latest.get("family") or "").strip().lower(),
-            canonical_check_title(latest.get("title") or "").strip().lower(),
-        )
-        if logical_key in seen_logical:
+        previous = rows[-2] if len(rows) > 1 else None
+        title_key = canonical_check_title(latest.get("title") or "").strip().lower()
+        if not title_key or title_key in seen_logical:
             continue
-        seen_logical.add(logical_key)
-        counts[str(latest.get("change") or "new")] += 1
-    return {
-        "improved": counts["improved"],
-        "worsened": counts["worsened"],
-        "resolved": counts["resolved"],
-        "new": counts["new"],
-        "unchanged": counts["unchanged"],
-        "not_comparable": counts["not_comparable"],
-        "no_longer_applicable": counts["no_longer_applicable"],
+        seen_logical.add(title_key)
+        change = str(latest.get("change") or "new")
+        counts[change] += _movement_weight(latest, previous, change)
+
+    return _summary_result(counts)
+
+
+def family_pulse_summary(
+    history: dict[str, list[dict[str, Any]]],
+    family_definitions: list[dict[str, Any]] | None = None,
+) -> dict[str, dict[str, int]]:
+    counts_by_family: dict[str, defaultdict[str, int]] = {}
+    seen_by_family: dict[str, set[str]] = defaultdict(set)
+
+    definitions = list(family_definitions or [])
+    category_to_family: dict[str, str] = {}
+    alias_to_family: dict[str, str] = {}
+
+    for family in definitions:
+        name = str(family.get("name") or "").strip()
+        family_id = str(family.get("id") or "").strip()
+        if not name:
+            continue
+
+        alias_to_family[name.lower()] = name
+        if family_id:
+            alias_to_family[family_id.lower()] = name
+
+        for category in family.get("categories") or []:
+            category_to_family[str(category).strip().lower()] = name
+
+    def resolve_family(latest: dict[str, Any]) -> str:
+        raw_family = str(latest.get("family") or "").strip()
+        if raw_family:
+            resolved = alias_to_family.get(raw_family.lower())
+            if resolved:
+                return resolved
+
+        category = str(latest.get("category") or "").strip().lower()
+        if category:
+            resolved = category_to_family.get(category)
+            if resolved:
+                return resolved
+
+        return raw_family
+
+    for rows in history.values():
+        if not rows:
+            continue
+
+        latest = rows[-1]
+        previous = rows[-2] if len(rows) > 1 else None
+        family = resolve_family(latest)
+        title_key = canonical_check_title(latest.get("title") or "").strip().lower()
+
+        if not family or not title_key:
+            continue
+        if title_key in seen_by_family[family]:
+            continue
+        seen_by_family[family].add(title_key)
+
+        if family not in counts_by_family:
+            counts_by_family[family] = defaultdict(int)
+
+        change = str(latest.get("change") or "new")
+        counts_by_family[family][change] += _movement_weight(
+            latest, previous, change
+        )
+
+    result = {
+        family: _summary_result(counts)
+        for family, counts in counts_by_family.items()
     }
+
+    # Ensure every configured report family is present, even if there is
+    # currently no movement-bearing audit history for it.
+    for family in definitions:
+        name = str(family.get("name") or "").strip()
+        if name and name not in result:
+            result[name] = _summary_result({})
+
+    return result
+

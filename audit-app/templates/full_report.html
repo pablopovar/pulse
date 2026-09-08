@@ -514,16 +514,63 @@
 .report-document .movement-item.worsened{border-top:3px solid #b42318}
 .report-document .movement-item.new{border-top:3px solid var(--brand-blue,#185ed8)}
 .report-document .movement-item.unchanged{border-top:3px solid #8b93a1}
-@media(max-width:850px){
-  .report-document .executive-fold{grid-template-columns:1fr 1fr}
-  .report-document .verdict-card{grid-column:1/-1}
-}
-@media(max-width:620px){
-  .report-document .executive-fold{grid-template-columns:1fr}
-  .report-document .verdict-card{grid-column:auto}
-  .report-document .movement-strip{grid-template-columns:1fr 1fr}
-}
 
+/* Section-level Pulse: compact and aligned with section controls. */
+.report-document .family-header{
+  display:block!important;
+  position:relative;
+  padding-right:18rem;
+}
+.report-document .family-title-line{display:block}
+.report-document .family-title-line h2{margin:0}
+.report-document .family-pulse-strip{
+  position:absolute;
+  right:5.25rem;
+  bottom:.48rem;
+  display:inline-flex;
+  align-items:center;
+  gap:.42rem;
+  width:auto;
+  margin:0;
+  white-space:nowrap;
+  font-size:.72rem;
+  font-weight:800;
+  line-height:1;
+}
+.report-document .family-pulse-item{
+  display:inline-flex;
+  align-items:center;
+  gap:.14rem;
+  border:0!important;
+  background:transparent!important;
+  padding:0!important;
+}
+.report-document .family-pulse-item span{
+  display:inline;
+  margin:0;
+  font-size:.62rem;
+  line-height:1;
+  font-weight:800;
+  color:var(--brand-muted,#626a78);
+}
+.report-document .family-pulse-item strong{
+  display:inline;
+  margin:0;
+  font-size:.74rem;
+  line-height:1;
+}
+.report-document .family-pulse-item.resolved strong,
+.report-document .family-pulse-item.improved strong{color:#157f3d}
+.report-document .family-pulse-item.worsened strong{color:#b42318}
+.report-document .family-pulse-item.new strong{color:var(--brand-blue,#185ed8)}
+.report-document .family-pulse-item.unchanged strong{color:#6b7280}
+@media(max-width:900px){
+  .report-document .family-header{padding-right:0}
+  .report-document .family-pulse-strip{
+    position:static;
+    margin-top:.35rem;
+  }
+}
 
 /* Notes/discussion are human conversation, not audit failures. */
 .report-document .compact-note-action,
@@ -776,7 +823,22 @@
 {% for family in report.families %}
 <section id="{{ family.id }}" class="report-family family-{{ family.id }} {% if family.id in report.technical_family_ids %}family-collapsed{% endif %}" data-family="{{ family.id }}">
   {% set family_note_key = 'section:' ~ family.id %}
-  <header class="family-header"><div><div class="family-number">{{ loop.index }}</div><h2>{{ family.name }} {{ note_marker(family_note_key) }}</h2><div class="department-tags">{{ family.departments }}</div><p>{{ family.purpose }}</p></div></header>
+  {% set family_pulse = (report.family_pulse_summary or {}).get(family.name) or {} %}
+  <header class="family-header">
+    <div class="family-number">{{ loop.index }}</div>
+    <div class="family-title-line">
+      <h2>{{ family.name }} {{ note_marker(family_note_key) }}</h2>
+    </div>
+    <div class="department-tags">{{ family.departments }}</div>
+    <p>{{ family.purpose }}</p>
+    <div class="family-pulse-strip" aria-label="{{ family.name }} change since prior observation">
+      <span class="family-pulse-item resolved" title="Resolved"><span>R</span><strong>{{ family_pulse.get('resolved',0) }}</strong></span>
+      <span class="family-pulse-item improved" title="Improved"><span>I</span><strong>{{ family_pulse.get('improved',0) }}</strong></span>
+      <span class="family-pulse-item worsened" title="Worsened"><span>W</span><strong>{{ family_pulse.get('worsened',0) }}</strong></span>
+      <span class="family-pulse-item new" title="New"><span>N</span><strong>{{ family_pulse.get('new',0) }}</strong></span>
+      <span class="family-pulse-item unchanged" title="No movement"><span>—</span><strong>{{ family_pulse.get('unchanged',0) }}</strong></span>
+    </div>
+  </header>
   <div class="family-note-slot">{{ note_panel(family_note_key, "Pablo's note", True) }}</div>
   <button type="button" class="family-collapse-toggle interactive-evidence" aria-expanded="{% if family.id in report.technical_family_ids %}false{% else %}true{% endif %}">{% if family.id in report.technical_family_ids %}Expand section{% else %}Collapse section{% endif %}</button>
 

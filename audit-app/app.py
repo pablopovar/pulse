@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import urlparse
+from services.safe_fetcher import safe_fetcher
 
 from flask import Flask, abort, redirect, render_template, request, send_file, send_from_directory, url_for
 import xml.etree.ElementTree as ET
@@ -665,9 +666,13 @@ def _fetch_sitemap_urls(url, domain, seen=None, depth=0):
     if depth > 5 or url in seen:
         return set()
     seen.add(url)
-    req = urllib.request.Request(url, headers={"User-Agent": "SEO-GEO-AEO-Auditor/1.0"})
-    with urllib.request.urlopen(req, timeout=20) as response:
-        raw = response.read()
+    response = safe_fetcher.get(
+        url,
+        headers={"User-Agent": "SEO-GEO-AEO-Auditor/1.0"},
+        max_response_bytes=5 * 1024 * 1024,
+        allowed_content_types={"application/xml", "text/xml", "text/plain", "application/gzip", "application/x-gzip", "application/octet-stream"},
+    )
+    raw = response.content
     if raw[:2] == b"\x1f\x8b" or url.lower().endswith(".gz"):
         raw = gzip.decompress(raw)
     root = ET.fromstring(raw)
@@ -2830,12 +2835,11 @@ def report_session_view(domain, report_id):
     if not session:
         abort(404)
 
-    effective_snapshot = _apply_report_exclusions(session["snapshot"], domain)
-    report = prepare_report_view(effective_snapshot)
-
-    live_manual_ai = manual_ai_source_for_report(domain)
-    report["manual_ai_source"] = live_manual_ai
-    report["manual_ai"] = live_manual_ai
+    # Historical report data comes exclusively from the stored report_session
+    # snapshot. Current exclusions and current Manual AI state must never be
+    # injected into an existing observation.
+    historical_snapshot = json.loads(json.dumps(session["snapshot"]))
+    report = prepare_report_view(historical_snapshot)
     human_interpretation = _load_human_interpretation(domain, report_id)
     report_notes = _load_report_notes(domain)
 
@@ -2861,8 +2865,9 @@ def report_session_pdf(domain, report_id):
     safe_domain = re.sub(r"[^A-Za-z0-9._-]+", "-", domain).strip("-") or "domain"
     filename = f"{safe_domain}-audit-{report_id}.pdf"
     output_path = REPORTS_DIR / filename
-    effective_snapshot = _apply_report_exclusions(session["snapshot"], domain)
-    build_full_report_pdf(effective_snapshot, output_path)
+    # PDF uses the exact same stored historical snapshot as HTML.
+    historical_snapshot = json.loads(json.dumps(session["snapshot"]))
+    build_full_report_pdf(historical_snapshot, output_path)
     return send_file(
         output_path,
         mimetype="application/pdf",

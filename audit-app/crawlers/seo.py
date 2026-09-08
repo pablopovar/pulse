@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import Callable, Iterable
+from services.safe_fetcher import SafeFetchError, safe_fetcher
 
 
 USER_AGENT = "PB-SEO-Crawler/0.1 (+website audit; single-domain; polite)"
@@ -198,67 +199,46 @@ class PageParser(HTMLParser):
 
 
 def fetch(url: str, method="GET"):
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Encoding": "gzip",
-        },
-        method=method,
-    )
     started = time.perf_counter()
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            body = resp.read(MAX_BYTES + 1)
-            elapsed_ms = int((time.perf_counter() - started) * 1000)
-            if len(body) > MAX_BYTES:
-                body = body[:MAX_BYTES]
-            if resp.headers.get("Content-Encoding", "").lower() == "gzip":
-                try:
-                    body = gzip.decompress(body)
-                except Exception:
-                    pass
-            return {
-                "ok": True,
-                "status": getattr(resp, "status", 200),
-                "final_url": resp.geturl(),
-                "content_type": resp.headers.get("Content-Type", ""),
-                "content_length": len(body),
-                "elapsed_ms": elapsed_ms,
-                "headers": dict(resp.headers.items()),
-                "body": body,
-                "error": None,
-            }
-    except urllib.error.HTTPError as exc:
+        response = safe_fetcher.fetch(
+            url,
+            method=method,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/xml,text/xml,text/plain;q=0.9,*/*;q=0.1",
+                "Accept-Encoding": "gzip",
+            },
+            max_response_bytes=MAX_BYTES,
+            allowed_content_types={
+                "text/html", "application/xhtml+xml", "application/xml", "text/xml",
+                "text/plain", "application/gzip", "application/x-gzip", "application/octet-stream",
+            },
+        )
+        body = response.content
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        try:
-            body = exc.read(MAX_BYTES)
-        except Exception:
-            body = b""
+        if response.headers.get("content-encoding", "").lower() == "gzip":
+            try:
+                body = gzip.decompress(body)
+            except Exception:
+                pass
         return {
-            "ok": False,
-            "status": exc.code,
-            "final_url": exc.geturl(),
-            "content_type": exc.headers.get("Content-Type", "") if exc.headers else "",
+            "ok": 200 <= response.status_code < 400,
+            "status": response.status_code,
+            "final_url": response.url,
+            "content_type": response.headers.get("content-type", ""),
             "content_length": len(body),
             "elapsed_ms": elapsed_ms,
-            "headers": dict(exc.headers.items()) if exc.headers else {},
+            "headers": dict(response.headers),
             "body": body,
-            "error": f"HTTP {exc.code}",
+            "error": None if 200 <= response.status_code < 400 else f"HTTP {response.status_code}",
         }
-    except Exception as exc:
+    except SafeFetchError as exc:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         return {
-            "ok": False,
-            "status": None,
-            "final_url": url,
-            "content_type": "",
-            "content_length": 0,
-            "elapsed_ms": elapsed_ms,
-            "headers": {},
-            "body": b"",
-            "error": str(exc),
+            "ok": False, "status": None, "final_url": url, "content_type": "",
+            "content_length": 0, "elapsed_ms": elapsed_ms, "headers": {},
+            "body": b"", "error": str(exc),
         }
 
 
