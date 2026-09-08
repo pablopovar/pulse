@@ -29,13 +29,8 @@ def _delete_ids(con, table, col, ids):
     con.execute(f'DELETE FROM "{table}" WHERE "{col}" IN ({marks})', ids)
 
 def ensure_delete_schema(con):
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS domain_suppression (
-            domain TEXT PRIMARY KEY COLLATE NOCASE,
-            suppressed_at TEXT NOT NULL
-        )
-    """)
-    con.commit()
+    # Compatibility hook only. Schema is owned by versioned migrations.
+    return None
 
 def delete_domain_data(con, domain):
     ensure_delete_schema(con)

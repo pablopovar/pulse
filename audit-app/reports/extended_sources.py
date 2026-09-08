@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from db.sqlite import connect_sqlite
 from typing import Any
 
 
 def _connect(path: Path):
-    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    con.row_factory = sqlite3.Row
-    return con
+    return connect_sqlite(path, readonly=True)
 
 
 def _exists(con, name: str) -> bool:

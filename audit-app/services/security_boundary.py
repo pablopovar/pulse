@@ -177,6 +177,10 @@ def configure_security(app):
 
     @app.before_request
     def pulse_security_boundary():
+        # Materialize a CSRF token for every session, including GET
+        # requests that do not render a Jinja template.
+        _csrf_token()
+
         endpoint = request.endpoint or ""
 
         if endpoint in PUBLIC_ENDPOINTS:

@@ -6,6 +6,7 @@ import sqlite3
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from db.sqlite import connect_sqlite
 from typing import Any
 from reports.extended_sources import enrich_report_data
 from reports.prioritization import GLOSSARY, METHODOLOGY, build_high_signal_findings
@@ -36,13 +37,8 @@ RED = colors.HexColor("#B91C1C")
 MUTED = colors.HexColor("#64748B")
 
 
-def _connect(path: Path, readonly: bool = False):
-    if readonly:
-        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    else:
-        con = sqlite3.connect(path)
-    con.row_factory = sqlite3.Row
-    return con
+def _connect(path: Path, readonly=False):
+    return connect_sqlite(path, readonly=readonly)
 
 
 def _exists(con, name: str) -> bool:

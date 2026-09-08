@@ -10,6 +10,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from services.safe_fetcher import safe_fetcher
+from db.sqlite import connect_sqlite
+from db.migrate import validate_schema_current
 
 from flask import Flask, abort, redirect, render_template, request, send_file, send_from_directory, url_for
 import xml.etree.ElementTree as ET
@@ -30,8 +32,10 @@ from audits.geo_aeo.service import run_audit as run_geo_aeo_audit
 from reports.full_pdf import collect_report_data, build_full_report_pdf
 from reports.web_report import create_report_session, load_report_session, list_report_sessions, prepare_report_view
 from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, list_models as list_manual_ai_analysis_models, run_analysis as run_manual_ai_analysis
+from services.security_boundary import configure_security
 
 app = Flask(__name__)
+configure_security(app)
 
 
 
@@ -39,9 +43,7 @@ app = Flask(__name__)
 def db():
     if not SEO_DB.exists():
         raise RuntimeError(f"SEO database not found: {SEO_DB}")
-    con = sqlite3.connect(f"file:{SEO_DB}?mode=ro", uri=True)
-    con.row_factory = sqlite3.Row
-    return con
+    return connect_sqlite(SEO_DB, readonly=True)
 
 
 
@@ -55,218 +57,8 @@ def sqlite_regexp(pattern, value):
 
 
 def research_db():
-    RESEARCH_DB.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(RESEARCH_DB)
-    con.row_factory = sqlite3.Row
+    con = connect_sqlite(RESEARCH_DB)
     con.create_function("REGEXP", 2, sqlite_regexp)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS research_keyword (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            domain TEXT NOT NULL,
-            keyword TEXT NOT NULL COLLATE NOCASE,
-            avg_monthly_searches INTEGER,
-            competition TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(domain, keyword)
-        )
-    """)
-    columns = {row["name"] for row in con.execute("PRAGMA table_info(research_keyword)").fetchall()}
-    if "avg_monthly_searches" not in columns:
-        con.execute("ALTER TABLE research_keyword ADD COLUMN avg_monthly_searches INTEGER")
-    if "competition" not in columns:
-        con.execute("ALTER TABLE research_keyword ADD COLUMN competition TEXT")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_research_keyword_domain_keyword ON research_keyword(domain, keyword)")
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS wanted_keyword (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            domain TEXT NOT NULL,
-            keyword TEXT NOT NULL COLLATE NOCASE,
-            avg_monthly_searches INTEGER,
-            competition TEXT,
-            source TEXT NOT NULL DEFAULT 'manual',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(domain, keyword)
-        )
-    """)
-    con.execute("CREATE INDEX IF NOT EXISTS idx_wanted_keyword_domain_keyword ON wanted_keyword(domain, keyword)")
-    con.execute("PRAGMA foreign_keys = ON")
-    con.execute("""CREATE TABLE IF NOT EXISTS keyword_tag (id INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT NOT NULL, name TEXT NOT NULL COLLATE NOCASE, created_at TEXT NOT NULL, UNIQUE(domain,name))""")
-    con.execute("""CREATE TABLE IF NOT EXISTS research_keyword_tag (research_keyword_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, PRIMARY KEY(research_keyword_id,tag_id))""")
-    con.execute("""CREATE TABLE IF NOT EXISTS wanted_keyword_tag (wanted_keyword_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, PRIMARY KEY(wanted_keyword_id,tag_id))""")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_keyword_tag_domain_name ON keyword_tag(domain,name)")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_research_keyword_tag_tag ON research_keyword_tag(tag_id,research_keyword_id)")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_wanted_keyword_tag_tag ON wanted_keyword_tag(tag_id,wanted_keyword_id)")
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS site_page (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            domain TEXT NOT NULL,
-            url TEXT NOT NULL,
-            path TEXT NOT NULL,
-            source TEXT NOT NULL DEFAULT 'sitemap',
-            discovered_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(domain, url)
-        )
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS page_note (
-            page_id INTEGER PRIMARY KEY,
-            content TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(page_id) REFERENCES site_page(id) ON DELETE CASCADE
-        )
-    """)
-    wanted_columns = {row["name"] for row in con.execute("PRAGMA table_info(wanted_keyword)").fetchall()}
-    if "page_id" not in wanted_columns:
-        con.execute("ALTER TABLE wanted_keyword ADD COLUMN page_id INTEGER")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_site_page_domain_path ON site_page(domain, path)")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_wanted_keyword_page ON wanted_keyword(page_id)")
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS keyword_note (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            domain TEXT NOT NULL,
-            keyword TEXT NOT NULL COLLATE NOCASE,
-            content TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL,
-            UNIQUE(domain, keyword)
-        )
-    """)
-    con.execute("""
-        CREATE INDEX IF NOT EXISTS idx_keyword_note_domain_keyword
-        ON keyword_note(domain, keyword)
-    """)
-
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS keyword_tag_assignment (
-            domain TEXT NOT NULL,
-            keyword TEXT NOT NULL COLLATE NOCASE,
-            tag_id INTEGER NOT NULL,
-            PRIMARY KEY(domain, keyword, tag_id)
-        )
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS page_tag (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            domain TEXT NOT NULL,
-            name TEXT NOT NULL COLLATE NOCASE,
-            created_at TEXT NOT NULL,
-            UNIQUE(domain, name)
-        )
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS site_page_tag (
-            page_id INTEGER NOT NULL,
-            tag_id INTEGER NOT NULL,
-            PRIMARY KEY(page_id, tag_id)
-        )
-    """)
-    con.execute("""
-        INSERT OR IGNORE INTO keyword_tag_assignment(domain,keyword,tag_id)
-        SELECT r.domain,r.keyword,rt.tag_id
-        FROM research_keyword r
-        JOIN research_keyword_tag rt ON rt.research_keyword_id=r.id
-    """)
-    con.execute("""
-        INSERT OR IGNORE INTO keyword_tag_assignment(domain,keyword,tag_id)
-        SELECT w.domain,w.keyword,wt.tag_id
-        FROM wanted_keyword w
-        JOIN wanted_keyword_tag wt ON wt.wanted_keyword_id=w.id
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS audit_run (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            domain TEXT NOT NULL,
-            scope TEXT NOT NULL,
-            status TEXT NOT NULL,
-            started_at TEXT NOT NULL,
-            completed_at TEXT,
-            error TEXT
-        )
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS audit_page (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            audit_run_id INTEGER NOT NULL,
-            page_id INTEGER NOT NULL,
-            url TEXT NOT NULL,
-            page_type TEXT,
-            geo_score INTEGER,
-            aeo_score INTEGER,
-            combined_score INTEGER,
-            geo_json TEXT NOT NULL DEFAULT '{}',
-            aeo_json TEXT NOT NULL DEFAULT '{}',
-            combined_json TEXT NOT NULL DEFAULT '{}',
-            capture_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL,
-            UNIQUE(audit_run_id, page_id)
-        )
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS audit_signal (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            audit_page_id INTEGER NOT NULL,
-            family TEXT NOT NULL,
-            signal_key TEXT NOT NULL,
-            category TEXT NOT NULL,
-            title TEXT NOT NULL,
-            observed_status TEXT NOT NULL,
-            severity TEXT NOT NULL,
-            weight REAL NOT NULL DEFAULT 0,
-            evidence TEXT NOT NULL,
-            recommendation TEXT NOT NULL,
-            source_title TEXT,
-            source_url TEXT,
-            UNIQUE(audit_page_id, family, signal_key)
-        )
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS audit_signal_state (
-            domain TEXT NOT NULL,
-            page_id INTEGER NOT NULL,
-            family TEXT NOT NULL,
-            signal_key TEXT NOT NULL,
-            workflow_status TEXT NOT NULL DEFAULT 'open',
-            priority TEXT NOT NULL DEFAULT '',
-            user_note TEXT NOT NULL DEFAULT '',
-            override_status TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY(domain, page_id, family, signal_key)
-        )
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS audit_domain_summary (
-            audit_run_id INTEGER PRIMARY KEY,
-            domain TEXT NOT NULL,
-            pages_audited INTEGER NOT NULL DEFAULT 0,
-            geo_score INTEGER,
-            aeo_score INTEGER,
-            combined_score INTEGER,
-            fail_count INTEGER NOT NULL DEFAULT 0,
-            partial_count INTEGER NOT NULL DEFAULT 0,
-            pass_count INTEGER NOT NULL DEFAULT 0,
-            unknown_count INTEGER NOT NULL DEFAULT 0,
-            manual_count INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-        )
-    """)
-
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS dashboard_domain (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            domain TEXT NOT NULL COLLATE NOCASE UNIQUE,
-            base_url TEXT NOT NULL,
-            gsc_site_id TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-    """)
-    con.execute("""
-        CREATE INDEX IF NOT EXISTS idx_dashboard_domain_gsc
-        ON dashboard_domain(gsc_site_id)
-    """)
-    con.commit()
     return con
 
 
@@ -283,9 +75,8 @@ SOURCE_CATALOG = [
 ]
 
 def ensure_domain_source_schema(con):
-    con.execute("CREATE TABLE IF NOT EXISTS domain_source (domain TEXT NOT NULL COLLATE NOCASE,source_key TEXT NOT NULL,source_name TEXT NOT NULL,selected INTEGER NOT NULL DEFAULT 0,connection_status TEXT NOT NULL DEFAULT 'not_connected',detail TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL,PRIMARY KEY(domain,source_key))")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_domain_source_domain ON domain_source(domain,selected)")
-    con.commit()
+    # Compatibility hook only. Schema is owned by versioned migrations.
+    return None
 
 def detected_source_state(site):
     states={
@@ -330,27 +121,8 @@ def domain_sources_for_site(site):
     return out
 
 def ensure_manual_ai_source_schema(con):
-    con.execute("CREATE TABLE IF NOT EXISTS manual_ai_source (domain TEXT PRIMARY KEY COLLATE NOCASE,prompt_text TEXT NOT NULL DEFAULT '',chatgpt_response TEXT NOT NULL DEFAULT '',claude_response TEXT NOT NULL DEFAULT '',gemini_response TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL)")
-    columns={row["name"] for row in con.execute("PRAGMA table_info(manual_ai_source)").fetchall()}
-    additions={
-        "phase1_prompt_text":"TEXT NOT NULL DEFAULT ''","phase2_prompt_text":"TEXT NOT NULL DEFAULT ''",
-        "phase1_chatgpt_response":"TEXT NOT NULL DEFAULT ''","phase1_claude_response":"TEXT NOT NULL DEFAULT ''","phase1_gemini_response":"TEXT NOT NULL DEFAULT ''",
-        "phase2_chatgpt_response":"TEXT NOT NULL DEFAULT ''","phase2_claude_response":"TEXT NOT NULL DEFAULT ''","phase2_gemini_response":"TEXT NOT NULL DEFAULT ''",
-        "question_set_version":"INTEGER NOT NULL DEFAULT 1","analysis_model":"TEXT NOT NULL DEFAULT ''","analysis_system_prompt":"TEXT NOT NULL DEFAULT ''",
-        "analysis_provider":"TEXT NOT NULL DEFAULT 'ollama'","analysis_reasoning_effort":"TEXT NOT NULL DEFAULT 'high'",
-        "analysis_temperature":"REAL NOT NULL DEFAULT 0.1","analysis_top_p":"REAL NOT NULL DEFAULT 0.9",
-        "analysis_max_output_tokens":"INTEGER NOT NULL DEFAULT 8000","analysis_system_prompt_version":"INTEGER NOT NULL DEFAULT 3",
-        "analysis_parameters_json":"TEXT NOT NULL DEFAULT '{}'",
-        "analysis_text":"TEXT NOT NULL DEFAULT ''","analysis_status":"TEXT NOT NULL DEFAULT 'not_run'","analysis_error":"TEXT NOT NULL DEFAULT ''","analysis_updated_at":"TEXT NOT NULL DEFAULT ''"}
-    for name,ddl in additions.items():
-        if name not in columns: con.execute(f"ALTER TABLE manual_ai_source ADD COLUMN {name} {ddl}")
-    con.execute("CREATE TABLE IF NOT EXISTS manual_ai_state_source (domain TEXT NOT NULL COLLATE NOCASE,phase TEXT NOT NULL,state TEXT NOT NULL,prompt_text TEXT NOT NULL DEFAULT '',chatgpt_response TEXT NOT NULL DEFAULT '',claude_response TEXT NOT NULL DEFAULT '',gemini_response TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL,PRIMARY KEY(domain,phase,state))")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_manual_ai_state_domain ON manual_ai_state_source(domain,phase,state)")
-    # Preserve the pre-state workflow as State 2 because it was the web/retrieval-capable collection path.
-    con.execute("INSERT OR IGNORE INTO manual_ai_state_source(domain,phase,state,prompt_text,chatgpt_response,claude_response,gemini_response,updated_at) SELECT domain,'phase1','state2',phase1_prompt_text,phase1_chatgpt_response,phase1_claude_response,phase1_gemini_response,updated_at FROM manual_ai_source WHERE TRIM(phase1_prompt_text)<>'' OR TRIM(phase1_chatgpt_response)<>'' OR TRIM(phase1_claude_response)<>'' OR TRIM(phase1_gemini_response)<>''")
-    con.execute("INSERT OR IGNORE INTO manual_ai_state_source(domain,phase,state,prompt_text,chatgpt_response,claude_response,gemini_response,updated_at) SELECT domain,'phase2','state2',phase2_prompt_text,phase2_chatgpt_response,phase2_claude_response,phase2_gemini_response,updated_at FROM manual_ai_source WHERE TRIM(phase2_prompt_text)<>'' OR TRIM(phase2_chatgpt_response)<>'' OR TRIM(phase2_claude_response)<>'' OR TRIM(phase2_gemini_response)<>''")
-    con.commit()
-
+    # Compatibility hook only. Schema/data migrations are explicit.
+    return None
 
 def manual_ai_default_prompt(domain, phase, state):
     company=infer_company_name(domain)
@@ -551,13 +323,8 @@ REPORT_FAMILY_DEFAULT_QUESTIONS = {
 
 
 def ensure_domain_company_schema(con):
-    con.execute(
-        "CREATE TABLE IF NOT EXISTS domain_company_settings ("
-        "domain TEXT PRIMARY KEY COLLATE NOCASE,"
-        "company_name TEXT NOT NULL DEFAULT '',"
-        "updated_at TEXT NOT NULL)"
-    )
-    con.commit()
+    # Compatibility hook only. Schema is owned by versioned migrations.
+    return None
 
 def _company_name_from_title(title):
     if not title:
@@ -728,8 +495,7 @@ def gsc_rows_for_domain(domain):
     if site.get("gsc_missing"):
         return []
     site_id = _site_id_value(site)
-    con = sqlite3.connect(f"file:{SEO_DB}?mode=ro", uri=True)
-    con.row_factory = sqlite3.Row
+    con = connect_sqlite(SEO_DB, readonly=True)
     try:
         cols = {row["name"] for row in con.execute("PRAGMA table_info(gsc_keyword_inventory)").fetchall()}
         if not cols:
@@ -1309,26 +1075,23 @@ def _opengsc_site_domain(site):
 
 def sync_dashboard_domains_from_opengsc():
     with research_db() as _suppression_con:
-        _suppression_con.execute("""
-            CREATE TABLE IF NOT EXISTS domain_suppression (
-                domain TEXT PRIMARY KEY COLLATE NOCASE,
-                suppressed_at TEXT NOT NULL
-            )
-        """)
         _suppressed_domains = {
             r["domain"].lower()
-            for r in _suppression_con.execute("SELECT domain FROM domain_suppression").fetchall()
+            for r in _suppression_con.execute(
+                "SELECT domain FROM domain_suppression"
+            ).fetchall()
         }
-        _suppression_con.commit()
-    now=datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     try:
-        gsc_sites=_opengsc_get_sites()
+        gsc_sites = _opengsc_get_sites()
     except Exception:
-        gsc_sites=[]
+        gsc_sites = []
+
     with research_db() as con:
         for gsc in gsc_sites:
-            domain=_opengsc_site_domain(gsc)
-            gsc_id=_site_value(gsc,"id")
+            domain = _opengsc_site_domain(gsc)
+            gsc_id = _site_value(gsc, "id")
             if not domain or not gsc_id:
                 continue
             if domain.lower() in _suppressed_domains:
@@ -1340,10 +1103,9 @@ def sync_dashboard_domains_from_opengsc():
                      gsc_site_id=excluded.gsc_site_id,
                      base_url=excluded.base_url,
                      updated_at=excluded.updated_at""",
-                (domain,"https://"+domain,str(gsc_id),now,now)
+                (domain, "https://" + domain, str(gsc_id), now, now),
             )
         con.commit()
-
 
 def get_sites():
     sync_dashboard_domains_from_opengsc()
@@ -2549,29 +2311,8 @@ def public_report(report_id):
 
 
 def _ensure_report_workflow_schema(con):
-    con.execute(
-        "CREATE TABLE IF NOT EXISTS report_exclusion ("
-        "domain TEXT NOT NULL COLLATE NOCASE,"
-        "scope TEXT NOT NULL,"
-        "item_key TEXT NOT NULL,"
-        "page_id INTEGER NOT NULL DEFAULT -1,"
-        "created_at TEXT NOT NULL,"
-        "PRIMARY KEY(domain,scope,item_key,page_id))"
-    )
-    con.execute(
-        "CREATE INDEX IF NOT EXISTS idx_report_exclusion_domain "
-        "ON report_exclusion(domain,scope)"
-    )
-    con.execute(
-        "CREATE TABLE IF NOT EXISTS report_human_interpretation ("
-        "domain TEXT NOT NULL COLLATE NOCASE,"
-        "report_id TEXT NOT NULL,"
-        "content TEXT NOT NULL DEFAULT '',"
-        "updated_at TEXT NOT NULL,"
-        "PRIMARY KEY(domain,report_id))"
-    )
-    con.commit()
-
+    # Compatibility hook only. Schema is owned by versioned migrations.
+    return None
 
 def _load_report_exclusions(domain):
     with research_db() as con:
@@ -2697,31 +2438,8 @@ def save_report_human_interpretation(domain, report_id):
 
 
 def _ensure_report_conversation_schema(con):
-    _ensure_report_workflow_schema(con)
-    con.execute(
-        "CREATE TABLE IF NOT EXISTS report_note ("
-        "domain TEXT NOT NULL COLLATE NOCASE,"
-        "note_key TEXT NOT NULL,"
-        "content TEXT NOT NULL DEFAULT '',"
-        "discussion_enabled INTEGER NOT NULL DEFAULT 0,"
-        "updated_at TEXT NOT NULL,"
-        "PRIMARY KEY(domain,note_key))"
-    )
-    con.execute(
-        "CREATE TABLE IF NOT EXISTS report_note_reply ("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "domain TEXT NOT NULL COLLATE NOCASE,"
-        "note_key TEXT NOT NULL,"
-        "author_role TEXT NOT NULL,"
-        "content TEXT NOT NULL,"
-        "created_at TEXT NOT NULL)"
-    )
-    con.execute(
-        "CREATE INDEX IF NOT EXISTS idx_report_note_reply_lookup "
-        "ON report_note_reply(domain,note_key,id)"
-    )
-    con.commit()
-
+    # Compatibility hook only. Schema is owned by versioned migrations.
+    return None
 
 def _load_report_notes(domain):
     with research_db() as con:
@@ -2916,4 +2634,5 @@ from integrations.dataforseo.extension import register_dataforseo_extension
 register_dataforseo_extension(app, research_db, get_site, get_sites)
 
 if __name__ == "__main__":
+    validate_schema_current(RESEARCH_DB)
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "4018")), debug=False)

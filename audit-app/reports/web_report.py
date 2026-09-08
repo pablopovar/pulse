@@ -6,6 +6,7 @@ import sqlite3
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from db.sqlite import connect_sqlite
 from typing import Any
 
 from reports.prioritization import (
@@ -77,47 +78,12 @@ IMPACT_ORDER = {
 
 
 def _connect(path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    con=sqlite3.connect(path); con.row_factory=sqlite3.Row
-    return con
+    return connect_sqlite(path, readonly=False)
 
 
 def _ensure(con):
-    con.execute("CREATE TABLE IF NOT EXISTS report_session (id TEXT PRIMARY KEY,domain TEXT NOT NULL,created_at TEXT NOT NULL,snapshot_json TEXT NOT NULL)")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_report_session_domain_created ON report_session(domain,created_at DESC)")
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS domain_report (
-            domain TEXT PRIMARY KEY COLLATE NOCASE,
-            baseline_report_id TEXT NOT NULL,
-            current_report_id TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS client_report_config (
-            domain TEXT PRIMARY KEY COLLATE NOCASE,
-            competitors_json TEXT NOT NULL DEFAULT '[]',
-            priority_pages_json TEXT NOT NULL DEFAULT '[]',
-            target_topics_json TEXT NOT NULL DEFAULT '[]',
-            page_groups_json TEXT NOT NULL DEFAULT '[]',
-            integrations_json TEXT NOT NULL DEFAULT '[]',
-            monitored_ai_prompts_json TEXT NOT NULL DEFAULT '[]',
-            updated_at TEXT NOT NULL DEFAULT ''
-        )
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS recommendation_tracking (
-            domain TEXT NOT NULL COLLATE NOCASE,
-            finding_key TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'open',
-            note TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY(domain,finding_key)
-        )
-    """)
-    con.commit()
-
+    # Compatibility hook only. Schema is owned by versioned migrations.
+    return None
 
 def _json_default(value: Any):
     if isinstance(value,datetime): return value.isoformat()

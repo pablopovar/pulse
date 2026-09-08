@@ -15,10 +15,10 @@ def now_iso() -> str:
 
 
 def ensure_schema(con: sqlite3.Connection) -> None:
-    con.execute("""CREATE TABLE IF NOT EXISTS ai_question_set (domain TEXT NOT NULL COLLATE NOCASE,version INTEGER NOT NULL,label TEXT NOT NULL DEFAULT '',approved INTEGER NOT NULL DEFAULT 0,comparison_set_json TEXT NOT NULL DEFAULT '[]',created_at TEXT NOT NULL,approved_at TEXT,PRIMARY KEY(domain,version))""")
-    con.execute("""CREATE TABLE IF NOT EXISTS ai_question_definition (domain TEXT NOT NULL COLLATE NOCASE,question_set_version INTEGER NOT NULL,question_id TEXT NOT NULL,phase TEXT NOT NULL,position INTEGER NOT NULL,question_text TEXT NOT NULL,category_tag TEXT NOT NULL DEFAULT '',PRIMARY KEY(domain,question_set_version,question_id))""")
-    con.execute("""CREATE TABLE IF NOT EXISTS ai_visibility_observation (domain TEXT NOT NULL COLLATE NOCASE,report_id TEXT NOT NULL,question_set_version INTEGER NOT NULL,question_id TEXT NOT NULL,phase TEXT NOT NULL,provider TEXT NOT NULL,model TEXT NOT NULL DEFAULT '',search_mode TEXT NOT NULL,repeat_index INTEGER NOT NULL,provider_status TEXT NOT NULL,raw_answer TEXT NOT NULL DEFAULT '',citations_json TEXT NOT NULL DEFAULT '[]',atomic_claims_json TEXT NOT NULL DEFAULT '[]',observed_at TEXT NOT NULL,PRIMARY KEY(domain,report_id,question_set_version,question_id,provider,search_mode,repeat_index))""")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_aiobs_report ON ai_visibility_observation(domain,report_id,question_set_version,question_id)")
+        pass
+        pass
+        pass
+        pass
     con.commit()
 
 

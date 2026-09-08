@@ -3,10 +3,53 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>{% block title %}SEO / GEO / AEO Dashboard{% endblock %}</title>
   {% set public_report_view = request.endpoint == 'public_report' %}
   {% set asset_endpoint = 'public_report_static' if public_report_view else 'static' %}
   <link rel="stylesheet" href="{{ url_for(asset_endpoint, filename='app.css') }}">
+  <script data-pulse-csrf-adapter="1">
+  (() => {
+    const csrfToken = () =>
+      document.querySelector('meta[name="csrf-token"]')?.content || '';
+
+    document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('form').forEach((form) => {
+        const method = (form.getAttribute('method') || 'GET').toUpperCase();
+        if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return;
+        if (form.querySelector('input[name="_csrf_token"]')) return;
+
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = '_csrf_token';
+        input.value = csrfToken();
+        form.appendChild(input);
+      });
+    });
+
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = (input, init = {}) => {
+      const requestUrl = typeof input === 'string' ? input : input.url;
+      const url = new URL(requestUrl, window.location.href);
+      const method = String(
+        init.method || (typeof input !== 'string' && input.method) || 'GET'
+      ).toUpperCase();
+
+      if (
+        url.origin === window.location.origin &&
+        ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
+      ) {
+        const headers = new Headers(
+          init.headers || (typeof input !== 'string' ? input.headers : undefined)
+        );
+        headers.set('X-CSRF-Token', csrfToken());
+        init = {...init, headers};
+      }
+
+      return originalFetch(input, init);
+    };
+  })();
+  </script>
 </head>
 <body class="{% if public_report_view %}public-report-view{% endif %}">
 {% if not public_report_view %}

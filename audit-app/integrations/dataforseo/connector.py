@@ -14,45 +14,8 @@ def truthy(v):
     return str(v or "").strip().lower() in {"1","true","yes","on","enabled"}
 
 def ensure_schema(con):
-    con.executescript("""
-    CREATE TABLE IF NOT EXISTS extension_global(
-      extension_key TEXT PRIMARY KEY,
-      kill_switch INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS extension_project(
-      domain TEXT NOT NULL COLLATE NOCASE,
-      extension_key TEXT NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 0,
-      max_items_per_run INTEGER NOT NULL DEFAULT 10,
-      max_calls_per_run INTEGER NOT NULL DEFAULT 2,
-      enabled_features_json TEXT NOT NULL DEFAULT '[]',
-      updated_at TEXT NOT NULL,
-      PRIMARY KEY(domain,extension_key)
-    );
-    CREATE TABLE IF NOT EXISTS extension_usage(
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      domain TEXT NOT NULL COLLATE NOCASE,
-      extension_key TEXT NOT NULL,
-      run_kind TEXT NOT NULL,
-      endpoint TEXT NOT NULL,
-      requested_items INTEGER NOT NULL DEFAULT 0,
-      returned_items INTEGER NOT NULL DEFAULT 0,
-      api_cost REAL,
-      status TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS dataforseo_snapshot(
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      domain TEXT NOT NULL COLLATE NOCASE,
-      report_run_id INTEGER,
-      endpoint TEXT NOT NULL,
-      payload_json TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-    """)
-    con.execute("INSERT OR IGNORE INTO extension_global VALUES('dataforseo',0,?)",(now(),))
-    con.commit()
+    # Compatibility hook only. Schema is owned by versioned migrations.
+    return None
 
 def get_project(con,domain):
     ensure_schema(con)
