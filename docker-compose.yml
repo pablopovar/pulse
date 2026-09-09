@@ -43,6 +43,31 @@ services:
       - audit-data:/data/audit
       - audit-reports:/data/reports
 
+
+  audit-worker:
+    build:
+      context: ./audit-app
+      dockerfile: Dockerfile
+    container_name: audit-worker
+    depends_on:
+      - opengsc
+    env_file:
+      - ./.env
+    environment:
+      SEO_DB: "/data/opengsc/prod.db"
+      RESEARCH_DB: "/data/audit/research.db"
+      REPORTS_DIR: "/data/reports"
+      DATAFORSEO_LOGIN: "${DATAFORSEO_LOGIN}"
+      DATAFORSEO_PASSWORD: "${DATAFORSEO_PASSWORD}"
+      DATAFORSEO_KILL_SWITCH: "${DATAFORSEO_KILL_SWITCH:-0}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["python", "-m", "jobs.worker"]
+    volumes:
+      - opengsc-data:/data/opengsc:ro
+      - audit-data:/data/audit
+      - audit-reports:/data/reports
+
 volumes:
   opengsc-data:
   audit-data:
