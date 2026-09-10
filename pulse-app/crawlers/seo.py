@@ -3,8 +3,8 @@ from __future__ import annotations
 import gzip
 import io
 import json
+import os
 import re
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -14,8 +14,10 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Callable, Iterable
 from services.safe_fetcher import SafeFetchError, safe_fetcher
+from jobs.store import enqueue_job
 
 
 USER_AGENT = "PB-SEO-Crawler/0.1 (+website audit; single-domain; polite)"
@@ -24,6 +26,7 @@ DEFAULT_PAGE_CAP = 100
 DEFAULT_DELAY_MS = 250
 MAX_BYTES = 5 * 1024 * 1024
 TIMEOUT = 15
+RESEARCH_DB_PATH = Path(os.environ.get("RESEARCH_DB", "/data/audit/research.db"))
 
 
 def utcnow():
@@ -751,9 +754,7 @@ def register_crawler(app, research_db: Callable, get_site: Callable):
                 url = normalize_url(raw)
             except Exception:
                 continue
-            if not same_site(url, site["domain"]):
-                continue
-            if url not in seen:
+            if same_site(url, site["domain"]) and url not in seen:
                 seen.add(url)
                 urls.append(url)
 
@@ -761,40 +762,30 @@ def register_crawler(app, research_db: Callable, get_site: Callable):
             return redirect(url_for("ten_page_select", domain=site["domain"]))
 
         urls = urls[:10]
-
         try:
             delay_ms = int(request.form.get("delay_ms", 2000))
         except Exception:
             delay_ms = 2000
         delay_ms = max(0, min(delay_ms, 10000))
-
         obey_robots = request.form.get("obey_robots", "1") != "0"
-        base_url = "https://" + site["domain"]
 
-        with research_db() as con:
-            ensure_schema(con)
-            cur = con.execute(
-                """INSERT INTO crawl_run(
-                    domain,base_url,status,page_cap,delay_ms,obey_robots,
-                    report_scope,selected_urls_json
-                ) VALUES (?,?,?,?,?,?,?,?)""",
-                (
-                    site["domain"], base_url, "queued", len(urls), delay_ms,
-                    int(obey_robots), "ten-page", json.dumps(urls)
-                ),
-            )
-            run_id = cur.lastrowid
-            con.commit()
-
-        t = threading.Thread(
-            target=crawl_worker,
-            args=(run_id, site["domain"], base_url, len(urls), delay_ms,
-                  obey_robots, research_db, urls, False),
-            daemon=True,
-            name=f"seo-crawl-ten-page-{run_id}",
+        job = enqueue_job(
+            RESEARCH_DB_PATH,
+            "crawl",
+            domain=site["domain"],
+            payload={
+                "domain": site["domain"],
+                "base_url": "https://" + site["domain"],
+                "page_cap": len(urls),
+                "delay_ms": delay_ms,
+                "obey_robots": obey_robots,
+                "report_scope": "ten-page",
+                "selected_urls": urls,
+                "follow_links": False,
+            },
+            max_attempts=3,
         )
-        t.start()
-        return redirect(url_for("seo_crawl", domain=site["domain"]))
+        return redirect(url_for("seo_crawl", domain=site["domain"], job=job["id"]))
 
     @app.post("/d/<domain>/crawl/run")
     def seo_crawl_run(domain):
@@ -810,29 +801,25 @@ def register_crawler(app, research_db: Callable, get_site: Callable):
         except Exception:
             delay_ms = DEFAULT_DELAY_MS
         delay_ms = max(0, min(delay_ms, 10000))
-
         obey_robots = request.form.get("obey_robots", "1") != "0"
-        base_url = "https://" + site["domain"]
 
-        with research_db() as con:
-            ensure_schema(con)
-            cur = con.execute(
-                """INSERT INTO crawl_run(
-                    domain,base_url,status,page_cap,delay_ms,obey_robots
-                   ) VALUES (?,?,?,?,?,?)""",
-                (site["domain"], base_url, "queued", page_cap, delay_ms, int(obey_robots)),
-            )
-            run_id = cur.lastrowid
-            con.commit()
-
-        t = threading.Thread(
-            target=crawl_worker,
-            args=(run_id, site["domain"], base_url, page_cap, delay_ms, obey_robots, research_db),
-            daemon=True,
-            name=f"seo-crawl-{run_id}",
+        job = enqueue_job(
+            RESEARCH_DB_PATH,
+            "crawl",
+            domain=site["domain"],
+            payload={
+                "domain": site["domain"],
+                "base_url": "https://" + site["domain"],
+                "page_cap": page_cap,
+                "delay_ms": delay_ms,
+                "obey_robots": obey_robots,
+                "report_scope": "full",
+                "selected_urls": [],
+                "follow_links": True,
+            },
+            max_attempts=3,
         )
-        t.start()
-        return redirect(url_for("seo_crawl", domain=site["domain"]))
+        return redirect(url_for("seo_crawl", domain=site["domain"], job=job["id"]))
 
     @app.get("/d/<domain>/crawl/<int:run_id>.json")
     def seo_crawl_status(domain, run_id):

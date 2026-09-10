@@ -1,6 +1,7 @@
 """Single-owner registry for every Pulse-owned SQLite table."""
 
 TABLE_OWNERS = {
+    "manual_ai_analysis_run": "jobs.workflows",
     "durable_job": "jobs.store",
     'ai_question_definition': 'reports.question_governance',
     'ai_question_set': 'reports.question_governance',

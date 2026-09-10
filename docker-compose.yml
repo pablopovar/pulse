@@ -1,3 +1,5 @@
+name: pulse
+
 services:
   opengsc:
     build:
@@ -16,11 +18,11 @@ services:
     volumes:
       - opengsc-data:/data
 
-  audit-app:
+  pulse-app:
     build:
-      context: ./audit-app
+      context: ./pulse-app
       dockerfile: Dockerfile
-    container_name: audit-app
+    container_name: pulse-app
 #    restart: unless-stopped
     depends_on:
       - opengsc
@@ -44,11 +46,11 @@ services:
       - audit-reports:/data/reports
 
 
-  audit-worker:
+  pulse-worker:
     build:
-      context: ./audit-app
+      context: ./pulse-app
       dockerfile: Dockerfile
-    container_name: audit-worker
+    container_name: pulse-worker
     depends_on:
       - opengsc
     env_file:
@@ -70,5 +72,8 @@ services:
 
 volumes:
   opengsc-data:
+    name: seo-aeo-geo-suite_opengsc-data
   audit-data:
+    name: seo-aeo-geo-suite_audit-data
   audit-reports:
+    name: seo-aeo-geo-suite_audit-reports

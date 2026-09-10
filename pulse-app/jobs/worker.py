@@ -44,7 +44,7 @@ def execute_claimed_job(
     try:
         import inspect
         if len(inspect.signature(handler).parameters) >= 2:
-            outcome = handler(job, worker_id) or {}
+            outcome = handler(job, claimed_by) or {}
         else:
             outcome = handler(job) or {}
         status = str(outcome.get("status") or "completed")
