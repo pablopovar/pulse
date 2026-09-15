@@ -101,7 +101,8 @@ def test_upgrade_from_version_one_applies_only_pending_migrations(tmp_path):
     finally:
         raw.close()
 
-    assert migrate_up(db) == [2, 3]
+    assert migrate_up(db) == [2, 3, 4, 5]
+
     validate_schema_current(db)
     assert "cross_model_comparison" in _table_names(db)
 
