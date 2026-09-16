@@ -20,7 +20,7 @@ class ManualAIPayload:
     error: str = ""
 
 
-_FENCE_RE = re.compile(r"^\`\`\`(?:json)?\s*([\s\S]*?)\s*\`\`\`$", re.I)
+_FENCE_RE = re.compile(r"^\x60{3}(?:json)?\s*([\s\S]*?)\s*\x60{3}$", re.I)
 
 
 def parse_manual_ai_payload(raw: Any) -> ManualAIPayload:
