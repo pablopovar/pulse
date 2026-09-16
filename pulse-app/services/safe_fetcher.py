@@ -4,11 +4,13 @@ import ipaddress
 import socket
 from dataclasses import dataclass, field
 from typing import Iterable
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 import urllib3
 from urllib3 import exceptions as urllib3_exceptions
+
+from services.url_policy import URLPolicyError, normalize_hostname, safe_url_join
 
 
 class SafeFetchError(RuntimeError):
@@ -147,7 +149,10 @@ class SafeFetcher:
         if not parsed.hostname:
             raise UnsafeDestination("URL must contain a hostname.")
 
-        host = parsed.hostname.rstrip(".").lower()
+        try:
+            host = normalize_hostname(parsed.hostname)
+        except URLPolicyError as exc:
+            raise UnsafeDestination(str(exc)) from exc
         if host in BLOCKED_HOSTNAMES or host.endswith(".localhost"):
             raise UnsafeDestination(f"Blocked hostname: {host}")
 
@@ -319,7 +324,10 @@ class SafeFetcher:
                     raise SafeFetchError(f"Redirect response from {current_url} had no Location header.")
                 if redirect_index >= self.max_redirects:
                     raise TooManyRedirects(f"Redirect limit exceeded ({self.max_redirects}).")
-                target_url = urljoin(current_url, location)
+                try:
+                    target_url = safe_url_join(current_url, location)
+                except URLPolicyError as exc:
+                    raise UnsafeDestination(str(exc)) from exc
                 history.append(RedirectHop(current_url, response.status_code, target_url))
                 current_url = target_url
                 continue
