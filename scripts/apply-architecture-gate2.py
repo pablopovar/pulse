@@ -8,11 +8,20 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "pulse-app" / "app.py"
 FULL_PDF = ROOT / "pulse-app" / "reports" / "full_pdf.py"
 WORKFLOWS = ROOT / "pulse-app" / "jobs" / "workflows.py"
+PATCHED_PATHS = [
+    "pulse-app/app.py",
+    "pulse-app/reports/full_pdf.py",
+    "pulse-app/jobs/workflows.py",
+]
 
 
 def run(*args: str) -> None:
     print("+", " ".join(args), flush=True)
     subprocess.run(args, cwd=ROOT, check=True)
+
+
+def restore_patched_files() -> None:
+    subprocess.run(["git", "restore", "--", *PATCHED_PATHS], cwd=ROOT, check=False)
 
 
 def replace_between(text: str, start: str, end: str, replacement: str) -> str:
@@ -323,6 +332,39 @@ def patch_workflows() -> None:
     WORKFLOWS.write_text(text)
 
 
+def test_in_isolated_runtime() -> None:
+    run("python3", "-m", "compileall", "-q", "pulse-app")
+    run("docker", "compose", "build", "pulse-app")
+    run(
+        "docker", "compose", "run", "--rm", "--no-deps",
+        "-e", "RESEARCH_DB=/tmp/pulse-gate2-targeted.db",
+        "pulse-app", "sh", "-lc",
+        "python -m db.migrate up && python -m pytest -q "
+        "tests/test_no_flask_daemon_workflows.py "
+        "tests/test_request_paths_no_discovery_io.py "
+        "tests/test_page_discovery.py "
+        "tests/test_opengsc_adapter.py "
+        "tests/test_opengsc_schema_isolation.py "
+        "tests/test_worker_workflows_idempotency.py "
+        "tests/test_migrations_and_sqlite.py",
+    )
+    run(
+        "docker", "compose", "run", "--rm", "--no-deps",
+        "-e", "RESEARCH_DB=/tmp/pulse-gate2-full.db",
+        "pulse-app", "sh", "-lc",
+        "python -m db.migrate up && python -m pytest -q",
+    )
+
+
+def deploy_verified_gate() -> None:
+    # Migration 0006 is additive: it introduces discovery state without rewriting
+    # or deleting existing Pulse observations.
+    run("docker", "compose", "run", "--rm", "--no-deps", "pulse-app", "python", "-m", "db.migrate", "up")
+    run("docker", "compose", "run", "--rm", "--no-deps", "pulse-app", "python", "-m", "db.migrate", "status")
+    run("docker", "compose", "up", "-d", "--force-recreate", "pulse-app", "pulse-worker")
+    run("docker", "compose", "ps")
+
+
 def main() -> int:
     run("git", "diff", "--quiet")
     run("git", "diff", "--cached", "--quiet")
@@ -330,34 +372,22 @@ def main() -> int:
     if branch != "architecture-hardening":
         raise SystemExit(f"Refusing to run on branch {branch!r}; expected 'architecture-hardening'.")
 
-    patch_app()
-    patch_full_pdf()
-    patch_workflows()
+    try:
+        patch_app()
+        patch_full_pdf()
+        patch_workflows()
+        test_in_isolated_runtime()
+    except BaseException:
+        print("Gate 2 verification failed; restoring locally transformed files.", flush=True)
+        restore_patched_files()
+        raise
 
-    run("python3", "-m", "compileall", "-q", "pulse-app")
-    run("docker", "compose", "build", "pulse-app")
-    run(
-        "docker", "compose", "run", "--rm", "--no-deps", "pulse-app",
-        "python", "-m", "pytest", "-q",
-        "tests/test_no_flask_daemon_workflows.py",
-        "tests/test_request_paths_no_discovery_io.py",
-        "tests/test_page_discovery.py",
-        "tests/test_opengsc_adapter.py",
-        "tests/test_opengsc_schema_isolation.py",
-        "tests/test_worker_workflows_idempotency.py",
-        "tests/test_migrations_and_sqlite.py",
-    )
-    run("docker", "compose", "run", "--rm", "--no-deps", "pulse-app", "python", "-m", "pytest", "-q")
-
-    run(
-        "git", "add",
-        "pulse-app/app.py",
-        "pulse-app/reports/full_pdf.py",
-        "pulse-app/jobs/workflows.py",
-    )
+    run("git", "add", *PATCHED_PATHS)
     run("git", "commit", "-m", "Complete application service and discovery boundaries")
     run("git", "push", "origin", "architecture-hardening")
-    print("Gate 2 application refactor applied, tested, committed, and pushed.")
+
+    deploy_verified_gate()
+    print("Gate 2 applied, tested, committed, pushed, migrated, and restarted.")
     return 0
 
 
