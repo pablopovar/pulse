@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 from services.safe_fetcher import safe_fetcher
 from services.url_policy import site_page_identity as normalize_site_page_url, url_path as site_page_path
+from services.manual_ai_sources import load_manual_ai_source as load_manual_ai_source_state, save_manual_ai_source
 from services.report_collaboration import (
     DiscussionDisabled,
     ReportNotFound,
@@ -129,26 +130,12 @@ def manual_ai_default_prompt(domain, phase, state):
 
 
 def load_manual_ai_source(domain):
-    with research_db() as con:
-        parent=con.execute("SELECT * FROM manual_ai_source WHERE domain=? COLLATE NOCASE",(domain,)).fetchone()
-        rows=con.execute("SELECT * FROM manual_ai_state_source WHERE domain=? COLLATE NOCASE ORDER BY phase,state",(domain,)).fetchall()
-    out=dict(parent) if parent else {"domain":domain,"question_set_version":1,"analysis_status":"not_run","updated_at":""}
-    indexed={(r["phase"],r["state"]):dict(r) for r in rows}
-    for phase in ("phase1","phase2"):
-        for state in ("state1","state2"):
-            row=indexed.get((phase,state),{}); prefix=f"{phase}_{state}"
-            out[f"{prefix}_prompt_text"]=row.get("prompt_text") or manual_ai_default_prompt(domain,phase,state)
-            for provider in ("chatgpt","claude","gemini"):
-                out[f"{prefix}_{provider}_response"]=row.get(f"{provider}_response") or ""
-    if not str(out.get("analysis_system_prompt") or "").strip(): out["analysis_system_prompt"]=DEFAULT_ANALYSIS_SYSTEM_PROMPT
-    if not str(out.get("analysis_model") or "").strip(): out["analysis_model"]=(os.environ.get("MANUAL_AI_ANALYSIS_MODEL") or os.environ.get("COMPARISON_JUDGE_MODEL") or "")
-    if not str(out.get("analysis_provider") or "").strip(): out["analysis_provider"]=(os.environ.get("MANUAL_AI_ANALYSIS_PROVIDER") or "ollama").strip().lower()
-    if not str(out.get("analysis_reasoning_effort") or "").strip(): out["analysis_reasoning_effort"]="high"
-    if out.get("analysis_temperature") is None: out["analysis_temperature"]=0.1
-    if out.get("analysis_top_p") is None: out["analysis_top_p"]=0.9
-    if not out.get("analysis_max_output_tokens"): out["analysis_max_output_tokens"]=8000
-    if not out.get("analysis_system_prompt_version"): out["analysis_system_prompt_version"]=3
-    return out
+    return load_manual_ai_source_state(
+        RESEARCH_DB,
+        domain,
+        prompt_factory=manual_ai_default_prompt,
+        default_analysis_prompt=DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+    )
 
 
 def _manual_ai_upload_text(field_name):
@@ -774,29 +761,43 @@ def domain_settings(domain):
 
 @app.route("/d/<domain>/sources/manual-ai", methods=["GET", "POST"])
 def manual_ai_source(domain):
-    site=get_site(domain); message=request.args.get("message","").strip()
-    if request.method=="POST":
-        current=load_manual_ai_source(domain); prompts={}; responses={}
-        for phase in ("phase1","phase2"):
-            for state in ("state1","state2"):
-                prefix=f"{phase}_{state}"; prompts[prefix]=request.form.get(f"{prefix}_prompt_text","")
-                for provider in ("chatgpt","claude","gemini"):
-                    key=f"{prefix}_{provider}"; uploaded=_manual_ai_upload_text(f"{key}_upload"); pasted=request.form.get(f"{key}_response","")
-                    responses[key]=uploaded if uploaded is not None else pasted
-        old_prompts=tuple(str(current.get(f"{p}_{s}_prompt_text") or "") for p in ("phase1","phase2") for s in ("state1","state2"))
-        new_prompts=tuple(prompts[f"{p}_{s}"] for p in ("phase1","phase2") for s in ("state1","state2"))
-        version=int(current.get("question_set_version") or 1)+(1 if old_prompts!=new_prompts else 0)
-        now=datetime.now(timezone.utc).isoformat(timespec="seconds")
-        with research_db() as con:
-                con.execute("INSERT INTO manual_ai_source(domain,question_set_version,analysis_model,analysis_system_prompt,analysis_text,analysis_status,analysis_error,analysis_updated_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(domain) DO UPDATE SET question_set_version=excluded.question_set_version,updated_at=excluded.updated_at",(domain,version,current.get("analysis_model") or "",current.get("analysis_system_prompt") or DEFAULT_ANALYSIS_SYSTEM_PROMPT,current.get("analysis_text") or "",current.get("analysis_status") or "not_run",current.get("analysis_error") or "",current.get("analysis_updated_at") or "",now))
-            for phase in ("phase1","phase2"):
-                for state in ("state1","state2"):
-                    prefix=f"{phase}_{state}"
-                    con.execute("INSERT INTO manual_ai_state_source(domain,phase,state,prompt_text,chatgpt_response,claude_response,gemini_response,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(domain,phase,state) DO UPDATE SET prompt_text=excluded.prompt_text,chatgpt_response=excluded.chatgpt_response,claude_response=excluded.claude_response,gemini_response=excluded.gemini_response,updated_at=excluded.updated_at",(domain,phase,state,prompts[prefix],responses[f"{prefix}_chatgpt"],responses[f"{prefix}_claude"],responses[f"{prefix}_gemini"],now))
-            con.execute("INSERT INTO domain_source(domain,source_key,source_name,selected,connection_status,detail,updated_at) VALUES (?,?,?,1,'not_connected',?,?) ON CONFLICT(domain,source_key) DO UPDATE SET source_name=excluded.source_name,selected=1,detail=excluded.detail,updated_at=excluded.updated_at",(domain,"manual_ai","Manual AI Responses",f"Four-state Manual AI source · question-set v{version}",now))
-            con.commit()
-        return redirect(url_for("manual_ai_source",domain=domain,message=f"Saved question-set v{version}: 2 phases × 2 states."))
-    return render_template("manual_ai_responses.html",sites=get_sites(),site=site,state=load_manual_ai_source(domain),message=message)
+    site = get_site(domain)
+    message = request.args.get("message", "").strip()
+    if request.method == "POST":
+        current = load_manual_ai_source(domain)
+        prompts = {}
+        responses = {}
+        for phase in ("phase1", "phase2"):
+            for state in ("state1", "state2"):
+                prefix = f"{phase}_{state}"
+                prompts[prefix] = request.form.get(f"{prefix}_prompt_text", "")
+                for provider in ("chatgpt", "claude", "gemini"):
+                    key = f"{prefix}_{provider}"
+                    uploaded = _manual_ai_upload_text(f"{key}_upload")
+                    pasted = request.form.get(f"{key}_response", "")
+                    responses[key] = uploaded if uploaded is not None else pasted
+        version = save_manual_ai_source(
+            RESEARCH_DB,
+            domain,
+            prompts=prompts,
+            responses=responses,
+            current=current,
+            default_analysis_prompt=DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+        )
+        return redirect(
+            url_for(
+                "manual_ai_source",
+                domain=domain,
+                message=f"Saved question-set v{version}: 2 phases × 2 states.",
+            )
+        )
+    return render_template(
+        "manual_ai_responses.html",
+        sites=get_sites(),
+        site=site,
+        state=load_manual_ai_source(domain),
+        message=message,
+    )
 
 
 @app.get("/d/<domain>/sources/manual-ai/models")
