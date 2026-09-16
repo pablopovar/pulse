@@ -34,11 +34,6 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def ensure_schema(con: sqlite3.Connection) -> None:
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
 
 def normalize_domain(value: str) -> str:
     raw = (value or "").strip().lower()
@@ -54,7 +49,6 @@ def normalize_domain(value: str) -> str:
 
 
 def controlled_domains(con: sqlite3.Connection, domain: str) -> list[str]:
-    ensure_schema(con)
     primary = normalize_domain(domain)
     rows = con.execute(
         "SELECT controlled_domain FROM domain_company_controlled_domain WHERE domain=? COLLATE NOCASE ORDER BY controlled_domain",
@@ -66,7 +60,6 @@ def controlled_domains(con: sqlite3.Connection, domain: str) -> list[str]:
 
 
 def save_controlled_domains(con: sqlite3.Connection, domain: str, values: list[str]) -> None:
-    ensure_schema(con)
     con.execute("DELETE FROM domain_company_controlled_domain WHERE domain=? COLLATE NOCASE", (domain,))
     primary = normalize_domain(domain)
     for value in values:
@@ -289,7 +282,6 @@ def concept_metrics(judge: dict[str, Any], providers: list[str]) -> dict[str, An
 
 
 def upsert_response(con: sqlite3.Connection, record: dict[str, Any]) -> None:
-    ensure_schema(con)
     status = record.get("provider_status") or "success"
     if status not in PROVIDER_STATUSES:
         raise ValueError("Invalid provider status")
@@ -319,7 +311,6 @@ def upsert_response(con: sqlite3.Connection, record: dict[str, Any]) -> None:
 
 
 def run_comparison(con: sqlite3.Connection, domain: str, report_id: str, question_id: str) -> dict[str, Any]:
-    ensure_schema(con)
     rows = [dict(r) for r in con.execute(
         "SELECT * FROM cross_model_provider_response WHERE domain=? COLLATE NOCASE AND report_id=? AND question_id=? ORDER BY provider",
         (domain, report_id, question_id),
@@ -382,7 +373,6 @@ def run_comparison(con: sqlite3.Connection, domain: str, report_id: str, questio
 
 
 def load_question(con: sqlite3.Connection, domain: str, report_id: str, question_id: str) -> dict[str, Any]:
-    ensure_schema(con)
     comp = con.execute(
         "SELECT * FROM cross_model_comparison WHERE domain=? COLLATE NOCASE AND report_id=? AND question_id=?",
         (domain, report_id, question_id),
@@ -399,7 +389,6 @@ def load_question(con: sqlite3.Connection, domain: str, report_id: str, question
 
 
 def report_rollups(con: sqlite3.Connection, domain: str, report_id: str) -> dict[str, Any]:
-    ensure_schema(con)
     comps = [dict(r) for r in con.execute(
         "SELECT * FROM cross_model_comparison WHERE domain=? COLLATE NOCASE AND report_id=? ORDER BY question_id",
         (domain, report_id),
