@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from services.safe_fetcher import safe_fetcher
 from services.url_policy import site_page_identity as normalize_site_page_url, url_path as site_page_path
 from services.manual_ai_sources import load_manual_ai_source as load_manual_ai_source_state, save_manual_ai_source
+from services.domain_company import infer_company_name as infer_company_name_from_db, save_company_name
 from services.report_collaboration import (
     DiscussionDisabled,
     ReportNotFound,
@@ -164,114 +165,9 @@ REPORT_FAMILY_DEFAULT_QUESTIONS = {
 
 
 
-def _company_name_from_title(title):
-    if not title:
-        return ""
-    candidate = str(title).strip()
-    for sep in (" | ", " · ", " — ", " - ", ": "):
-        if sep in candidate:
-            candidate = candidate.split(sep, 1)[0].strip()
-            break
-    return candidate
-
 def infer_company_name(domain):
-    with research_db() as con:
-        row = con.execute(
-            "SELECT company_name FROM domain_company_settings WHERE domain=? COLLATE NOCASE",
-            (domain,),
-        ).fetchone()
-        if row and str(row["company_name"] or "").strip():
-            return str(row["company_name"]).strip()
+    return infer_company_name_from_db(RESEARCH_DB, domain)
 
-        try:
-            row = con.execute(
-                "SELECT cp.title "
-                "FROM crawl_page cp "
-                "JOIN crawl_run cr ON cr.id=cp.crawl_run_id "
-                "WHERE cr.domain=? COLLATE NOCASE "
-                "AND cp.path='/' "
-                "AND TRIM(COALESCE(cp.title,''))<>'' "
-                "ORDER BY cr.id DESC LIMIT 1",
-                (domain,),
-            ).fetchone()
-            if row:
-                candidate = _company_name_from_title(row["title"])
-                if candidate:
-                    return candidate
-        except Exception:
-            pass
-
-    label = domain.lower().split(":")[0].strip().strip("/")
-    if label.startswith("www."):
-        label = label[4:]
-    label = label.split(".")[0]
-    words = [w for w in re.split(r"[-_]+", label) if w]
-    return " ".join(w.capitalize() for w in words) if words else domain
-
-
-
-
-
-
-
-
-def research_state_from_request(source):
-    return {"q":source.get("q","").strip(),"sort":source.get("sort","keyword"),"dir":source.get("dir","asc"),"per_page":source.get("per_page","50"),"page":source.get("page","1"),"show_tag":source.getlist("show_tag"),"hide_tag":source.getlist("hide_tag")}
-
-def research_redirect(domain,message,source):
-    return redirect(url_for("research",domain=domain,message=message,**research_state_from_request(source)))
-
-def normalize_tag_name(name):
-    return " ".join((name or "").strip().split())
-
-def move_research_keyword_to_wanted(con,domain,row,now):
-    existing=con.execute("SELECT id FROM wanted_keyword WHERE domain=? AND keyword=? COLLATE NOCASE",(domain,row["keyword"])).fetchone()
-    if existing:
-        wanted_id=existing["id"]
-        con.execute("UPDATE wanted_keyword SET avg_monthly_searches=COALESCE(?,avg_monthly_searches),competition=COALESCE(?,competition),updated_at=? WHERE id=?",(row["avg_monthly_searches"],row["competition"],now,wanted_id))
-    else:
-        cur=con.execute("INSERT INTO wanted_keyword(domain,keyword,avg_monthly_searches,competition,source,created_at,updated_at) VALUES (?,?,?,?,'research',?,?)",(domain,row["keyword"],row["avg_monthly_searches"],row["competition"],now,now)); wanted_id=cur.lastrowid
-    con.execute("INSERT OR IGNORE INTO wanted_keyword_tag(wanted_keyword_id,tag_id) SELECT ?,tag_id FROM research_keyword_tag WHERE research_keyword_id=?",(wanted_id,row["id"]))
-    con.execute("DELETE FROM research_keyword_tag WHERE research_keyword_id=?",(row["id"],))
-    con.execute("DELETE FROM research_keyword WHERE id=? AND domain=?",(row["id"],domain))
-    return wanted_id
-
-
-
-def _fetch_sitemap_urls(url, domain, seen=None, depth=0):
-    urls, _errors = discover_sitemap_urls(
-        url,
-        domain,
-        max_depth=max(0, 5 - int(depth or 0)),
-    )
-    return urls
-
-
-def sitemap_pages(domain):
-    urls, source, _errors = discover_domain_sitemap(domain)
-    return urls, source
-
-
-def _site_id_value(site):
-    return service_site_id_value(site)
-
-
-def gsc_rows_for_domain(domain):
-    site = get_site(domain)
-    if site.get("gsc_missing"):
-        return []
-    return OpenGSCAdapter(SEO_DB).gsc_keyword_rows(_site_id_value(site))
-
-
-def sync_site_pages(domain):
-    site = get_site(domain)
-    outcome = canonical_sync_site_pages(
-        domain,
-        research_db=RESEARCH_DB,
-        opengsc_db=SEO_DB,
-        site_id=_site_id_value(site),
-    )
-    return outcome["sitemap_count"], outcome["ranking_count"], outcome["sitemap_source"]
 
 def canonical_keyword_tags(con, domain, keyword):
     return con.execute(
@@ -739,18 +635,7 @@ def domain_sources(domain):
 @app.post("/d/<domain>/sources/company-name")
 def save_source_company_name(domain):
     get_site(domain)
-    company_name = request.form.get("company_name", "").strip() or domain
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with research_db() as con:
-        con.execute(
-            """INSERT INTO domain_company_settings(domain,company_name,updated_at)
-               VALUES (?,?,?)
-               ON CONFLICT(domain) DO UPDATE SET
-                 company_name=excluded.company_name,
-                 updated_at=excluded.updated_at""",
-            (domain, company_name, now),
-        )
-        con.commit()
+    save_company_name(RESEARCH_DB, domain, request.form.get("company_name", ""))
     return redirect(url_for("domain_sources", domain=domain, message="Domain settings saved."))
 
 
