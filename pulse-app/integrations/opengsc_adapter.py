@@ -26,7 +26,11 @@ class OpenGSCAdapter:
         return connect_sqlite(self.db_path, readonly=True)
 
     @staticmethod
-    def _exists(con, name: str) -> bool:
+    def _exists(con, name: str, kind: str | None = None) -> bool:
+        if kind:
+            return bool(con.execute(
+                "SELECT 1 FROM sqlite_master WHERE name=? AND type=? LIMIT 1", (name, kind)
+            ).fetchone())
         return bool(con.execute("SELECT 1 FROM sqlite_master WHERE name=? LIMIT 1", (name,)).fetchone())
 
     @staticmethod
@@ -85,6 +89,182 @@ class OpenGSCAdapter:
                 params.append(site_id)
             return self._rows(con, sql, params)
 
+    def domain_seo(self, site_id: str | None):
+        if not site_id or not self.available():
+            return None, []
+        with self._connect() as con:
+            summary = None
+            if self._exists(con, "gsc_keyword_observation", "table"):
+                summary = self._row(
+                    con,
+                    """
+                    SELECT COUNT(*) AS observations,
+                           COUNT(DISTINCT query) AS keywords,
+                           COUNT(DISTINCT page) AS pages,
+                           COALESCE(SUM(impressions),0) AS impressions,
+                           COALESCE(SUM(clicks),0) AS clicks,
+                           ROUND(MIN(position),1) AS best_position,
+                           ROUND(MAX(position),1) AS worst_position
+                    FROM gsc_keyword_observation WHERE site_id=?
+                    """,
+                    (site_id,),
+                )
+            recent = []
+            if self._exists(con, "gsc_keyword_inventory"):
+                recent = self._rows(
+                    con,
+                    """
+                    SELECT query,page,impressions,clicks,
+                           ROUND(best_position,1) AS best_position,
+                           ROUND(latest_position,1) AS latest_position,
+                           status,first_seen,last_seen
+                    FROM gsc_keyword_inventory
+                    WHERE site_id=?
+                    ORDER BY CASE status
+                               WHEN 'active_7d' THEN 1
+                               WHEN 'active_30d' THEN 2
+                               WHEN 'stale_90d' THEN 3
+                               ELSE 4 END,
+                             impressions DESC,best_position ASC
+                    LIMIT 20
+                    """,
+                    (site_id,),
+                )
+        return summary, recent
+
+    def landing_page_rows(self, site_id: str | None, q: str = "") -> list[dict[str, Any]]:
+        if not site_id or not self.available():
+            return []
+        with self._connect() as con:
+            if not self._exists(con, "gsc_keyword_inventory"):
+                return []
+            sql = """
+                SELECT page,
+                       COUNT(DISTINCT query) AS keywords,
+                       COALESCE(SUM(impressions),0) AS impressions,
+                       COALESCE(SUM(clicks),0) AS clicks,
+                       ROUND(MIN(best_position),1) AS best_position,
+                       ROUND(AVG(avg_position),1) AS avg_position,
+                       MAX(last_seen) AS last_seen
+                FROM gsc_keyword_inventory
+                WHERE site_id=?
+            """
+            params: list[Any] = [site_id]
+            if q:
+                sql += " AND (page LIKE ? OR query LIKE ?)"
+                like = f"%{q}%"
+                params.extend([like, like])
+            sql += " GROUP BY page ORDER BY impressions DESC,best_position ASC,page"
+            return self._rows(con, sql, params)
+
+    def page_detail(self, site_id: str | None, page_url: str):
+        if not site_id or not self.available():
+            return [], None
+        with self._connect() as con:
+            if not self._exists(con, "gsc_keyword_inventory"):
+                return [], None
+            keywords = self._rows(
+                con,
+                """
+                SELECT query,observations,impressions,clicks,
+                       ROUND(best_position,1) AS best_position,
+                       ROUND(avg_position,1) AS avg_position,
+                       ROUND(latest_position,1) AS latest_position,
+                       ROUND(worst_position,1) AS worst_position,
+                       status,first_seen,last_seen
+                FROM gsc_keyword_inventory
+                WHERE site_id=? AND page=?
+                ORDER BY impressions DESC,best_position ASC
+                """,
+                (site_id, page_url),
+            )
+            summary = self._row(
+                con,
+                """
+                SELECT COUNT(DISTINCT query) AS keywords,
+                       COALESCE(SUM(impressions),0) AS impressions,
+                       COALESCE(SUM(clicks),0) AS clicks,
+                       ROUND(MIN(best_position),1) AS best_position,
+                       ROUND(AVG(avg_position),1) AS avg_position,
+                       MAX(last_seen) AS last_seen
+                FROM gsc_keyword_inventory
+                WHERE site_id=? AND page=?
+                """,
+                (site_id, page_url),
+            )
+            return keywords, summary
+
+    def keyword_rows(self, site_id: str | None) -> list[dict[str, Any]]:
+        if not site_id or not self.available():
+            return []
+        with self._connect() as con:
+            if not self._exists(con, "gsc_keyword_inventory"):
+                return []
+            return self._rows(
+                con,
+                """
+                SELECT query,page,ROUND(latest_position,1) AS ranking
+                FROM gsc_keyword_inventory
+                WHERE site_id=?
+                ORDER BY CASE WHEN latest_position IS NULL THEN 1 ELSE 0 END,
+                         latest_position ASC,query COLLATE NOCASE ASC,page ASC
+                """,
+                (site_id,),
+            )
+
+    def domain_export(self, site_id: str | None) -> dict[str, list[dict[str, Any]]]:
+        empty = {"keywords": [], "landing_pages": [], "page_keywords": []}
+        if not site_id or not self.available():
+            return empty
+        with self._connect() as con:
+            if not self._exists(con, "gsc_keyword_inventory"):
+                return empty
+            return {
+                "keywords": self._rows(
+                    con,
+                    """
+                    SELECT query AS keyword,
+                           ROUND(MIN(best_position),1) AS best_ranking,
+                           ROUND(MIN(latest_position),1) AS latest_ranking,
+                           SUM(impressions) AS impressions,SUM(clicks) AS clicks,
+                           MIN(first_seen) AS first_seen,MAX(last_seen) AS last_seen,
+                           COUNT(DISTINCT page) AS landing_pages
+                    FROM gsc_keyword_inventory WHERE site_id=?
+                    GROUP BY query
+                    ORDER BY CASE WHEN MIN(latest_position) IS NULL THEN 1 ELSE 0 END,
+                             MIN(latest_position) ASC,query COLLATE NOCASE ASC
+                    """,
+                    (site_id,),
+                ),
+                "landing_pages": self._rows(
+                    con,
+                    """
+                    SELECT page AS landing_page,COUNT(DISTINCT query) AS keywords,
+                           SUM(impressions) AS impressions,SUM(clicks) AS clicks,
+                           ROUND(MIN(best_position),1) AS best_ranking,
+                           ROUND(AVG(avg_position),1) AS avg_ranking,
+                           MIN(first_seen) AS first_seen,MAX(last_seen) AS last_seen
+                    FROM gsc_keyword_inventory WHERE site_id=?
+                    GROUP BY page ORDER BY impressions DESC,best_ranking ASC,landing_page ASC
+                    """,
+                    (site_id,),
+                ),
+                "page_keywords": self._rows(
+                    con,
+                    """
+                    SELECT page AS landing_page,query AS keyword,
+                           ROUND(best_position,1) AS best_ranking,
+                           ROUND(avg_position,1) AS avg_ranking,
+                           ROUND(latest_position,1) AS latest_ranking,
+                           ROUND(worst_position,1) AS worst_ranking,
+                           impressions,clicks,status,first_seen,last_seen
+                    FROM gsc_keyword_inventory WHERE site_id=?
+                    ORDER BY landing_page ASC,latest_ranking ASC,keyword COLLATE NOCASE ASC
+                    """,
+                    (site_id,),
+                ),
+            }
+
     def detected_source_state(self, site_id: str | None) -> dict[str, dict[str, Any]]:
         out: dict[str, dict[str, Any]] = {}
         if not site_id or not self.available():
@@ -120,10 +300,8 @@ class OpenGSCAdapter:
                            COALESCE(SUM(clicks),0) AS clicks,
                            ROUND(MIN(position),1) AS best_position,
                            ROUND(MAX(position),1) AS worst_position,
-                           MIN(date) AS first_date,
-                           MAX(date) AS last_date
-                    FROM gsc_keyword_observation
-                    WHERE site_id=?
+                           MIN(date) AS first_date,MAX(date) AS last_date
+                    FROM gsc_keyword_observation WHERE site_id=?
                     """,
                     (site_id,),
                 )
@@ -131,16 +309,11 @@ class OpenGSCAdapter:
                 data["keywords"] = self._rows(
                     con,
                     """
-                    SELECT query,page,
-                           COALESCE(impressions,0) impressions,
-                           COALESCE(clicks,0) clicks,
-                           ROUND(best_position,1) best_position,
-                           ROUND(latest_position,1) latest_position,
-                           status,first_seen,last_seen
-                    FROM gsc_keyword_inventory
-                    WHERE site_id=?
-                    ORDER BY impressions DESC,best_position ASC,query
-                    LIMIT 100
+                    SELECT query,page,COALESCE(impressions,0) impressions,
+                           COALESCE(clicks,0) clicks,ROUND(best_position,1) best_position,
+                           ROUND(latest_position,1) latest_position,status,first_seen,last_seen
+                    FROM gsc_keyword_inventory WHERE site_id=?
+                    ORDER BY impressions DESC,best_position ASC,query LIMIT 100
                     """,
                     (site_id,),
                 )
