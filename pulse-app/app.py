@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from services.safe_fetcher import safe_fetcher
+from services.url_policy import site_page_identity as normalize_site_page_url, url_path as site_page_path
 from db.sqlite import connect_sqlite
 from db.migrate import validate_schema_current
 
@@ -236,33 +237,6 @@ def move_research_keyword_to_wanted(con,domain,row,now):
     con.execute("DELETE FROM research_keyword WHERE id=? AND domain=?",(row["id"],domain))
     return wanted_id
 
-
-
-def normalize_site_page_url(raw_url, domain):
-    if not raw_url:
-        return None
-    raw_url = raw_url.strip()
-    if raw_url.startswith("/"):
-        raw_url = f"https://{domain}{raw_url}"
-    try:
-        parsed = urllib.parse.urlsplit(raw_url)
-    except Exception:
-        return None
-    host = (parsed.hostname or "").lower()
-    wanted = domain.lower().split(":")[0]
-    if host != wanted:
-        return None
-    path = parsed.path or "/"
-    if path != "/":
-        path = path.rstrip("/") or "/"
-    return f"https://{wanted}{path}"
-
-
-def site_page_path(url):
-    try:
-        return urllib.parse.urlsplit(url).path or "/"
-    except Exception:
-        return "/"
 
 
 def _fetch_sitemap_urls(url, domain, seen=None, depth=0):
