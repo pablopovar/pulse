@@ -1,32 +1,9 @@
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path
 
 from db.sqlite import connect_sqlite
-
-
-def _parse_payload(raw):
-    text = str(raw or "").strip()
-    if not text:
-        return None
-    fence = re.match(r"^```(?:json)?\s*([\s\S]*?)\s*```$", text, re.I)
-    if fence:
-        text = fence.group(1).strip()
-    try:
-        value = json.loads(text)
-        return value if isinstance(value, dict) else None
-    except Exception:
-        pass
-    start = text.find("{")
-    if start < 0:
-        return None
-    try:
-        value, _end = json.JSONDecoder().raw_decode(text[start:])
-    except Exception:
-        return None
-    return value if isinstance(value, dict) else None
+from services.manual_ai_payload import parse_manual_ai_payload
 
 
 def load_manual_ai_source(db_path: str | Path, domain: str) -> dict:
@@ -68,7 +45,7 @@ def manual_ai_source_for_report(db_path: str | Path, domain: str) -> dict:
         providers = []
         for provider in ("chatgpt", "claude", "gemini"):
             raw = source.get(f"{prefix}_{provider}_response") or ""
-            parsed = _parse_payload(raw)
+            parsed = parse_manual_ai_payload(raw).value
             results = parsed.get("results") if isinstance(parsed, dict) else None
             result_count = len(results) if isinstance(results, list) else 0
             if str(raw).strip():
