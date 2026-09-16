@@ -10,13 +10,19 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import urllib.robotparser
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable, Iterable
 from services.safe_fetcher import SafeFetchError, safe_fetcher
+from services.page_discovery import discover_domain_sitemap, discover_sitemap_urls
+from services.url_policy import (
+    crawl_url_identity as normalize_url,
+    path_with_query as path_for_url,
+    safe_url_join,
+    same_hostname,
+)
 from jobs.store import enqueue_job
 
 
@@ -33,34 +39,8 @@ def utcnow():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def normalize_url(url: str) -> str:
-    p = urllib.parse.urlsplit(url)
-    scheme = (p.scheme or "https").lower()
-    host = (p.hostname or "").lower()
-    port = p.port
-    netloc = host
-    if port and not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
-        netloc = f"{host}:{port}"
-    path = p.path or "/"
-    path = re.sub(r"/{2,}", "/", path)
-    return urllib.parse.urlunsplit((scheme, netloc, path, p.query, ""))
-
-
 def same_site(url: str, domain: str) -> bool:
-    try:
-        host = (urllib.parse.urlsplit(url).hostname or "").lower()
-    except Exception:
-        return False
-    domain = domain.lower().lstrip(".")
-    return host == domain
-
-
-def path_for_url(url: str) -> str:
-    p = urllib.parse.urlsplit(url)
-    path = p.path or "/"
-    if p.query:
-        path += "?" + p.query
-    return path
+    return same_hostname(url, domain)
 
 
 class PageParser(HTMLParser):
@@ -257,36 +237,13 @@ def decode_body(body: bytes, content_type: str):
 
 
 def parse_sitemap(url: str, domain: str, seen=None, depth=0):
-    if seen is None:
-        seen = set()
-    if depth > 4 or url in seen:
-        return []
-    seen.add(url)
-
-    result = fetch(url)
-    if not result["body"] or result["status"] not in (200, 201):
-        return []
-
-    try:
-        root = ET.fromstring(result["body"])
-    except Exception:
-        return []
-
-    tag = root.tag.rsplit("}", 1)[-1].lower()
-    locs = []
-    for el in root.iter():
-        if el.tag.rsplit("}", 1)[-1].lower() == "loc" and el.text:
-            locs.append(el.text.strip())
-
-    if tag == "sitemapindex":
-        urls = []
-        for loc in locs:
-            if same_site(loc, domain):
-                urls.extend(parse_sitemap(loc, domain, seen, depth + 1))
-        return urls
-
-    return [normalize_url(loc) for loc in locs if same_site(loc, domain)]
-
+    # Compatibility wrapper. Sitemap traversal lives in services.page_discovery.
+    urls, _errors = discover_sitemap_urls(
+        url,
+        domain,
+        max_depth=max(0, 5 - int(depth or 0)),
+    )
+    return sorted(urls)
 
 UTILITY_SEGMENTS = {
     "privacy","privacy-policy","terms","terms-of-service","login","signin","sign-in",
@@ -348,7 +305,7 @@ def ten_page_candidates(base_url: str, domain: str, limit_candidates=60):
             parser.feed(decode_body(result["body"], result["content_type"]))
             for href, _rel in parser.result().get("links", []):
                 try:
-                    target = normalize_url(urllib.parse.urljoin(base_url, href))
+                    target = normalize_url(safe_url_join(base_url, href))
                 except Exception:
                     continue
                 if same_site(target, domain):
@@ -379,27 +336,18 @@ def ten_page_candidates(base_url: str, domain: str, limit_candidates=60):
     return rows
 
 def discover_seed_urls(base_url: str, domain: str):
-    candidates = [
-        urllib.parse.urljoin(base_url.rstrip("/") + "/", "sitemap.xml"),
-        urllib.parse.urljoin(base_url.rstrip("/") + "/", "sitemap_index.xml"),
-    ]
-    out = []
-    for sm in candidates:
-        urls = parse_sitemap(sm, domain)
-        if urls:
-            out.extend(urls)
-            break
-    if not out:
+    try:
+        urls, _source, _warnings = discover_domain_sitemap(domain)
+        out = [normalize_url(url) for url in sorted(urls)]
+    except Exception:
         out = [normalize_url(base_url.rstrip("/") + "/")]
     seen = set()
     unique = []
-    for u in out:
-        u = normalize_url(u)
-        if u not in seen:
-            seen.add(u)
-            unique.append(u)
+    for url in out:
+        if url not in seen:
+            seen.add(url)
+            unique.append(url)
     return unique
-
 
 def build_robot_parser(base_url: str):
     # Fetch robots.txt with the same HTTP client/user-agent used for page crawling.
@@ -428,11 +376,6 @@ def build_robot_parser(base_url: str):
         return rp, robots_url, None
     except Exception as exc:
         return None, robots_url, f"robots.txt parse failed: {exc}"
-
-
-def ensure_schema(con):
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
 
 
 
@@ -481,7 +424,7 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
     external_count = 0
     for href, rel in parsed.get("links", []):
         try:
-            target = normalize_url(urllib.parse.urljoin(final_url, href))
+            target = normalize_url(safe_url_join(final_url, href))
         except Exception:
             continue
         scheme = urllib.parse.urlsplit(target).scheme
@@ -571,7 +514,6 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
 def crawl_worker(run_id, domain, base_url, page_cap, delay_ms, obey_robots, db_factory, selected_urls=None, follow_links=True):
     rp, robots_url, robots_error = build_robot_parser(base_url)
     with db_factory() as con:
-        ensure_schema(con)
         con.execute(
             """UPDATE crawl_run SET status='running',started_at=?,robots_url=? WHERE id=?""",
             (utcnow(), robots_url, run_id),
@@ -622,7 +564,6 @@ def crawl_worker(run_id, domain, base_url, page_cap, delay_ms, obey_robots, db_f
                     failed += 1
 
             with db_factory() as con:
-                ensure_schema(con)
                 new_links = persist_page(con, run_id, domain, url, allowed, result, parsed)
 
                 if follow_links:
@@ -671,7 +612,6 @@ def crawl_worker(run_id, domain, base_url, page_cap, delay_ms, obey_robots, db_f
             con.commit()
     except Exception as exc:
         with db_factory() as con:
-            ensure_schema(con)
             con.execute(
                 "UPDATE crawl_run SET status='failed',completed_at=?,error=? WHERE id=?",
                 (utcnow(), str(exc), run_id),
@@ -682,14 +622,10 @@ def crawl_worker(run_id, domain, base_url, page_cap, delay_ms, obey_robots, db_f
 def register_crawler(app, research_db: Callable, get_site: Callable):
     from flask import abort, jsonify, redirect, render_template, request, url_for
 
-    with research_db() as con:
-        ensure_schema(con)
-
     @app.route("/d/<domain>/crawl")
     def seo_crawl(domain):
         site = get_site(domain)
         with research_db() as con:
-            ensure_schema(con)
             runs = con.execute(
                 """SELECT * FROM crawl_run WHERE domain=? ORDER BY id DESC LIMIT 20""",
                 (site["domain"],),
@@ -825,7 +761,6 @@ def register_crawler(app, research_db: Callable, get_site: Callable):
     def seo_crawl_status(domain, run_id):
         site = get_site(domain)
         with research_db() as con:
-            ensure_schema(con)
             run = con.execute(
                 "SELECT * FROM crawl_run WHERE id=? AND domain=?",
                 (run_id, site["domain"]),

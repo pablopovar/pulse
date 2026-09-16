@@ -14,14 +14,8 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def ensure_schema(con: sqlite3.Connection) -> None:
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
 
 def create_question_set(con: sqlite3.Connection, domain: str, version: int, questions: list[dict[str, Any]], comparison_set: list[str], label: str = "") -> None:
-    ensure_schema(con)
     if not comparison_set:
         raise ValueError("comparison_set is a required human decision")
     con.execute("INSERT INTO ai_question_set(domain,version,label,approved,comparison_set_json,created_at) VALUES (?,?,?,0,?,?)", (domain, version, label, json.dumps(comparison_set), now_iso()))
@@ -34,7 +28,6 @@ def create_question_set(con: sqlite3.Connection, domain: str, version: int, ques
 
 
 def approve_question_set(con: sqlite3.Connection, domain: str, version: int) -> None:
-    ensure_schema(con)
     row = con.execute("SELECT 1 FROM ai_question_definition WHERE domain=? COLLATE NOCASE AND question_set_version=? LIMIT 1", (domain, version)).fetchone()
     if not row:
         raise ValueError("question set has no questions")
@@ -43,7 +36,6 @@ def approve_question_set(con: sqlite3.Connection, domain: str, version: int) -> 
 
 
 def execution_matrix(con: sqlite3.Connection, domain: str, version: int, providers: list[str], repeats: int = 3) -> list[dict[str, Any]]:
-    ensure_schema(con)
     qset = con.execute("SELECT approved FROM ai_question_set WHERE domain=? COLLATE NOCASE AND version=?", (domain, version)).fetchone()
     if not qset or not qset["approved"]:
         raise ValueError("question set must be human-approved before execution")

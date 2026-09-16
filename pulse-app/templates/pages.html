@@ -7,9 +7,17 @@
     <p>All discovered pages for {{ site.domain }}, including pages with no ranking keywords.</p>
   </div>
   <form method="post" action="{{ url_for('pages_sync', domain=site.domain) }}">
-    <button class="primary" type="submit">Refresh sitemap</button>
+    <button class="primary" type="submit">Refresh discovery</button>
   </form>
 </div>
+{% if discovery %}
+<div class="notice">
+  Discovery: <strong>{{ discovery.status|replace('_',' ')|title }}</strong>
+  {% if discovery.last_successful_at %} · last successful {{ discovery.last_successful_at }}{% endif %}
+  {% if discovery.status == 'ready' %} · {{ discovery.sitemap_count }} sitemap page(s) · {{ discovery.ranking_count }} ranking page(s){% endif %}
+  {% if discovery.error %} · {{ discovery.error }}{% endif %}
+</div>
+{% endif %}
 {% if message %}<div class="notice">{{ message }}</div>{% endif %}
 <div class="research-list-head">
   <form method="get" class="search research-search">
@@ -26,8 +34,7 @@
   {% for r in rows %}
     <tr>
       <td><div><strong>{{ r.path }}</strong></div><div class="page-url-small">{{ r.url }}</div></td>
-      <td>{{ r.ranking_count }}</td><td>{{ r.wanted_count }}</td><td>{{ "Yes" if r.has_note else "—" }}</td>
-      <td><a class="button" href="{{ url_for('page_workspace', domain=site.domain, page_id=r.id) }}">View</a></td>
+      <td>{{ r.ranking_count }}</td><td>{{ r.wanted_count }}</td><td>{{ "Yes" if r.has_note else "—" }}</td><td><a class="button" href="{{ url_for('page_workspace', domain=site.domain, page_id=r.id) }}">View</a></td>
     </tr>
   {% else %}<tr><td colspan="5">No pages discovered yet.</td></tr>{% endfor %}
   </tbody>

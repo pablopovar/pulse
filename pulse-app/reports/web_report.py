@@ -82,11 +82,6 @@ def _connect(path: Path):
 
 
 
-def _ensure(con):
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
 
 def _json_default(value: Any):
     if isinstance(value,datetime): return value.isoformat()
@@ -121,7 +116,6 @@ def save_client_report_config(db_path:Path,domain:str,config:dict[str,Any])->dic
     fields=("competitors","priority_pages","target_topics","page_groups","integrations","monitored_ai_prompts")
     values={key:(config.get(key) if isinstance(config.get(key),list) else []) for key in fields}
     with _connect(db_path) as con:
-        _ensure(con)
         con.execute("""INSERT INTO client_report_config(domain,competitors_json,priority_pages_json,target_topics_json,page_groups_json,integrations_json,monitored_ai_prompts_json,updated_at)
                      VALUES (?,?,?,?,?,?,?,?)
                      ON CONFLICT(domain) DO UPDATE SET competitors_json=excluded.competitors_json,priority_pages_json=excluded.priority_pages_json,target_topics_json=excluded.target_topics_json,page_groups_json=excluded.page_groups_json,integrations_json=excluded.integrations_json,monitored_ai_prompts_json=excluded.monitored_ai_prompts_json,updated_at=excluded.updated_at""",
@@ -141,7 +135,6 @@ def set_recommendation_tracking(db_path:Path,domain:str,finding_key:str,status:s
         raise ValueError(f"Invalid recommendation status: {status}")
     now=datetime.now(timezone.utc).isoformat(timespec="seconds")
     with _connect(db_path) as con:
-        _ensure(con)
         con.execute("""INSERT INTO recommendation_tracking(domain,finding_key,status,note,updated_at) VALUES (?,?,?,?,?)
                      ON CONFLICT(domain,finding_key) DO UPDATE SET status=excluded.status,note=excluded.note,updated_at=excluded.updated_at""",
                     (domain,finding_key,status,note or "",now))
@@ -187,7 +180,6 @@ def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any],*,execu
         or {}
     )
     with _connect(db_path) as con:
-        _ensure(con)
         oldest=con.execute("SELECT created_at FROM report_session WHERE domain=? COLLATE NOCASE ORDER BY created_at ASC LIMIT 1",(domain,)).fetchone()
         coverage=data_coverage(immutable)
         manual_ai=dict(immutable.get("manual_ai_snapshot") or {})
@@ -249,14 +241,12 @@ def _session_with_history(con, row):
 
 def load_report_session(db_path:Path,domain:str,report_id:str):
     with _connect(db_path) as con:
-        _ensure(con)
         row=con.execute("SELECT id,domain,created_at,snapshot_json FROM report_session WHERE id=? AND domain=? COLLATE NOCASE",(report_id,domain)).fetchone()
         return _session_with_history(con,row)
 
 
 def load_current_report_session(db_path:Path,domain:str):
     with _connect(db_path) as con:
-        _ensure(con)
         living=con.execute("SELECT current_report_id FROM domain_report WHERE domain=? COLLATE NOCASE",(domain,)).fetchone()
         if living:
             row=con.execute("SELECT id,domain,created_at,snapshot_json FROM report_session WHERE id=?",(living["current_report_id"],)).fetchone()
@@ -267,7 +257,6 @@ def load_current_report_session(db_path:Path,domain:str):
 
 def list_report_sessions(db_path:Path,domain:str,limit:int=12):
     with _connect(db_path) as con:
-        _ensure(con)
         rows=con.execute("SELECT id,domain,created_at FROM report_session WHERE domain=? COLLATE NOCASE ORDER BY created_at DESC LIMIT ?",(domain,limit)).fetchall()
     return [dict(r) for r in rows]
 

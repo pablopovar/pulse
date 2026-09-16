@@ -13,13 +13,7 @@ def now():
 def truthy(v):
     return str(v or "").strip().lower() in {"1","true","yes","on","enabled"}
 
-def ensure_schema(con):
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
 def get_project(con,domain):
-    ensure_schema(con)
     con.execute("""INSERT OR IGNORE INTO extension_project
       (domain,extension_key,enabled,max_items_per_run,max_calls_per_run,enabled_features_json,updated_at)
       VALUES(?,'dataforseo',0,10,2,'[]',?)""",(domain,now()))
@@ -27,7 +21,6 @@ def get_project(con,domain):
     return con.execute("SELECT * FROM extension_project WHERE domain=? AND extension_key='dataforseo'",(domain,)).fetchone()
 
 def killed(con):
-    ensure_schema(con)
     row=con.execute("SELECT kill_switch FROM extension_global WHERE extension_key='dataforseo'").fetchone()
     return truthy(os.environ.get(ENV_KILL)) or bool(row["kill_switch"])
 
@@ -107,7 +100,6 @@ def minimal_conversation_starter(con,domain,report_run_id=None):
     return out
 
 def usage_summary(con,domain):
-    ensure_schema(con)
     r=con.execute("""SELECT COUNT(*) calls,COALESCE(SUM(requested_items),0) requested_items,
       COALESCE(SUM(returned_items),0) returned_items,COALESCE(SUM(api_cost),0) api_cost
       FROM extension_usage WHERE domain=? AND extension_key='dataforseo'""",(domain,)).fetchone()

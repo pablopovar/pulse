@@ -5,22 +5,31 @@ import csv
 import io
 import zipfile
 import sqlite3
-import subprocess
 from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import urlparse
-from services.safe_fetcher import safe_fetcher
+from services.url_policy import site_page_identity as normalize_site_page_url
+from services.manual_ai_sources import load_manual_ai_source as load_manual_ai_source_state, save_manual_ai_source
+from services.domain_company import infer_company_name as infer_company_name_from_db, save_company_name
+from services.report_collaboration import (
+    DiscussionDisabled,
+    ReportNotFound,
+    add_public_reply,
+    add_reply,
+    load_human_interpretation,
+    load_report_notes,
+    report_domain,
+    save_human_interpretation,
+    save_report_note as persist_report_note,
+    set_exclusions,
+)
 from db.sqlite import connect_sqlite
 from db.migrate import validate_schema_current
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, send_from_directory, url_for
-import xml.etree.ElementTree as ET
-import urllib.request
 import urllib.parse
-import gzip
 import re
 import json
-import urllib.error
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -28,12 +37,26 @@ SEO_DB = Path(os.environ.get("SEO_DB", "/data/opengsc/prod.db"))
 REPORTS_DIR = Path(os.environ.get("REPORTS_DIR", "/data/reports"))
 RESEARCH_DB = Path(os.environ.get("RESEARCH_DB", "/data/dashboard/research.db"))
 from audits.geo_aeo.service import run_audit as run_geo_aeo_audit
-from reports.full_pdf import collect_report_data, build_full_report_pdf
-from reports.web_report import create_report_session, load_report_session, list_report_sessions, prepare_report_view
-from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, list_models as list_manual_ai_analysis_models, run_analysis as run_manual_ai_analysis
+from reports.full_pdf import build_full_report_pdf
+from reports.web_report import load_report_session, list_report_sessions, prepare_report_view
+from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, list_models as list_manual_ai_analysis_models
 from services.security_boundary import configure_security
 from jobs.store import enqueue_job
 from jobs.store import cancel_queued_job, get_job, list_jobs
+from integrations.opengsc_adapter import OpenGSCAdapter
+from services.page_discovery import (
+    discover_domain_sitemap,
+    discover_sitemap_urls,
+    get_discovery_state,
+    set_discovery_state,
+    sync_site_pages as canonical_sync_site_pages,
+)
+from services.source_inventory import (
+    detected_source_state as service_detected_source_state,
+    domain_sources_for_site as service_domain_sources_for_site,
+    save_domain_sources as persist_domain_sources,
+    site_id_value as service_site_id_value,
+)
 
 app = Flask(__name__)
 configure_security(app)
@@ -65,70 +88,16 @@ def research_db():
 
 
 
-SOURCE_CATALOG = [
-    ("gsc", "Google Search Console", "Observed Google search queries, landing pages, impressions, clicks, CTR and positions."),
-    ("ga4", "Google Analytics 4", "Audience, session, engagement, event, conversion and revenue context."),
-    ("dataforseo", "DataForSEO", "Keyword demand, SERP, competitive and supplemental search visibility data."),
-    ("chatgpt", "ChatGPT API", "AI answer, mention and citation observations from configured OpenAI models."),
-    ("claude", "Claude API", "AI answer, mention and citation observations from configured Anthropic models."),
-    ("gemini", "Gemini API", "AI answer, mention and citation observations from configured Gemini models."),
-    ("semrush", "Semrush", "Search demand, competitor, backlink and authority datasets."),
-    ("google_apis", "Google APIs", "Additional Google services and evidence sources used by report checks."),
-    ("manual_ai", "Manual AI Responses", "Copy one editable provider-agnostic prompt, then paste or upload the raw ChatGPT, Claude and Gemini responses."),
-]
-
-def ensure_domain_source_schema(con):
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
 def detected_source_state(site):
-    states={
-      "gsc":{"connected":not bool(site.get("gsc_missing")),"detail":"OpenGSC / GSC property linked" if not site.get("gsc_missing") else ""},
-      "dataforseo":{"connected":bool(os.environ.get("DATAFORSEO_LOGIN") and os.environ.get("DATAFORSEO_PASSWORD")),"detail":"Credentials configured" if os.environ.get("DATAFORSEO_LOGIN") and os.environ.get("DATAFORSEO_PASSWORD") else ""},
-    }
-    try:
-        site_id=_site_id_value(site)
-        if site_id and SEO_DB.exists():
-            with db() as con:
-                names={r["name"] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-                if "ClaritySnapshot" in names and con.execute('SELECT 1 FROM "ClaritySnapshot" WHERE siteId=? LIMIT 1',(site_id,)).fetchone():
-                    states["ga4"]={"connected":True,"detail":"Analytics/Clarity snapshot available"}
-                if "AeoCheck" in names and "TrackedQuestion" in names:
-                    engines=con.execute('SELECT DISTINCT c.engine FROM "AeoCheck" c JOIN "TrackedQuestion" q ON q.id=c.questionId WHERE q.siteId=?',(site_id,)).fetchall()
-                    found={str(r["engine"]).lower() for r in engines if r["engine"]}
-                    for key in ("chatgpt","claude","gemini"):
-                        if key in found: states[key]={"connected":True,"detail":f"Stored {key.title()} observations available"}
-    except Exception:
-        pass
-    return states
+    return service_detected_source_state(site, SEO_DB)
+
 
 def domain_sources_for_site(site):
-    detected=detected_source_state(site); now=datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with research_db() as con:
-        ensure_domain_source_schema(con)
-        rows={r["source_key"]:dict(r) for r in con.execute("SELECT * FROM domain_source WHERE domain=? COLLATE NOCASE",(site["domain"],)).fetchall()}
-        for key,name,_ in SOURCE_CATALOG:
-            d=detected.get(key,{})
-            if key not in rows and d.get("connected"):
-                con.execute("INSERT OR IGNORE INTO domain_source(domain,source_key,source_name,selected,connection_status,detail,updated_at) VALUES (?,?,?,?,?,?,?)",(site["domain"],key,name,1,"connected",d.get("detail",""),now))
-        con.commit()
-        rows={r["source_key"]:dict(r) for r in con.execute("SELECT * FROM domain_source WHERE domain=? COLLATE NOCASE",(site["domain"],)).fetchall()}
-    out=[]
-    for key,name,description in SOURCE_CATALOG:
-        stored=rows.get(key,{}); d=detected.get(key,{}); connected=bool(d.get("connected")); selected=bool(stored.get("selected")) or connected
-        out.append({"key":key,"name":name,"description":description,"selected":selected,"status":"Connected" if connected else ("Selected" if selected else "Not selected"),"status_class":"connected" if connected else ("selected" if selected else "off"),"detail":d.get("detail") or stored.get("detail") or ""})
-    catalog={x[0] for x in SOURCE_CATALOG}
-    for key,stored in rows.items():
-        if key in catalog: continue
-        out.append({"key":key,"name":stored["source_name"],"description":"Custom or future evidence source.","selected":bool(stored["selected"]),"status":"Selected" if stored["selected"] else "Not selected","status_class":"selected" if stored["selected"] else "off","detail":stored["detail"] or ""})
-    return out
-
-def ensure_manual_ai_source_schema(con):
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
+    return service_domain_sources_for_site(
+        site,
+        research_db=RESEARCH_DB,
+        opengsc_db=SEO_DB,
+    )
 
 def manual_ai_default_prompt(domain, phase, state):
     company=infer_company_name(domain)
@@ -154,27 +123,12 @@ def manual_ai_default_prompt(domain, phase, state):
 
 
 def load_manual_ai_source(domain):
-    with research_db() as con:
-        ensure_manual_ai_source_schema(con)
-        parent=con.execute("SELECT * FROM manual_ai_source WHERE domain=? COLLATE NOCASE",(domain,)).fetchone()
-        rows=con.execute("SELECT * FROM manual_ai_state_source WHERE domain=? COLLATE NOCASE ORDER BY phase,state",(domain,)).fetchall()
-    out=dict(parent) if parent else {"domain":domain,"question_set_version":1,"analysis_status":"not_run","updated_at":""}
-    indexed={(r["phase"],r["state"]):dict(r) for r in rows}
-    for phase in ("phase1","phase2"):
-        for state in ("state1","state2"):
-            row=indexed.get((phase,state),{}); prefix=f"{phase}_{state}"
-            out[f"{prefix}_prompt_text"]=row.get("prompt_text") or manual_ai_default_prompt(domain,phase,state)
-            for provider in ("chatgpt","claude","gemini"):
-                out[f"{prefix}_{provider}_response"]=row.get(f"{provider}_response") or ""
-    if not str(out.get("analysis_system_prompt") or "").strip(): out["analysis_system_prompt"]=DEFAULT_ANALYSIS_SYSTEM_PROMPT
-    if not str(out.get("analysis_model") or "").strip(): out["analysis_model"]=(os.environ.get("MANUAL_AI_ANALYSIS_MODEL") or os.environ.get("COMPARISON_JUDGE_MODEL") or "")
-    if not str(out.get("analysis_provider") or "").strip(): out["analysis_provider"]=(os.environ.get("MANUAL_AI_ANALYSIS_PROVIDER") or "ollama").strip().lower()
-    if not str(out.get("analysis_reasoning_effort") or "").strip(): out["analysis_reasoning_effort"]="high"
-    if out.get("analysis_temperature") is None: out["analysis_temperature"]=0.1
-    if out.get("analysis_top_p") is None: out["analysis_top_p"]=0.9
-    if not out.get("analysis_max_output_tokens"): out["analysis_max_output_tokens"]=8000
-    if not out.get("analysis_system_prompt_version"): out["analysis_system_prompt_version"]=3
-    return out
+    return load_manual_ai_source_state(
+        RESEARCH_DB,
+        domain,
+        prompt_factory=manual_ai_default_prompt,
+        default_analysis_prompt=DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+    )
 
 
 def _manual_ai_upload_text(field_name):
@@ -183,131 +137,6 @@ def _manual_ai_upload_text(field_name):
     raw=uploaded.read()
     if len(raw)>2*1024*1024: raise ValueError("Uploaded response files must be 2 MB or smaller.")
     return raw.decode("utf-8",errors="replace")
-
-
-def _parse_manual_provider_payload(raw):
-    raw=str(raw or "").strip()
-    if not raw: return None,""
-    candidates=[raw]
-    if raw.startswith("```"):
-        match=re.match(r"^```(?:json)?\s*([\s\S]*?)\s*```$",raw,flags=re.I)
-        if match: candidates.append(match.group(1))
-    error=""
-    for candidate in candidates:
-        try:
-            value=json.loads(candidate)
-            if isinstance(value,dict): return value,""
-            error="Top-level JSON value must be an object."
-        except Exception as exc:
-            error=str(exc)
-    return None,error
-
-
-def manual_ai_source_for_report(domain):
-    # Build report evidence from the active two-phase Manual AI workflow only.
-    source = load_manual_ai_source(domain)
-    phase_rows = []
-    total_answers = 0
-    parsed_runs = 0
-    provider_runs = 0
-
-    def parse_payload(raw):
-        text = str(raw or "").strip()
-        if not text:
-            return None
-
-        fence = re.match(r"^```(?:json)?\s*([\s\S]*?)\s*```$", text, re.I)
-        if fence:
-            text = fence.group(1).strip()
-
-        try:
-            value = json.loads(text)
-            return value if isinstance(value, dict) else None
-        except Exception:
-            pass
-
-        start = text.find("{")
-        if start < 0:
-            return None
-        try:
-            value, _end = json.JSONDecoder().raw_decode(text[start:])
-        except Exception:
-            return None
-        return value if isinstance(value, dict) else None
-
-    for phase in ("phase1", "phase2"):
-        prefix = f"{phase}_state2"
-        providers = []
-
-        for provider in ("chatgpt", "claude", "gemini"):
-            raw = source.get(f"{prefix}_{provider}_response") or ""
-            parsed = parse_payload(raw)
-            results = parsed.get("results") if isinstance(parsed, dict) else None
-            result_count = len(results) if isinstance(results, list) else 0
-
-            if str(raw).strip():
-                provider_runs += 1
-            if parsed is not None:
-                parsed_runs += 1
-                total_answers += result_count
-
-            providers.append({
-                "provider": provider,
-                "response": raw,
-                "parsed": parsed,
-                "result_count": result_count,
-            })
-
-        phase_rows.append({
-            "phase": phase,
-            "states": [{
-                "state": "retrieval_enabled",
-                "providers": providers,
-                "provider_count": sum(
-                    1 for p in providers if str(p["response"]).strip()
-                ),
-            }],
-        })
-
-    source["available"] = provider_runs > 0
-    source["phases"] = phase_rows
-    source["provider_runs"] = provider_runs
-    source["expected_provider_runs"] = 6
-    source["provider_count"] = len({
-        p["provider"]
-        for phase_row in phase_rows
-        for state in phase_row["states"]
-        for p in state["providers"]
-        if str(p["response"]).strip()
-    })
-    source["answer_count"] = total_answers
-    source["expected_answer_count"] = 24
-    source["valid_json_providers"] = parsed_runs
-    source["complete"] = bool(
-        provider_runs == 6
-        and parsed_runs == 6
-        and total_answers == 24
-    )
-    return source
-
-
-def ensure_domain_ready(domain):
-    now=datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with research_db() as con:
-        row=con.execute("SELECT COUNT(*) AS n FROM site_page WHERE domain=?",(domain,)).fetchone(); count=row["n"] if row else 0
-    if not count:
-        try: sync_site_pages(domain)
-        except Exception: pass
-    with research_db() as con:
-        row=con.execute("SELECT COUNT(*) AS n FROM site_page WHERE domain=?",(domain,)).fetchone(); count=row["n"] if row else 0
-        if not count:
-            url="https://"+domain.rstrip("/")+"/"
-            con.execute("INSERT OR IGNORE INTO site_page(domain,url,path,source,discovered_at,updated_at) VALUES (?,?,?,'domain',?,?)",(domain,url,"/",now,now)); con.commit(); count=1
-    return {"ready":True,"label":"Ready","pages":count}
-
-def selected_source_keys(site):
-    return [s["key"] for s in domain_sources_for_site(site) if s["selected"]]
-
 
 
 REPORT_FAMILY_DEFAULT_QUESTIONS = {
@@ -328,61 +157,8 @@ REPORT_FAMILY_DEFAULT_QUESTIONS = {
 
 
 
-def ensure_domain_company_schema(con):
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
-def _company_name_from_title(title):
-    if not title:
-        return ""
-    candidate = str(title).strip()
-    for sep in (" | ", " · ", " — ", " - ", ": "):
-        if sep in candidate:
-            candidate = candidate.split(sep, 1)[0].strip()
-            break
-    return candidate
-
 def infer_company_name(domain):
-    with research_db() as con:
-        ensure_domain_company_schema(con)
-        row = con.execute(
-            "SELECT company_name FROM domain_company_settings WHERE domain=? COLLATE NOCASE",
-            (domain,),
-        ).fetchone()
-        if row and str(row["company_name"] or "").strip():
-            return str(row["company_name"]).strip()
-
-        try:
-            row = con.execute(
-                "SELECT cp.title "
-                "FROM crawl_page cp "
-                "JOIN crawl_run cr ON cr.id=cp.crawl_run_id "
-                "WHERE cr.domain=? COLLATE NOCASE "
-                "AND cp.path='/' "
-                "AND TRIM(COALESCE(cp.title,''))<>'' "
-                "ORDER BY cr.id DESC LIMIT 1",
-                (domain,),
-            ).fetchone()
-            if row:
-                candidate = _company_name_from_title(row["title"])
-                if candidate:
-                    return candidate
-        except Exception:
-            pass
-
-    label = domain.lower().split(":")[0].strip().strip("/")
-    if label.startswith("www."):
-        label = label[4:]
-    label = label.split(".")[0]
-    words = [w for w in re.split(r"[-_]+", label) if w]
-    return " ".join(w.capitalize() for w in words) if words else domain
-
-
-
-
-
-
+    return infer_company_name_from_db(RESEARCH_DB, domain)
 
 
 def research_state_from_request(source):
@@ -408,159 +184,40 @@ def move_research_keyword_to_wanted(con,domain,row,now):
 
 
 
-def normalize_site_page_url(raw_url, domain):
-    if not raw_url:
-        return None
-    raw_url = raw_url.strip()
-    if raw_url.startswith("/"):
-        raw_url = f"https://{domain}{raw_url}"
-    try:
-        parsed = urllib.parse.urlsplit(raw_url)
-    except Exception:
-        return None
-    host = (parsed.hostname or "").lower()
-    wanted = domain.lower().split(":")[0]
-    if host != wanted:
-        return None
-    path = parsed.path or "/"
-    if path != "/":
-        path = path.rstrip("/") or "/"
-    return f"https://{wanted}{path}"
-
-
-def site_page_path(url):
-    try:
-        return urllib.parse.urlsplit(url).path or "/"
-    except Exception:
-        return "/"
-
-
 def _fetch_sitemap_urls(url, domain, seen=None, depth=0):
-    seen = seen or set()
-    if depth > 5 or url in seen:
-        return set()
-    seen.add(url)
-    response = safe_fetcher.get(
+    urls, _errors = discover_sitemap_urls(
         url,
-        headers={"User-Agent": "SEO-GEO-AEO-Auditor/1.0"},
-        max_response_bytes=5 * 1024 * 1024,
-        allowed_content_types={"application/xml", "text/xml", "text/plain", "application/gzip", "application/x-gzip", "application/octet-stream"},
+        domain,
+        max_depth=max(0, 5 - int(depth or 0)),
     )
-    raw = response.content
-    if raw[:2] == b"\x1f\x8b" or url.lower().endswith(".gz"):
-        raw = gzip.decompress(raw)
-    root = ET.fromstring(raw)
-    root_name = root.tag.rsplit("}", 1)[-1].lower()
-    urls = set()
-    if root_name == "sitemapindex":
-        for loc in root.findall(".//{*}loc"):
-            child = (loc.text or "").strip()
-            if child:
-                try:
-                    urls.update(_fetch_sitemap_urls(child, domain, seen, depth + 1))
-                except Exception:
-                    pass
-        return urls
-    for loc in root.findall(".//{*}loc"):
-        normalized = normalize_site_page_url((loc.text or "").strip(), domain)
-        if normalized:
-            urls.add(normalized)
     return urls
 
 
 def sitemap_pages(domain):
-    errors = []
-    for sitemap_url in (f"https://{domain}/sitemap.xml", f"https://{domain}/sitemap_index.xml"):
-        try:
-            urls = _fetch_sitemap_urls(sitemap_url, domain)
-            if urls:
-                return urls, sitemap_url
-        except Exception as exc:
-            errors.append(str(exc))
-    raise RuntimeError("Could not retrieve sitemap: " + " | ".join(errors))
+    urls, source, _errors = discover_domain_sitemap(domain)
+    return urls, source
 
 
 def _site_id_value(site):
-    for key in ("id", "site_id"):
-        try:
-            value = site[key]
-            if value:
-                return value
-        except Exception:
-            pass
-        try:
-            value = getattr(site, key)
-            if value:
-                return value
-        except Exception:
-            pass
-    return None
+    return service_site_id_value(site)
 
 
 def gsc_rows_for_domain(domain):
     site = get_site(domain)
     if site.get("gsc_missing"):
         return []
-    site_id = _site_id_value(site)
-    con = connect_sqlite(SEO_DB, readonly=True)
-    try:
-        cols = {row["name"] for row in con.execute("PRAGMA table_info(gsc_keyword_inventory)").fetchall()}
-        if not cols:
-            return []
-        keyword_col = "query" if "query" in cols else "keyword" if "keyword" in cols else None
-        if not keyword_col or "page" not in cols:
-            return []
-        latest_col = "latest_position" if "latest_position" in cols else None
-        impressions_col = "total_impressions" if "total_impressions" in cols else "impressions" if "impressions" in cols else None
-        clicks_col = "total_clicks" if "total_clicks" in cols else "clicks" if "clicks" in cols else None
-        parts = [
-            f"{keyword_col} AS keyword",
-            "page AS page",
-            f"{latest_col} AS latest_position" if latest_col else "NULL AS latest_position",
-            f"{impressions_col} AS impressions" if impressions_col else "0 AS impressions",
-            f"{clicks_col} AS clicks" if clicks_col else "0 AS clicks",
-        ]
-        sql = "SELECT " + ", ".join(parts) + " FROM gsc_keyword_inventory"
-        params = []
-        if "site_id" in cols and site_id:
-            sql += " WHERE site_id = ?"
-            params.append(site_id)
-        return con.execute(sql, params).fetchall()
-    finally:
-        con.close()
+    return OpenGSCAdapter(SEO_DB).gsc_keyword_rows(_site_id_value(site))
 
 
 def sync_site_pages(domain):
-    sitemap_urls, sitemap_source = sitemap_pages(domain)
-    ranking_rows = gsc_rows_for_domain(domain)
-    ranking_urls = {
-        u for row in ranking_rows
-        for u in [normalize_site_page_url(row["page"], domain)]
-        if u
-    }
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with research_db() as con:
-        for url in sorted(sitemap_urls):
-            con.execute("""
-                INSERT INTO site_page(domain,url,path,source,discovered_at,updated_at)
-                VALUES (?,?,?,'sitemap',?,?)
-                ON CONFLICT(domain,url) DO UPDATE SET
-                    path=excluded.path,
-                    source=CASE WHEN site_page.source='ranking' THEN 'sitemap+ranking' ELSE site_page.source END,
-                    updated_at=excluded.updated_at
-            """, (domain, url, site_page_path(url), now, now))
-        for url in sorted(ranking_urls):
-            con.execute("""
-                INSERT INTO site_page(domain,url,path,source,discovered_at,updated_at)
-                VALUES (?,?,?,'ranking',?,?)
-                ON CONFLICT(domain,url) DO UPDATE SET
-                    source=CASE WHEN site_page.source='sitemap' THEN 'sitemap+ranking' ELSE site_page.source END,
-                    updated_at=excluded.updated_at
-            """, (domain, url, site_page_path(url), now, now))
-        con.commit()
-    return len(sitemap_urls), len(ranking_urls), sitemap_source
-
-
+    site = get_site(domain)
+    outcome = canonical_sync_site_pages(
+        domain,
+        research_db=RESEARCH_DB,
+        opengsc_db=SEO_DB,
+        site_id=_site_id_value(site),
+    )
+    return outcome["sitemap_count"], outcome["ranking_count"], outcome["sitemap_source"]
 
 def canonical_keyword_tags(con, domain, keyword):
     return con.execute(
@@ -669,20 +326,12 @@ def host_from_site(site_id: str, url: str) -> str:
 
 
 def _opengsc_get_sites():
-    with db() as con:
-        rows = con.execute("""
-            SELECT id, url, siteId, archivedAt
-            FROM Site
-            WHERE archivedAt IS NULL
-            ORDER BY url
-        """).fetchall()
     out = []
-    for r in rows:
-        d = dict(r)
-        d["domain"] = host_from_site(d["siteId"], d["url"])
-        out.append(d)
+    for row in OpenGSCAdapter(SEO_DB).list_sites():
+        item = dict(row)
+        item["domain"] = host_from_site(item.get("siteId", ""), item.get("url", ""))
+        out.append(item)
     return out
-
 
 def _opengsc_get_site(domain: str):
     for site in get_sites():
@@ -691,211 +340,27 @@ def _opengsc_get_site(domain: str):
     abort(404)
 
 
-def table_exists(con, name: str, kind: str | None = None) -> bool:
-    if kind:
-        row = con.execute(
-            "SELECT 1 FROM sqlite_master WHERE name=? AND type=? LIMIT 1",
-            (name, kind),
-        ).fetchone()
-    else:
-        row = con.execute(
-            "SELECT 1 FROM sqlite_master WHERE name=? LIMIT 1", (name,)
-        ).fetchone()
-    return bool(row)
-
-
 def domain_seo(site_id: str):
-    with db() as con:
-        if table_exists(con, "gsc_keyword_observation", "table"):
-            summary = con.execute("""
-                SELECT
-                    COUNT(*) AS observations,
-                    COUNT(DISTINCT query) AS keywords,
-                    COUNT(DISTINCT page) AS pages,
-                    COALESCE(SUM(impressions), 0) AS impressions,
-                    COALESCE(SUM(clicks), 0) AS clicks,
-                    ROUND(MIN(position), 1) AS best_position,
-                    ROUND(MAX(position), 1) AS worst_position
-                FROM gsc_keyword_observation
-                WHERE site_id = ?
-            """, (site_id,)).fetchone()
-        else:
-            summary = None
-
-        recent = []
-        if table_exists(con, "gsc_keyword_inventory", "view"):
-            recent = con.execute("""
-                SELECT
-                    query,
-                    page,
-                    impressions,
-                    clicks,
-                    ROUND(best_position, 1) AS best_position,
-                    ROUND(latest_position, 1) AS latest_position,
-                    status,
-                    first_seen,
-                    last_seen
-                FROM gsc_keyword_inventory
-                WHERE site_id = ?
-                ORDER BY
-                    CASE status
-                        WHEN 'active_7d' THEN 1
-                        WHEN 'active_30d' THEN 2
-                        WHEN 'stale_90d' THEN 3
-                        ELSE 4
-                    END,
-                    impressions DESC,
-                    best_position ASC
-                LIMIT 20
-            """, (site_id,)).fetchall()
-
-    return summary, recent
+    return OpenGSCAdapter(SEO_DB).domain_seo(site_id)
 
 
 def page_rows(site_id: str, q: str = ""):
-    with db() as con:
-        if not table_exists(con, "gsc_keyword_inventory", "view"):
-            return []
-        sql = """
-            SELECT
-                page,
-                COUNT(DISTINCT query) AS keywords,
-                COALESCE(SUM(impressions),0) AS impressions,
-                COALESCE(SUM(clicks),0) AS clicks,
-                ROUND(MIN(best_position),1) AS best_position,
-                ROUND(AVG(avg_position),1) AS avg_position,
-                MAX(last_seen) AS last_seen
-            FROM gsc_keyword_inventory
-            WHERE site_id = ?
-        """
-        params = [site_id]
-        if q:
-            sql += " AND (page LIKE ? OR query LIKE ?)"
-            like = f"%{q}%"
-            params.extend([like, like])
-        sql += """
-            GROUP BY page
-            ORDER BY impressions DESC, best_position ASC, page
-        """
-        return con.execute(sql, params).fetchall()
+    return OpenGSCAdapter(SEO_DB).landing_page_rows(site_id, q)
 
 
 def page_detail(site_id: str, page_url: str):
-    with db() as con:
-        if not table_exists(con, "gsc_keyword_inventory", "view"):
-            return [], None
-
-        kws = con.execute("""
-            SELECT
-                query,
-                observations,
-                impressions,
-                clicks,
-                ROUND(best_position,1) AS best_position,
-                ROUND(avg_position,1) AS avg_position,
-                ROUND(latest_position,1) AS latest_position,
-                ROUND(worst_position,1) AS worst_position,
-                status,
-                first_seen,
-                last_seen
-            FROM gsc_keyword_inventory
-            WHERE site_id=? AND page=?
-            ORDER BY impressions DESC, best_position ASC
-        """, (site_id, page_url)).fetchall()
-
-        summary = con.execute("""
-            SELECT
-                COUNT(DISTINCT query) AS keywords,
-                COALESCE(SUM(impressions),0) AS impressions,
-                COALESCE(SUM(clicks),0) AS clicks,
-                ROUND(MIN(best_position),1) AS best_position,
-                ROUND(AVG(avg_position),1) AS avg_position,
-                MAX(last_seen) AS last_seen
-            FROM gsc_keyword_inventory
-            WHERE site_id=? AND page=?
-        """, (site_id, page_url)).fetchone()
-
-    return kws, summary
-
+    return OpenGSCAdapter(SEO_DB).page_detail(site_id, page_url)
 
 
 def keyword_rows(site_id: str):
-    with db() as con:
-        if not table_exists(con, "gsc_keyword_inventory", "view"):
-            return []
-
-        return con.execute("""
-            SELECT
-                query,
-                page,
-                ROUND(latest_position, 1) AS ranking
-            FROM gsc_keyword_inventory
-            WHERE site_id = ?
-            ORDER BY
-                CASE WHEN latest_position IS NULL THEN 1 ELSE 0 END,
-                latest_position ASC,
-                query COLLATE NOCASE ASC,
-                page ASC
-        """, (site_id,)).fetchall()
+    return OpenGSCAdapter(SEO_DB).keyword_rows(site_id)
 
 
 def build_domain_export(site):
-    with db() as con:
-        if not table_exists(con, "gsc_keyword_inventory", "view"):
-            raise RuntimeError("gsc_keyword_inventory view is not available")
-
-        keywords = con.execute("""
-            SELECT
-                query AS keyword,
-                ROUND(MIN(best_position), 1) AS best_ranking,
-                ROUND(MIN(latest_position), 1) AS latest_ranking,
-                SUM(impressions) AS impressions,
-                SUM(clicks) AS clicks,
-                MIN(first_seen) AS first_seen,
-                MAX(last_seen) AS last_seen,
-                COUNT(DISTINCT page) AS landing_pages
-            FROM gsc_keyword_inventory
-            WHERE site_id = ?
-            GROUP BY query
-            ORDER BY
-                CASE WHEN MIN(latest_position) IS NULL THEN 1 ELSE 0 END,
-                MIN(latest_position) ASC,
-                query COLLATE NOCASE ASC
-        """, (site["id"],)).fetchall()
-
-        landing_pages = con.execute("""
-            SELECT
-                page AS landing_page,
-                COUNT(DISTINCT query) AS keywords,
-                SUM(impressions) AS impressions,
-                SUM(clicks) AS clicks,
-                ROUND(MIN(best_position), 1) AS best_ranking,
-                ROUND(AVG(avg_position), 1) AS avg_ranking,
-                MIN(first_seen) AS first_seen,
-                MAX(last_seen) AS last_seen
-            FROM gsc_keyword_inventory
-            WHERE site_id = ?
-            GROUP BY page
-            ORDER BY impressions DESC, best_ranking ASC, landing_page ASC
-        """, (site["id"],)).fetchall()
-
-        page_keywords = con.execute("""
-            SELECT
-                page AS landing_page,
-                query AS keyword,
-                ROUND(best_position, 1) AS best_ranking,
-                ROUND(avg_position, 1) AS avg_ranking,
-                ROUND(latest_position, 1) AS latest_ranking,
-                ROUND(worst_position, 1) AS worst_ranking,
-                impressions,
-                clicks,
-                status,
-                first_seen,
-                last_seen
-            FROM gsc_keyword_inventory
-            WHERE site_id = ?
-            ORDER BY landing_page ASC, latest_ranking ASC, keyword COLLATE NOCASE ASC
-        """, (site["id"],)).fetchall()
+    adapter = OpenGSCAdapter(SEO_DB)
+    if not adapter.available():
+        raise RuntimeError("OpenGSC database is not available")
+    payload = adapter.domain_export(site["id"])
 
     def csv_bytes(rows):
         buf = io.StringIO()
@@ -908,10 +373,9 @@ def build_domain_export(site):
 
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("keywords.csv", csv_bytes(keywords))
-        zf.writestr("landing-pages.csv", csv_bytes(landing_pages))
-        zf.writestr("landing-page-keywords.csv", csv_bytes(page_keywords))
-
+        zf.writestr("keywords.csv", csv_bytes(payload["keywords"]))
+        zf.writestr("landing-pages.csv", csv_bytes(payload["landing_pages"]))
+        zf.writestr("landing-page-keywords.csv", csv_bytes(payload["page_keywords"]))
     archive.seek(0)
     return archive
 
@@ -1182,59 +646,60 @@ def domain_new():
         except ValueError as exc:
             return render_template("domain_new.html",sites=get_sites(),site=None,message=str(exc))
 
-        sitemap_message=""
         if created:
-            try:
-                sitemap_count,ranking_count,source=sync_site_pages(domain)
-                sitemap_message=f" Added {sitemap_count} sitemap page(s)."
-            except Exception as exc:
-                sitemap_message=f" Domain added; sitemap discovery failed: {exc}"
+            job=enqueue_job(
+                RESEARCH_DB,
+                "page_discovery",
+                domain=domain,
+                payload={"domain":domain},
+                max_attempts=3,
+            )
+            set_discovery_state(RESEARCH_DB,domain,"queued",job_id=job["id"],error="")
+            message=f"Domain added. Page discovery queued · job {job['id']}."
+        else:
+            message="Domain already exists."
 
-        site=get_site(domain)
-        gsc_message=" GSC linked." if not site["gsc_missing"] else " GSC missing; SEO ranking fields will remain empty."
-
-        ensure_domain_ready(domain)
-        return redirect(url_for("domain_sources",domain=domain,message=("Domain added." if created else "Domain already exists.")+" Select any additional data sources, then continue to Reports."))
+        return redirect(url_for("domain_sources",domain=domain,message=message))
 
     return render_template("domain_new.html",sites=get_sites(),site=None,message=message)
 
-
-@app.route("/d/<domain>/sources",methods=["GET","POST"])
+@app.route("/d/<domain>/sources", methods=["GET", "POST"])
 def domain_sources(domain):
-    site=get_site(domain); readiness=ensure_domain_ready(domain); message=request.args.get("message","").strip()
-    if request.method=="POST":
-        selected=set(request.form.getlist("selected")); custom_name=request.form.get("custom_name","").strip(); custom_detail=request.form.get("custom_detail","").strip(); now=datetime.now(timezone.utc).isoformat(timespec="seconds"); detected=detected_source_state(site)
-        with research_db() as con:
-            ensure_domain_source_schema(con)
-            for key,name,_ in SOURCE_CATALOG:
-                connected=bool(detected.get(key,{}).get("connected"))
-                con.execute("INSERT INTO domain_source(domain,source_key,source_name,selected,connection_status,detail,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(domain,source_key) DO UPDATE SET source_name=excluded.source_name,selected=excluded.selected,connection_status=excluded.connection_status,detail=CASE WHEN excluded.detail<>'' THEN excluded.detail ELSE domain_source.detail END,updated_at=excluded.updated_at",(domain,key,name,int(key in selected or connected),"connected" if connected else "not_connected",detected.get(key,{}).get("detail",""),now))
-            if custom_name:
-                custom_key="custom_"+re.sub(r"[^a-z0-9]+","_",custom_name.lower()).strip("_")
-                if custom_key=="custom_": custom_key="custom_source"
-                con.execute("INSERT INTO domain_source(domain,source_key,source_name,selected,connection_status,detail,updated_at) VALUES (?,?,?,1,'not_connected',?,?) ON CONFLICT(domain,source_key) DO UPDATE SET source_name=excluded.source_name,selected=1,detail=excluded.detail,updated_at=excluded.updated_at",(domain,custom_key,custom_name,custom_detail,now))
-            con.commit()
-        return redirect(url_for("domain_sources",domain=domain,message="Sources saved. Domain is ready to run reports."))
-    return render_template("sources.html",sites=get_sites(),site=site,sources=domain_sources_for_site(site),readiness=readiness,message=message,company_name=infer_company_name(domain))
+    site = get_site(domain)
+    readiness = ensure_domain_ready(domain)
+    message = request.args.get("message", "").strip()
+    if request.method == "POST":
+        persist_domain_sources(
+            site,
+            research_db=RESEARCH_DB,
+            opengsc_db=SEO_DB,
+            selected=set(request.form.getlist("selected")),
+            custom_name=request.form.get("custom_name", ""),
+            custom_detail=request.form.get("custom_detail", ""),
+        )
+        return redirect(
+            url_for(
+                "domain_sources",
+                domain=domain,
+                message="Sources saved. Domain is ready to run reports.",
+            )
+        )
+    return render_template(
+        "sources.html",
+        sites=get_sites(),
+        site=site,
+        sources=domain_sources_for_site(site),
+        readiness=readiness,
+        message=message,
+        company_name=infer_company_name(domain),
+    )
 
 
 
 @app.post("/d/<domain>/sources/company-name")
 def save_source_company_name(domain):
     get_site(domain)
-    company_name = request.form.get("company_name", "").strip() or domain
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with research_db() as con:
-        ensure_domain_company_schema(con)
-        con.execute(
-            """INSERT INTO domain_company_settings(domain,company_name,updated_at)
-               VALUES (?,?,?)
-               ON CONFLICT(domain) DO UPDATE SET
-                 company_name=excluded.company_name,
-                 updated_at=excluded.updated_at""",
-            (domain, company_name, now),
-        )
-        con.commit()
+    save_company_name(RESEARCH_DB, domain, request.form.get("company_name", ""))
     return redirect(url_for("domain_sources", domain=domain, message="Domain settings saved."))
 
 
@@ -1245,31 +710,43 @@ def domain_settings(domain):
 
 @app.route("/d/<domain>/sources/manual-ai", methods=["GET", "POST"])
 def manual_ai_source(domain):
-    site=get_site(domain); message=request.args.get("message","").strip()
-    if request.method=="POST":
-        current=load_manual_ai_source(domain); prompts={}; responses={}
-        for phase in ("phase1","phase2"):
-            for state in ("state1","state2"):
-                prefix=f"{phase}_{state}"; prompts[prefix]=request.form.get(f"{prefix}_prompt_text","")
-                for provider in ("chatgpt","claude","gemini"):
-                    key=f"{prefix}_{provider}"; uploaded=_manual_ai_upload_text(f"{key}_upload"); pasted=request.form.get(f"{key}_response","")
-                    responses[key]=uploaded if uploaded is not None else pasted
-        old_prompts=tuple(str(current.get(f"{p}_{s}_prompt_text") or "") for p in ("phase1","phase2") for s in ("state1","state2"))
-        new_prompts=tuple(prompts[f"{p}_{s}"] for p in ("phase1","phase2") for s in ("state1","state2"))
-        version=int(current.get("question_set_version") or 1)+(1 if old_prompts!=new_prompts else 0)
-        now=datetime.now(timezone.utc).isoformat(timespec="seconds")
-        with research_db() as con:
-            ensure_manual_ai_source_schema(con)
-            con.execute("INSERT INTO manual_ai_source(domain,question_set_version,analysis_model,analysis_system_prompt,analysis_text,analysis_status,analysis_error,analysis_updated_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(domain) DO UPDATE SET question_set_version=excluded.question_set_version,updated_at=excluded.updated_at",(domain,version,current.get("analysis_model") or "",current.get("analysis_system_prompt") or DEFAULT_ANALYSIS_SYSTEM_PROMPT,current.get("analysis_text") or "",current.get("analysis_status") or "not_run",current.get("analysis_error") or "",current.get("analysis_updated_at") or "",now))
-            for phase in ("phase1","phase2"):
-                for state in ("state1","state2"):
-                    prefix=f"{phase}_{state}"
-                    con.execute("INSERT INTO manual_ai_state_source(domain,phase,state,prompt_text,chatgpt_response,claude_response,gemini_response,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(domain,phase,state) DO UPDATE SET prompt_text=excluded.prompt_text,chatgpt_response=excluded.chatgpt_response,claude_response=excluded.claude_response,gemini_response=excluded.gemini_response,updated_at=excluded.updated_at",(domain,phase,state,prompts[prefix],responses[f"{prefix}_chatgpt"],responses[f"{prefix}_claude"],responses[f"{prefix}_gemini"],now))
-            ensure_domain_source_schema(con)
-            con.execute("INSERT INTO domain_source(domain,source_key,source_name,selected,connection_status,detail,updated_at) VALUES (?,?,?,1,'not_connected',?,?) ON CONFLICT(domain,source_key) DO UPDATE SET source_name=excluded.source_name,selected=1,detail=excluded.detail,updated_at=excluded.updated_at",(domain,"manual_ai","Manual AI Responses",f"Four-state Manual AI source · question-set v{version}",now))
-            con.commit()
-        return redirect(url_for("manual_ai_source",domain=domain,message=f"Saved question-set v{version}: 2 phases × 2 states."))
-    return render_template("manual_ai_responses.html",sites=get_sites(),site=site,state=load_manual_ai_source(domain),message=message)
+    site = get_site(domain)
+    message = request.args.get("message", "").strip()
+    if request.method == "POST":
+        current = load_manual_ai_source(domain)
+        prompts = {}
+        responses = {}
+        for phase in ("phase1", "phase2"):
+            for state in ("state1", "state2"):
+                prefix = f"{phase}_{state}"
+                prompts[prefix] = request.form.get(f"{prefix}_prompt_text", "")
+                for provider in ("chatgpt", "claude", "gemini"):
+                    key = f"{prefix}_{provider}"
+                    uploaded = _manual_ai_upload_text(f"{key}_upload")
+                    pasted = request.form.get(f"{key}_response", "")
+                    responses[key] = uploaded if uploaded is not None else pasted
+        version = save_manual_ai_source(
+            RESEARCH_DB,
+            domain,
+            prompts=prompts,
+            responses=responses,
+            current=current,
+            default_analysis_prompt=DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+        )
+        return redirect(
+            url_for(
+                "manual_ai_source",
+                domain=domain,
+                message=f"Saved question-set v{version}: 2 phases × 2 states.",
+            )
+        )
+    return render_template(
+        "manual_ai_responses.html",
+        sites=get_sites(),
+        site=site,
+        state=load_manual_ai_source(domain),
+        message=message,
+    )
 
 
 @app.get("/d/<domain>/sources/manual-ai/models")
@@ -1282,7 +759,6 @@ def manual_ai_analysis_models(domain):
     return {"provider":provider,**result}
 
 
-@app.post("/d/<domain>/sources/manual-ai/analyze")
 @app.post("/d/<domain>/sources/manual-ai/analyze")
 def manual_ai_source_analyze(domain):
     get_site(domain); source=load_manual_ai_source(domain)
@@ -1330,14 +806,7 @@ def pages(domain):
     q = request.args.get("q", "").strip()
     message = request.args.get("message", "").strip()
 
-    with research_db() as con:
-        count = con.execute("SELECT COUNT(*) AS n FROM site_page WHERE domain=?", (domain,)).fetchone()["n"]
-    if count == 0:
-        try:
-            sync_site_pages(domain)
-        except Exception as exc:
-            if not message:
-                message = f"Initial sitemap sync failed: {exc}"
+    discovery = get_discovery_state(RESEARCH_DB, domain)
 
     ranking_counts = {}
     for row in gsc_rows_for_domain(domain):
@@ -1367,7 +836,7 @@ def pages(domain):
         "has_note": r["id"] in note_ids,
     } for r in page_rows]
 
-    return render_template("pages.html", sites=get_sites(), site=site, rows=rows, total=total, q=q, message=message)
+    return render_template("pages.html", sites=get_sites(), site=site, rows=rows, total=total, q=q, message=message, discovery=discovery)
 
 
 
@@ -1736,13 +1205,15 @@ def research_delete(domain,keyword_id):
 @app.post("/d/<domain>/pages/sync")
 def pages_sync(domain):
     get_site(domain)
-    try:
-        sitemap_count, ranking_count, source = sync_site_pages(domain)
-        message = f"Pages refreshed: {sitemap_count} sitemap page(s), {ranking_count} ranking landing page(s). Source: {source}"
-    except Exception as exc:
-        message = f"Page refresh failed: {exc}"
-    return redirect(url_for("pages", domain=domain, message=message))
-
+    job=enqueue_job(
+        RESEARCH_DB,
+        "page_discovery",
+        domain=domain,
+        payload={"domain":domain},
+        max_attempts=3,
+    )
+    set_discovery_state(RESEARCH_DB,domain,"queued",job_id=job["id"],error="")
+    return redirect(url_for("pages",domain=domain,message=f"Page discovery queued · job {job['id']}"))
 
 @app.route("/d/<domain>/pages/<int:page_id>")
 def page_workspace(domain, page_id):
@@ -2152,7 +1623,6 @@ def reports(domain):
 
 
 @app.post("/d/<domain>/reports/full")
-@app.post("/d/<domain>/reports/full")
 def generate_full_web_report(domain):
     get_site(domain); ensure_domain_ready(domain)
     job=enqueue_job(RESEARCH_DB,"report_refresh",domain=domain,payload={"domain":domain,"page_cap":5000,"delay_ms":0,"obey_robots":True},max_attempts=3)
@@ -2171,120 +1641,23 @@ def public_report_note_reply(report_id):
     payload = request.get_json(silent=True) or {}
     key = str(payload.get("key") or "").strip()
     content = str(payload.get("content") or "").strip()
-
     if not key or not content:
         return {"ok": False, "error": "missing note key or reply"}, 400
-
-    with research_db() as con:
-        _ensure_report_conversation_schema(con)
-
-        report_row = con.execute(
-            "SELECT domain FROM report_session WHERE id=? LIMIT 1",
-            (report_id,),
-        ).fetchone()
-        if not report_row:
-            return {"ok": False, "error": "report not found"}, 404
-
-        domain = report_row["domain"]
-        note = con.execute(
-            "SELECT discussion_enabled FROM report_note "
-            "WHERE domain=? COLLATE NOCASE AND note_key=?",
-            (domain, key),
-        ).fetchone()
-
-        if not note or not bool(note["discussion_enabled"]):
-            return {"ok": False, "error": "discussion is not enabled for this note"}, 403
-
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        cur = con.execute(
-            "INSERT INTO report_note_reply(domain,note_key,author_role,content,created_at) "
-            "VALUES (?,?,?,?,?)",
-            (domain, key, "client", content, now),
-        )
-        con.commit()
-
-    return {
-        "ok": True,
-        "id": cur.lastrowid,
-        "created_at": now,
-        "author_role": "client",
-    }
+    try:
+        reply = add_public_reply(RESEARCH_DB, report_id, key, content)
+    except ReportNotFound as exc:
+        return {"ok": False, "error": str(exc)}, 404
+    except DiscussionDisabled as exc:
+        return {"ok": False, "error": str(exc)}, 403
+    return {"ok": True, **reply}
 
 
 @app.get("/reports/<report_id>")
 def public_report(report_id):
-    with research_db() as con:
-        row = con.execute(
-            "SELECT domain FROM report_session WHERE id=? LIMIT 1",
-            (report_id,),
-        ).fetchone()
-    if not row:
+    domain = report_domain(RESEARCH_DB, report_id)
+    if not domain:
         abort(404)
-    return report_session_view(row["domain"], report_id)
-
-
-
-def _ensure_report_workflow_schema(con):
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
-
-def _load_report_exclusions(domain):
-    with research_db() as con:
-        _ensure_report_workflow_schema(con)
-        rows = con.execute(
-            "SELECT scope,item_key,page_id FROM report_exclusion "
-            "WHERE domain=? COLLATE NOCASE",
-            (domain,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def _apply_report_exclusions(snapshot, domain):
-    # Work on a detached copy. Stored report_session snapshots stay immutable.
-    data = json.loads(json.dumps(snapshot))
-    exclusions = _load_report_exclusions(domain)
-    check_keys = {r["item_key"] for r in exclusions if r["scope"] == "check"}
-    categories = {r["item_key"] for r in exclusions if r["scope"] == "category"}
-    families = {r["item_key"] for r in exclusions if r["scope"] == "family"}
-    page_checks = {
-        (r["item_key"], int(r["page_id"]))
-        for r in exclusions
-        if r["scope"] == "page_check"
-    }
-
-    filtered = []
-    for signal in data.get("audit_signals") or []:
-        signal_key = str(signal.get("signal_key") or "")
-        family = str(signal.get("family") or "")
-        category = str(signal.get("category") or "")
-        try:
-            page_id = int(signal.get("page_id"))
-        except Exception:
-            page_id = -1
-        if signal_key and signal_key in check_keys:
-            continue
-        if family and family in families:
-            continue
-        if category and category in categories:
-            continue
-        if signal_key and (signal_key, page_id) in page_checks:
-            continue
-        filtered.append(signal)
-    data["audit_signals"] = filtered
-    return data
-
-
-def _load_human_interpretation(domain, report_id):
-    with research_db() as con:
-        _ensure_report_workflow_schema(con)
-        row = con.execute(
-            "SELECT content,updated_at FROM report_human_interpretation "
-            "WHERE domain=? COLLATE NOCASE AND report_id=?",
-            (domain, report_id),
-        ).fetchone()
-    return dict(row) if row else {"content": "", "updated_at": None}
+    return report_session_view(domain, report_id)
 
 
 @app.post("/d/<domain>/report-workflow/exclusion")
@@ -2294,7 +1667,7 @@ def report_workflow_exclusion(domain):
     action = str(payload.get("action") or "exclude").strip().lower()
     scope = str(payload.get("scope") or "").strip()
     key = str(payload.get("key") or "").strip()
-    keys = [str(x).strip() for x in (payload.get("keys") or []) if str(x).strip()]
+    keys = [str(item).strip() for item in (payload.get("keys") or []) if str(item).strip()]
     try:
         page_id = int(payload.get("page_id") or -1)
     except Exception:
@@ -2302,92 +1675,27 @@ def report_workflow_exclusion(domain):
 
     if scope not in {"check", "category", "page_check", "checks", "family"}:
         return {"ok": False, "error": "invalid scope"}, 400
-
     if scope == "checks":
-        target_rows = [("check", x, -1) for x in keys]
+        targets = [("check", item, -1) for item in keys]
     elif key:
-        target_rows = [(scope, key, page_id if scope == "page_check" else -1)]
+        targets = [(scope, key, page_id if scope == "page_check" else -1)]
     else:
         return {"ok": False, "error": "missing key"}, 400
 
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with research_db() as con:
-        _ensure_report_workflow_schema(con)
-        for row_scope, row_key, row_page_id in target_rows:
-            if action == "include":
-                con.execute(
-                    "DELETE FROM report_exclusion "
-                    "WHERE domain=? COLLATE NOCASE AND scope=? AND item_key=? AND page_id=?",
-                    (domain, row_scope, row_key, row_page_id),
-                )
-            else:
-                con.execute(
-                    "INSERT OR IGNORE INTO report_exclusion"
-                    "(domain,scope,item_key,page_id,created_at) VALUES (?,?,?,?,?)",
-                    (domain, row_scope, row_key, row_page_id, now),
-                )
-        con.commit()
-    return {"ok": True, "action": action, "count": len(target_rows)}
+    count = set_exclusions(RESEARCH_DB, domain, action=action, targets=targets)
+    return {"ok": True, "action": action, "count": count}
 
 
 @app.post("/d/<domain>/reports/<report_id>/human-interpretation")
 def save_report_human_interpretation(domain, report_id):
     get_site(domain)
-    session = load_report_session(RESEARCH_DB, domain, report_id)
-    if not session:
+    if not load_report_session(RESEARCH_DB, domain, report_id):
         abort(404)
     payload = request.get_json(silent=True) or {}
-    content = str(payload.get("content") or "")
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with research_db() as con:
-        _ensure_report_workflow_schema(con)
-        con.execute(
-            "INSERT INTO report_human_interpretation(domain,report_id,content,updated_at) "
-            "VALUES (?,?,?,?) "
-            "ON CONFLICT(domain,report_id) DO UPDATE SET "
-            "content=excluded.content,updated_at=excluded.updated_at",
-            (domain, report_id, content, now),
-        )
-        con.commit()
-    return {"ok": True, "updated_at": now}
-
-
-
-def _ensure_report_conversation_schema(con):
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
-
-def _load_report_notes(domain):
-    with research_db() as con:
-        _ensure_report_conversation_schema(con)
-        rows = con.execute(
-            "SELECT note_key,content,discussion_enabled,updated_at "
-            "FROM report_note WHERE domain=? COLLATE NOCASE",
-            (domain,),
-        ).fetchall()
-        replies = con.execute(
-            "SELECT id,note_key,author_role,content,created_at "
-            "FROM report_note_reply WHERE domain=? COLLATE NOCASE ORDER BY id",
-            (domain,),
-        ).fetchall()
-
-    notes = {
-        row["note_key"]: {
-            "content": row["content"],
-            "discussion_enabled": bool(row["discussion_enabled"]),
-            "updated_at": row["updated_at"],
-            "replies": [],
-        }
-        for row in rows
-    }
-    for row in replies:
-        notes.setdefault(
-            row["note_key"],
-            {"content": "", "discussion_enabled": False, "updated_at": None, "replies": []},
-        )["replies"].append(dict(row))
-    return notes
+    updated_at = save_human_interpretation(
+        RESEARCH_DB, domain, report_id, str(payload.get("content") or "")
+    )
+    return {"ok": True, "updated_at": updated_at}
 
 
 @app.post("/d/<domain>/report-notes")
@@ -2397,30 +1705,14 @@ def save_report_note(domain):
     key = str(payload.get("key") or "").strip()
     if not key:
         return {"ok": False, "error": "missing note key"}, 400
-
-    content = str(payload.get("content") or "")
-    discussion_enabled = 1 if payload.get("discussion_enabled") else 0
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-    with research_db() as con:
-        _ensure_report_conversation_schema(con)
-        con.execute(
-            "INSERT INTO report_note(domain,note_key,content,discussion_enabled,updated_at) "
-            "VALUES (?,?,?,?,?) "
-            "ON CONFLICT(domain,note_key) DO UPDATE SET "
-            "content=excluded.content,"
-            "discussion_enabled=excluded.discussion_enabled,"
-            "updated_at=excluded.updated_at",
-            (domain, key, content, discussion_enabled, now),
-        )
-        con.commit()
-
-    return {
-        "ok": True,
-        "updated_at": now,
-        "has_note": bool(content.strip()),
-        "discussion_enabled": bool(discussion_enabled),
-    }
+    saved = persist_report_note(
+        RESEARCH_DB,
+        domain,
+        key,
+        str(payload.get("content") or ""),
+        bool(payload.get("discussion_enabled")),
+    )
+    return {"ok": True, **saved}
 
 
 @app.post("/d/<domain>/report-notes/reply")
@@ -2429,39 +1721,25 @@ def save_report_note_reply(domain):
     payload = request.get_json(silent=True) or {}
     key = str(payload.get("key") or "").strip()
     content = str(payload.get("content") or "").strip()
-    author_role = str(payload.get("author_role") or "client").strip().lower()
-
-    if author_role not in {"owner", "client"}:
-        author_role = "client"
     if not key or not content:
         return {"ok": False, "error": "missing note key or reply"}, 400
-
-    with research_db() as con:
-        _ensure_report_conversation_schema(con)
-        note = con.execute(
-            "SELECT discussion_enabled FROM report_note "
-            "WHERE domain=? COLLATE NOCASE AND note_key=?",
-            (domain, key),
-        ).fetchone()
-        if not note or not bool(note["discussion_enabled"]):
-            return {"ok": False, "error": "discussion is not enabled for this note"}, 403
-
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        cur = con.execute(
-            "INSERT INTO report_note_reply(domain,note_key,author_role,content,created_at) "
-            "VALUES (?,?,?,?,?)",
-            (domain, key, author_role, content, now),
+    try:
+        reply = add_reply(
+            RESEARCH_DB,
+            domain,
+            key,
+            content,
+            author_role=str(payload.get("author_role") or "client").strip().lower(),
         )
-        con.commit()
-
-    return {"ok": True, "id": cur.lastrowid, "created_at": now, "author_role": author_role}
-
+    except DiscussionDisabled as exc:
+        return {"ok": False, "error": str(exc)}, 403
+    return {"ok": True, **reply}
 
 
 @app.get("/d/<domain>/report-notes.json")
 def report_notes_json(domain):
     get_site(domain)
-    return {"ok": True, "notes": _load_report_notes(domain)}
+    return {"ok": True, "notes": load_report_notes(RESEARCH_DB, domain)}
 
 
 @app.get("/d/<domain>/reports/<report_id>")
@@ -2476,8 +1754,8 @@ def report_session_view(domain, report_id):
     # injected into an existing observation.
     historical_snapshot = json.loads(json.dumps(session["snapshot"]))
     report = prepare_report_view(historical_snapshot)
-    human_interpretation = _load_human_interpretation(domain, report_id)
-    report_notes = _load_report_notes(domain)
+    human_interpretation = load_human_interpretation(RESEARCH_DB, domain, report_id)
+    report_notes = load_report_notes(RESEARCH_DB, domain)
 
     return render_template(
         "full_report.html",

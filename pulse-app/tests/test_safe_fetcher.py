@@ -1,6 +1,7 @@
 import socket
 import pytest
 import requests
+import urllib3
 from services.safe_fetcher import SafeFetcher, UnsafeDestination, ResponseTooLarge, FetchTimeout, DisallowedContentType
 
 
@@ -124,3 +125,58 @@ def test_environment_proxies_disabled():
     session = FakeSession([])
     SafeFetcher(session=session)
     assert session.trust_env is False
+
+
+def test_validated_ip_is_actual_transport_destination(monkeypatch):
+    calls = []
+    answers = iter(["93.184.216.34", "127.0.0.1"])
+
+    def rebinding_getaddrinfo(host, port, type=0):
+        ip = next(answers)
+        calls.append((host, ip))
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", rebinding_getaddrinfo)
+    session = FakeSession([FakeResponse(200, {"Content-Type": "text/html"}, [b"pinned"])])
+    response = SafeFetcher(session=session).get("https://example.com/path?q=1")
+
+    assert response.content == b"pinned"
+    assert calls == [("example.com", "93.184.216.34")]
+    method, requested_url, kwargs = session.requests[0]
+    assert method == "GET"
+    assert requested_url == "https://93.184.216.34/path?q=1"
+    assert kwargs["headers"]["Host"] == "example.com"
+
+
+def test_https_pool_preserves_hostname_for_sni_and_certificate_validation(monkeypatch):
+    _public_dns(monkeypatch)
+    captured = {}
+
+    class RawResponse:
+        status = 200
+        headers = {"Content-Type": "text/html"}
+        def __init__(self):
+            self.done = False
+        def read(self, amount):
+            if self.done:
+                return b""
+            self.done = True
+            return b"ok"
+        def release_conn(self):
+            pass
+
+    class FakePool:
+        def __init__(self, **kwargs):
+            captured["pool"] = kwargs
+        def urlopen(self, method, target, **kwargs):
+            captured["request"] = (method, target, kwargs)
+            return RawResponse()
+
+    monkeypatch.setattr(urllib3, "HTTPSConnectionPool", FakePool)
+    response = SafeFetcher().get("https://example.com/secure")
+    assert response.content == b"ok"
+    assert captured["pool"]["host"] == "93.184.216.34"
+    assert captured["pool"]["assert_hostname"] == "example.com"
+    assert captured["pool"]["server_hostname"] == "example.com"
+    assert captured["pool"]["cert_reqs"] == "CERT_REQUIRED"
+    assert captured["request"][2]["headers"]["Host"] == "example.com"

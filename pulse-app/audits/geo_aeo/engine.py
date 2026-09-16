@@ -5,10 +5,11 @@ import re
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup, Tag
 from services.safe_fetcher import SafeFetchError, safe_fetcher
+from services.url_policy import URLPolicyError, audit_target_url, origin_url, safe_url_join, same_origin
 
 STATUS_VALUES = {"PASS": 1.0, "PARTIAL": 0.5, "FAIL": 0.0}
 SEVERITY_WEIGHTS = {"CRITICAL": 3.0, "HIGH": 2.0, "MEDIUM": 1.0, "LOW": 0.5}
@@ -30,15 +31,10 @@ SOURCES = {
 
 
 def normalize_url(value: str) -> str:
-    url = value.strip()
-    if not url:
-        raise ValueError("Enter a website URL.")
-    if "://" not in url:
-        url = f"https://{url}"
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("Enter a valid HTTP or HTTPS URL.")
-    return url
+    try:
+        return audit_target_url(value)
+    except URLPolicyError as exc:
+        raise ValueError("Enter a valid HTTP or HTTPS URL.") from exc
 
 
 def _text(tag: Any) -> str:
@@ -160,12 +156,17 @@ def capture_page(raw_url: str, selected_page_type: str = "auto") -> dict[str, An
     soup = BeautifulSoup(html, "html.parser")
     final_url = response.url
     parsed_final = urlparse(final_url)
-    origin = f"{parsed_final.scheme}://{parsed_final.netloc}"
+    origin = origin_url(final_url)
 
     title = _text(soup.title)
     description = _meta(soup, "description")
     canonical_tag = soup.find("link", rel=lambda value: value and "canonical" in value)
-    canonical = urljoin(final_url, str(canonical_tag.get("href", ""))) if isinstance(canonical_tag, Tag) else ""
+    canonical = ""
+    if isinstance(canonical_tag, Tag):
+        try:
+            canonical = safe_url_join(final_url, str(canonical_tag.get("href", "")))
+        except URLPolicyError:
+            canonical = ""
     robots_meta = " ".join(filter(None, [_meta(soup, "robots"), response.headers.get("x-robots-tag", "")])).lower()
 
     schema_objects, schema_errors = _schema_objects(soup)
@@ -173,10 +174,13 @@ def capture_page(raw_url: str, selected_page_type: str = "auto") -> dict[str, An
 
     links: list[dict[str, str]] = []
     for anchor in soup.find_all("a", href=True):
-        href = urljoin(final_url, str(anchor.get("href", "")).strip())
+        try:
+            href = safe_url_join(final_url, str(anchor.get("href", "")).strip())
+        except URLPolicyError:
+            continue
         links.append({"url": href, "text": _text(anchor)})
-    internal_links = [item for item in links if urlparse(item["url"]).netloc == parsed_final.netloc]
-    external_links = [item for item in links if urlparse(item["url"]).scheme in {"http", "https"} and urlparse(item["url"]).netloc != parsed_final.netloc]
+    internal_links = [item for item in links if same_origin(item["url"], final_url)]
+    external_links = [item for item in links if not same_origin(item["url"], final_url)]
     link_texts = [item["text"] for item in links]
     generic_links = [text for text in link_texts if text.lower().strip() in {"click here", "here", "read more", "learn more", "more"}]
 
@@ -221,10 +225,10 @@ def capture_page(raw_url: str, selected_page_type: str = "auto") -> dict[str, An
         content_meta = soup.find("meta", attrs={"http-equiv": re.compile(r"content-type", re.I)})
         charset = str(content_meta.get("content", "")) if isinstance(content_meta, Tag) else ""
 
-    robots_url = urljoin(origin, "/robots.txt")
+    robots_url = safe_url_join(origin, "/robots.txt")
     robots_status, robots_text = _supporting_file(robots_url, user_agent)
     sitemap_candidates = re.findall(r"(?im)^sitemap:\s*(\S+)", robots_text)
-    sitemap_url = sitemap_candidates[0] if sitemap_candidates else urljoin(origin, "/sitemap.xml")
+    sitemap_url = sitemap_candidates[0] if sitemap_candidates else safe_url_join(origin, "/sitemap.xml")
     sitemap_status, sitemap_text = _supporting_file(sitemap_url, user_agent)
 
     page_type = _page_type(selected_page_type, final_url, schema_types, visible_text)

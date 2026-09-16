@@ -4,9 +4,13 @@ import ipaddress
 import socket
 from dataclasses import dataclass, field
 from typing import Iterable
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
+import urllib3
+from urllib3 import exceptions as urllib3_exceptions
+
+from services.url_policy import URLPolicyError, normalize_hostname, safe_url_join
 
 
 class SafeFetchError(RuntimeError):
@@ -78,6 +82,23 @@ class SafeResponse:
             return self.content.decode("utf-8", errors="replace")
 
 
+class _Urllib3ResponseAdapter:
+    def __init__(self, response):
+        self._response = response
+        self.status_code = int(response.status)
+        self.headers = response.headers
+
+    def iter_content(self, chunk_size=65536):
+        while True:
+            chunk = self._response.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk
+
+    def close(self):
+        self._response.release_conn()
+
+
 class SafeFetcher:
     def __init__(
         self,
@@ -96,8 +117,12 @@ class SafeFetcher:
         self.allowed_content_types = frozenset(
             x.lower() for x in (allowed_content_types or DEFAULT_ALLOWED_CONTENT_TYPES)
         )
-        self.session = session or requests.Session()
-        self.session.trust_env = False
+        # session is retained as an injectable transport for tests. Production
+        # uses urllib3 pools that connect directly to the validated IP while
+        # preserving the original hostname for Host, SNI, and cert checks.
+        self.session = session
+        if self.session is not None:
+            self.session.trust_env = False
 
     @classmethod
     def _validate_ip(cls, raw_ip: str):
@@ -124,7 +149,10 @@ class SafeFetcher:
         if not parsed.hostname:
             raise UnsafeDestination("URL must contain a hostname.")
 
-        host = parsed.hostname.rstrip(".").lower()
+        try:
+            host = normalize_hostname(parsed.hostname)
+        except URLPolicyError as exc:
+            raise UnsafeDestination(str(exc)) from exc
         if host in BLOCKED_HOSTNAMES or host.endswith(".localhost"):
             raise UnsafeDestination(f"Blocked hostname: {host}")
 
@@ -186,6 +214,88 @@ class SafeFetcher:
             chunks.append(chunk)
         return b"".join(chunks)
 
+    @staticmethod
+    def _host_header(parsed, host: str) -> str:
+        port = parsed.port
+        default = 443 if parsed.scheme.lower() == "https" else 80
+        if port and port != default:
+            return f"{host}:{port}"
+        return host
+
+    @staticmethod
+    def _ip_url(parsed, ip: str) -> str:
+        display_ip = f"[{ip}]" if ":" in ip else ip
+        port = parsed.port
+        default = 443 if parsed.scheme.lower() == "https" else 80
+        netloc = display_ip if not port or port == default else f"{display_ip}:{port}"
+        return urlunsplit((parsed.scheme, netloc, parsed.path or "/", parsed.query, ""))
+
+    def _request_with_test_session(self, method, parsed, host, ip, headers):
+        request_headers = dict(headers or {})
+        request_headers["Host"] = self._host_header(parsed, host)
+        return self.session.request(
+            method,
+            self._ip_url(parsed, ip),
+            headers=request_headers,
+            timeout=(self.connect_timeout, self.read_timeout),
+            allow_redirects=False,
+            stream=True,
+        )
+
+    def _request_with_pinned_pool(self, method, parsed, host, ip, headers):
+        port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+        timeout = urllib3.Timeout(connect=self.connect_timeout, read=self.read_timeout)
+        common = {
+            "host": ip,
+            "port": port,
+            "timeout": timeout,
+            "maxsize": 1,
+            "block": True,
+        }
+        if parsed.scheme.lower() == "https":
+            pool = urllib3.HTTPSConnectionPool(
+                **common,
+                cert_reqs="CERT_REQUIRED",
+                ca_certs=requests.certs.where(),
+                assert_hostname=host,
+                server_hostname=host,
+            )
+        else:
+            pool = urllib3.HTTPConnectionPool(**common)
+
+        request_headers = dict(headers or {})
+        request_headers["Host"] = self._host_header(parsed, host)
+        target = parsed.path or "/"
+        if parsed.query:
+            target += "?" + parsed.query
+        response = pool.urlopen(
+            method,
+            target,
+            headers=request_headers,
+            redirect=False,
+            preload_content=False,
+            retries=False,
+        )
+        return _Urllib3ResponseAdapter(response)
+
+    def _request_pinned(self, method, url, host, ips, headers):
+        parsed = urlsplit(url)
+        last_error = None
+        for ip in ips:
+            try:
+                if self.session is not None:
+                    return self._request_with_test_session(method, parsed, host, ip, headers)
+                return self._request_with_pinned_pool(method, parsed, host, ip, headers)
+            except (requests.Timeout, urllib3_exceptions.TimeoutError) as exc:
+                last_error = FetchTimeout(f"Timed out fetching {url}")
+                last_error.__cause__ = exc
+            except (requests.RequestException, urllib3_exceptions.HTTPError, OSError) as exc:
+                last_error = SafeFetchError(f"HTTP request failed for {url}: {exc}")
+                last_error.__cause__ = exc
+        if last_error is not None:
+            raise last_error
+        raise SafeFetchError(f"No validated destination address was available for {url}.")
+
     def fetch(self, url: str, *, method="GET", headers=None, max_response_bytes=None, allowed_content_types=None):
         method = method.upper()
         if method not in {"GET", "HEAD"}:
@@ -196,16 +306,14 @@ class SafeFetcher:
         max_bytes = self.max_response_bytes if max_response_bytes is None else int(max_response_bytes)
 
         for redirect_index in range(self.max_redirects + 1):
-            self.resolve_and_validate(current_url)
+            host, ips = self.resolve_and_validate(current_url)
             try:
-                response = self.session.request(
-                    method, current_url, headers=headers or {},
-                    timeout=(self.connect_timeout, self.read_timeout),
-                    allow_redirects=False, stream=True,
-                )
-            except requests.Timeout as exc:
-                raise FetchTimeout(f"Timed out fetching {current_url}") from exc
-            except requests.RequestException as exc:
+                response = self._request_pinned(method, current_url, host, ips, headers or {})
+            except FetchTimeout:
+                raise
+            except SafeFetchError:
+                raise
+            except Exception as exc:
                 raise SafeFetchError(f"HTTP request failed for {current_url}: {exc}") from exc
 
             normalized_headers = {str(k).lower(): str(v) for k, v in response.headers.items()}
@@ -216,8 +324,10 @@ class SafeFetcher:
                     raise SafeFetchError(f"Redirect response from {current_url} had no Location header.")
                 if redirect_index >= self.max_redirects:
                     raise TooManyRedirects(f"Redirect limit exceeded ({self.max_redirects}).")
-                target_url = urljoin(current_url, location)
-                self.resolve_and_validate(target_url)
+                try:
+                    target_url = safe_url_join(current_url, location)
+                except URLPolicyError as exc:
+                    raise UnsafeDestination(str(exc)) from exc
                 history.append(RedirectHop(current_url, response.status_code, target_url))
                 current_url = target_url
                 continue
