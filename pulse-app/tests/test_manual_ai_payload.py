@@ -9,7 +9,10 @@ def test_valid_json_object():
 
 
 def test_fenced_json_object():
-    parsed = parse_manual_ai_payload('\\`\\`\\`json\n{"provider": "chatgpt"}\n\\`\\`\\`')
+    fence = chr(96) * 3
+    parsed = parse_manual_ai_payload(
+        fence + 'json\n{"provider": "chatgpt"}\n' + fence
+    )
     assert parsed.kind == "fenced_json"
     assert parsed.value == {"provider": "chatgpt"}
 
