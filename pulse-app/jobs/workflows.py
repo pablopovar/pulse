@@ -8,7 +8,7 @@ from pathlib import Path
 from db.sqlite import connect_sqlite
 from jobs.publication import publish_report_if_owned
 from jobs.store import set_job_stage, set_job_publication_status
-from reports.full_pdf import collect_report_data
+from services.report_data import collect_report_data
 from reports.manual_ai_analysis import run_analysis as run_manual_ai_analysis
 from reports.web_report import create_report_session
 from services.audit_execution import run_audit_pages
