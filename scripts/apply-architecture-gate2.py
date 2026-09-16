@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "pulse-app" / "app.py"
 FULL_PDF = ROOT / "pulse-app" / "reports" / "full_pdf.py"
+WORKFLOWS = ROOT / "pulse-app" / "jobs" / "workflows.py"
 
 
 def run(*args: str) -> None:
@@ -15,13 +16,17 @@ def run(*args: str) -> None:
 
 
 def replace_between(text: str, start: str, end: str, replacement: str) -> str:
+    """Replace from start up to, but not including, end."""
     i = text.find(start)
     if i < 0:
         raise RuntimeError(f"start marker not found: {start!r}")
     j = text.find(end, i)
     if j < 0:
         raise RuntimeError(f"end marker not found after {start!r}: {end!r}")
-    return text[:i] + replacement.rstrip() + "\n\n" + text[j:]
+    prefix = text[:i]
+    suffix = text[j:]
+    body = replacement.rstrip()
+    return prefix + (body + "\n\n" if body else "") + suffix
 
 
 def replace_once(text: str, old: str, new: str) -> str:
@@ -100,10 +105,7 @@ def selected_source_keys(site):
         site,
         research_db=RESEARCH_DB,
         opengsc_db=SEO_DB,
-    )
-
-
-REPORT_FAMILY_DEFAULT_QUESTIONS = {''',
+    )''',
     )
 
     text = replace_between(
@@ -200,10 +202,7 @@ def build_domain_export(site):
         zf.writestr("landing-pages.csv", csv_bytes(payload["landing_pages"]))
         zf.writestr("landing-page-keywords.csv", csv_bytes(payload["page_keywords"]))
     archive.seek(0)
-    return archive
-
-
-def geo_engine_audit(url, page_type="auto"):''',
+    return archive''',
     )
 
     text = replace_between(
@@ -236,10 +235,7 @@ def domain_new():
 
         return redirect(url_for("domain_sources",domain=domain,message=message))
 
-    return render_template("domain_new.html",sites=get_sites(),site=None,message=message)
-
-
-@app.route("/d/<domain>/sources",methods=["GET","POST"])''',
+    return render_template("domain_new.html",sites=get_sites(),site=None,message=message)''',
     )
 
     old_initial_discovery = '''    with research_db() as con:
@@ -278,17 +274,14 @@ def pages_sync(domain):
         max_attempts=3,
     )
     set_discovery_state(RESEARCH_DB,domain,"queued",job_id=job["id"],error="")
-    return redirect(url_for("pages",domain=domain,message=f"Page discovery queued · job {job['id']}"))
-
-
-@app.route("/d/<domain>/pages/<int:page_id>")''',
+    return redirect(url_for("pages",domain=domain,message=f"Page discovery queued · job {job['id']}"))''',
     )
 
-    # Architectural guardrails for this refactor. OpenGSC table/view names may
-    # appear only inside the adapter, not in the Flask application module.
     forbidden = [
         "gsc_keyword_inventory", "gsc_keyword_observation", "ClaritySnapshot",
-        "AeoCheck", "TrackedQuestion", 'FROM Site', 'FROM "Site"',
+        "AeoCheck", "TrackedQuestion", "TrackedKeyword", "RefDomainRow",
+        "BacklinkSnapshot", "DomainMetricCache", "CompetitorKeyword", "SiteAuditPage",
+        "SitemapUrl", "SiteHealth", 'FROM Site', 'FROM "Site"',
     ]
     leftovers = [token for token in forbidden if token in text]
     if leftovers:
@@ -308,13 +301,26 @@ def patch_full_pdf() -> None:
         text,
         "def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research_db: Path):",
         "def _styles():",
-        "def _styles():",
+        "",
     )
-    forbidden = ["gsc_keyword_inventory", "gsc_keyword_observation", "ClaritySnapshot", "AeoCheck", "TrackedQuestion"]
+    forbidden = [
+        "gsc_keyword_inventory", "gsc_keyword_observation", "ClaritySnapshot",
+        "AeoCheck", "TrackedQuestion",
+    ]
     leftovers = [token for token in forbidden if token in text]
     if leftovers:
         raise RuntimeError(f"OpenGSC schema references remain in full_pdf.py: {leftovers}")
     FULL_PDF.write_text(text)
+
+
+def patch_workflows() -> None:
+    text = WORKFLOWS.read_text()
+    text = replace_once(
+        text,
+        "from reports.full_pdf import collect_report_data",
+        "from services.report_data import collect_report_data",
+    )
+    WORKFLOWS.write_text(text)
 
 
 def main() -> int:
@@ -326,6 +332,7 @@ def main() -> int:
 
     patch_app()
     patch_full_pdf()
+    patch_workflows()
 
     run("python3", "-m", "compileall", "-q", "pulse-app")
     run("docker", "compose", "build", "pulse-app")
@@ -336,12 +343,18 @@ def main() -> int:
         "tests/test_request_paths_no_discovery_io.py",
         "tests/test_page_discovery.py",
         "tests/test_opengsc_adapter.py",
+        "tests/test_opengsc_schema_isolation.py",
         "tests/test_worker_workflows_idempotency.py",
         "tests/test_migrations_and_sqlite.py",
     )
     run("docker", "compose", "run", "--rm", "--no-deps", "pulse-app", "python", "-m", "pytest", "-q")
 
-    run("git", "add", "pulse-app/app.py", "pulse-app/reports/full_pdf.py")
+    run(
+        "git", "add",
+        "pulse-app/app.py",
+        "pulse-app/reports/full_pdf.py",
+        "pulse-app/jobs/workflows.py",
+    )
     run("git", "commit", "-m", "Complete application service and discovery boundaries")
     run("git", "push", "origin", "architecture-hardening")
     print("Gate 2 application refactor applied, tested, committed, and pushed.")
