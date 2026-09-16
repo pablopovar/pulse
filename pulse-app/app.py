@@ -63,6 +63,7 @@ from services.source_inventory import (
     detected_source_state as service_detected_source_state,
     domain_sources_for_site as service_domain_sources_for_site,
     selected_source_keys as service_selected_source_keys,
+    save_domain_sources as persist_domain_sources,
     site_id_value as service_site_id_value,
 )
 
@@ -671,22 +672,36 @@ def domain_new():
 
     return render_template("domain_new.html",sites=get_sites(),site=None,message=message)
 
-@app.route("/d/<domain>/sources",methods=["GET","POST"])
+@app.route("/d/<domain>/sources", methods=["GET", "POST"])
 def domain_sources(domain):
-    site=get_site(domain); readiness=ensure_domain_ready(domain); message=request.args.get("message","").strip()
-    if request.method=="POST":
-        selected=set(request.form.getlist("selected")); custom_name=request.form.get("custom_name","").strip(); custom_detail=request.form.get("custom_detail","").strip(); now=datetime.now(timezone.utc).isoformat(timespec="seconds"); detected=detected_source_state(site)
-        with research_db() as con:
-            for key,name,_ in SOURCE_CATALOG:
-                connected=bool(detected.get(key,{}).get("connected"))
-                con.execute("INSERT INTO domain_source(domain,source_key,source_name,selected,connection_status,detail,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(domain,source_key) DO UPDATE SET source_name=excluded.source_name,selected=excluded.selected,connection_status=excluded.connection_status,detail=CASE WHEN excluded.detail<>'' THEN excluded.detail ELSE domain_source.detail END,updated_at=excluded.updated_at",(domain,key,name,int(key in selected or connected),"connected" if connected else "not_connected",detected.get(key,{}).get("detail",""),now))
-            if custom_name:
-                custom_key="custom_"+re.sub(r"[^a-z0-9]+","_",custom_name.lower()).strip("_")
-                if custom_key=="custom_": custom_key="custom_source"
-                con.execute("INSERT INTO domain_source(domain,source_key,source_name,selected,connection_status,detail,updated_at) VALUES (?,?,?,1,'not_connected',?,?) ON CONFLICT(domain,source_key) DO UPDATE SET source_name=excluded.source_name,selected=1,detail=excluded.detail,updated_at=excluded.updated_at",(domain,custom_key,custom_name,custom_detail,now))
-            con.commit()
-        return redirect(url_for("domain_sources",domain=domain,message="Sources saved. Domain is ready to run reports."))
-    return render_template("sources.html",sites=get_sites(),site=site,sources=domain_sources_for_site(site),readiness=readiness,message=message,company_name=infer_company_name(domain))
+    site = get_site(domain)
+    readiness = ensure_domain_ready(domain)
+    message = request.args.get("message", "").strip()
+    if request.method == "POST":
+        persist_domain_sources(
+            site,
+            research_db=RESEARCH_DB,
+            opengsc_db=SEO_DB,
+            selected=set(request.form.getlist("selected")),
+            custom_name=request.form.get("custom_name", ""),
+            custom_detail=request.form.get("custom_detail", ""),
+        )
+        return redirect(
+            url_for(
+                "domain_sources",
+                domain=domain,
+                message="Sources saved. Domain is ready to run reports.",
+            )
+        )
+    return render_template(
+        "sources.html",
+        sites=get_sites(),
+        site=site,
+        sources=domain_sources_for_site(site),
+        readiness=readiness,
+        message=message,
+        company_name=infer_company_name(domain),
+    )
 
 
 
