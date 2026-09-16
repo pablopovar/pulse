@@ -10,13 +10,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import urllib.robotparser
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable, Iterable
 from services.safe_fetcher import SafeFetchError, safe_fetcher
+from services.page_discovery import discover_domain_sitemap, discover_sitemap_urls
 from jobs.store import enqueue_job
 
 
@@ -257,36 +257,13 @@ def decode_body(body: bytes, content_type: str):
 
 
 def parse_sitemap(url: str, domain: str, seen=None, depth=0):
-    if seen is None:
-        seen = set()
-    if depth > 4 or url in seen:
-        return []
-    seen.add(url)
-
-    result = fetch(url)
-    if not result["body"] or result["status"] not in (200, 201):
-        return []
-
-    try:
-        root = ET.fromstring(result["body"])
-    except Exception:
-        return []
-
-    tag = root.tag.rsplit("}", 1)[-1].lower()
-    locs = []
-    for el in root.iter():
-        if el.tag.rsplit("}", 1)[-1].lower() == "loc" and el.text:
-            locs.append(el.text.strip())
-
-    if tag == "sitemapindex":
-        urls = []
-        for loc in locs:
-            if same_site(loc, domain):
-                urls.extend(parse_sitemap(loc, domain, seen, depth + 1))
-        return urls
-
-    return [normalize_url(loc) for loc in locs if same_site(loc, domain)]
-
+    # Compatibility wrapper. Sitemap traversal lives in services.page_discovery.
+    urls, _errors = discover_sitemap_urls(
+        url,
+        domain,
+        max_depth=max(0, 5 - int(depth or 0)),
+    )
+    return sorted(urls)
 
 UTILITY_SEGMENTS = {
     "privacy","privacy-policy","terms","terms-of-service","login","signin","sign-in",
@@ -379,27 +356,18 @@ def ten_page_candidates(base_url: str, domain: str, limit_candidates=60):
     return rows
 
 def discover_seed_urls(base_url: str, domain: str):
-    candidates = [
-        urllib.parse.urljoin(base_url.rstrip("/") + "/", "sitemap.xml"),
-        urllib.parse.urljoin(base_url.rstrip("/") + "/", "sitemap_index.xml"),
-    ]
-    out = []
-    for sm in candidates:
-        urls = parse_sitemap(sm, domain)
-        if urls:
-            out.extend(urls)
-            break
-    if not out:
+    try:
+        urls, _source, _warnings = discover_domain_sitemap(domain)
+        out = [normalize_url(url) for url in sorted(urls)]
+    except Exception:
         out = [normalize_url(base_url.rstrip("/") + "/")]
     seen = set()
     unique = []
-    for u in out:
-        u = normalize_url(u)
-        if u not in seen:
-            seen.add(u)
-            unique.append(u)
+    for url in out:
+        if url not in seen:
+            seen.add(url)
+            unique.append(url)
     return unique
-
 
 def build_robot_parser(base_url: str):
     # Fetch robots.txt with the same HTTP client/user-agent used for page crawling.
