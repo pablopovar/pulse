@@ -17,6 +17,12 @@ from pathlib import Path
 from typing import Callable, Iterable
 from services.safe_fetcher import SafeFetchError, safe_fetcher
 from services.page_discovery import discover_domain_sitemap, discover_sitemap_urls
+from services.url_policy import (
+    crawl_url_identity as normalize_url,
+    path_with_query as path_for_url,
+    safe_url_join,
+    same_hostname,
+)
 from jobs.store import enqueue_job
 
 
@@ -33,34 +39,8 @@ def utcnow():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def normalize_url(url: str) -> str:
-    p = urllib.parse.urlsplit(url)
-    scheme = (p.scheme or "https").lower()
-    host = (p.hostname or "").lower()
-    port = p.port
-    netloc = host
-    if port and not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
-        netloc = f"{host}:{port}"
-    path = p.path or "/"
-    path = re.sub(r"/{2,}", "/", path)
-    return urllib.parse.urlunsplit((scheme, netloc, path, p.query, ""))
-
-
 def same_site(url: str, domain: str) -> bool:
-    try:
-        host = (urllib.parse.urlsplit(url).hostname or "").lower()
-    except Exception:
-        return False
-    domain = domain.lower().lstrip(".")
-    return host == domain
-
-
-def path_for_url(url: str) -> str:
-    p = urllib.parse.urlsplit(url)
-    path = p.path or "/"
-    if p.query:
-        path += "?" + p.query
-    return path
+    return same_hostname(url, domain)
 
 
 class PageParser(HTMLParser):
@@ -325,7 +305,7 @@ def ten_page_candidates(base_url: str, domain: str, limit_candidates=60):
             parser.feed(decode_body(result["body"], result["content_type"]))
             for href, _rel in parser.result().get("links", []):
                 try:
-                    target = normalize_url(urllib.parse.urljoin(base_url, href))
+                    target = normalize_url(safe_url_join(base_url, href))
                 except Exception:
                     continue
                 if same_site(target, domain):
@@ -444,7 +424,7 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
     external_count = 0
     for href, rel in parsed.get("links", []):
         try:
-            target = normalize_url(urllib.parse.urljoin(final_url, href))
+            target = normalize_url(safe_url_join(final_url, href))
         except Exception:
             continue
         scheme = urllib.parse.urlsplit(target).scheme
