@@ -20,6 +20,10 @@ def iso(value: datetime | None = None) -> str:
     return (value or utcnow()).isoformat(timespec="seconds")
 
 
+def _lease_duration(seconds: int) -> int:
+    return max(1, int(seconds))
+
+
 def _json_load_object(raw: str | None) -> dict[str, Any]:
     try:
         value = json.loads(raw or "{}")
@@ -126,7 +130,7 @@ def claim_next_job(
 ) -> dict[str, Any] | None:
     current = at or utcnow()
     now = iso(current)
-    lease_expires = iso(current + timedelta(seconds=max(10, int(lease_seconds))))
+    lease_expires = iso(current + timedelta(seconds=_lease_duration(lease_seconds)))
 
     with connect_sqlite(db_path) as con:
         con.execute("BEGIN IMMEDIATE")
@@ -177,18 +181,46 @@ def heartbeat_job(
 ) -> bool:
     current = utcnow()
     now = iso(current)
-    lease_expires = iso(current + timedelta(seconds=max(10, int(lease_seconds))))
+    lease_expires = iso(current + timedelta(seconds=_lease_duration(lease_seconds)))
     with connect_sqlite(db_path) as con:
         changed = con.execute(
             """
             UPDATE durable_job
             SET heartbeat_at=?,lease_expires_at=?,updated_at=?
-            WHERE id=? AND status='running' AND worker_id=?
+            WHERE id=?
+              AND status='running'
+              AND worker_id=?
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at>=?
             """,
-            (now, lease_expires, now, job_id, worker_id),
+            (now, lease_expires, now, job_id, worker_id, now),
         ).rowcount
         con.commit()
     return changed == 1
+
+
+def worker_owns_job(
+    db_path: str | Path,
+    job_id: str,
+    *,
+    worker_id: str,
+    at: datetime | None = None,
+) -> bool:
+    now = iso(at or utcnow())
+    with connect_sqlite(db_path, readonly=True) as con:
+        row = con.execute(
+            """
+            SELECT 1
+            FROM durable_job
+            WHERE id=?
+              AND status='running'
+              AND worker_id=?
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at>=?
+            """,
+            (job_id, worker_id, now),
+        ).fetchone()
+    return row is not None
 
 
 def finish_job(
@@ -216,7 +248,11 @@ def finish_job(
                 lease_expires_at=NULL,
                 worker_id='',
                 updated_at=?
-            WHERE id=? AND status='running' AND worker_id=?
+            WHERE id=?
+              AND status='running'
+              AND worker_id=?
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at>=?
             """,
             (
                 status,
@@ -226,6 +262,7 @@ def finish_job(
                 now,
                 job_id,
                 worker_id,
+                now,
             ),
         ).rowcount
         con.commit()
@@ -346,13 +383,29 @@ def set_job_stage(db_path, job_id, *, worker_id, stage, publication_status=None)
     with connect_sqlite(db_path) as con:
         if publication_status is None:
             changed = con.execute(
-                "UPDATE durable_job SET stage=?,updated_at=? WHERE id=? AND status='running' AND worker_id=?",
-                (stage, now, job_id, worker_id),
+                """
+                UPDATE durable_job
+                SET stage=?,updated_at=?
+                WHERE id=?
+                  AND status='running'
+                  AND worker_id=?
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at>=?
+                """,
+                (stage, now, job_id, worker_id, now),
             ).rowcount
         else:
             changed = con.execute(
-                "UPDATE durable_job SET stage=?,publication_status=?,updated_at=? WHERE id=? AND status='running' AND worker_id=?",
-                (stage, publication_status, now, job_id, worker_id),
+                """
+                UPDATE durable_job
+                SET stage=?,publication_status=?,updated_at=?
+                WHERE id=?
+                  AND status='running'
+                  AND worker_id=?
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at>=?
+                """,
+                (stage, publication_status, now, job_id, worker_id, now),
             ).rowcount
         con.commit()
     return changed == 1
@@ -362,8 +415,16 @@ def set_job_publication_status(db_path, job_id, *, worker_id, publication_status
     now = iso()
     with connect_sqlite(db_path) as con:
         changed = con.execute(
-            "UPDATE durable_job SET publication_status=?,updated_at=? WHERE id=? AND status='running' AND worker_id=?",
-            (publication_status, now, job_id, worker_id),
+            """
+            UPDATE durable_job
+            SET publication_status=?,updated_at=?
+            WHERE id=?
+              AND status='running'
+              AND worker_id=?
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at>=?
+            """,
+            (publication_status, now, job_id, worker_id, now),
         ).rowcount
         con.commit()
     return changed == 1
