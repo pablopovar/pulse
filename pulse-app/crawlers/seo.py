@@ -622,8 +622,6 @@ def crawl_worker(run_id, domain, base_url, page_cap, delay_ms, obey_robots, db_f
 def register_crawler(app, research_db: Callable, get_site: Callable):
     from flask import abort, jsonify, redirect, render_template, request, url_for
 
-    with research_db() as con:
-
     @app.route("/d/<domain>/crawl")
     def seo_crawl(domain):
         site = get_site(domain)
