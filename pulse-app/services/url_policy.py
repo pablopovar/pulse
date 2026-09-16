@@ -23,7 +23,18 @@ def normalize_hostname(value: str | None) -> str:
         normalized = host.encode("idna").decode("ascii").lower()
     except UnicodeError as exc:
         raise URLPolicyError(f"Invalid hostname: {host}") from exc
-    if not normalized or any(not label for label in normalized.split(".")):
+    labels = normalized.split(".")
+    if (
+        not normalized
+        or any(
+            not label
+            or len(label) > 63
+            or label.startswith("-")
+            or label.endswith("-")
+            or re.fullmatch(r"[a-z0-9-]+", label) is None
+            for label in labels
+        )
+    ):
         raise URLPolicyError(f"Invalid hostname: {host}")
     return normalized
 
