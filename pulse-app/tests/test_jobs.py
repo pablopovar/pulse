@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 from db.migrate import migrate_up
@@ -9,7 +11,9 @@ from jobs.store import (
     enqueue_job,
     finish_job,
     get_job,
+    heartbeat_job,
     recover_abandoned_jobs,
+    worker_owns_job,
 )
 from jobs.worker import run_once
 
@@ -127,3 +131,74 @@ def test_queued_job_can_be_cancelled(tmp_path):
     job = get_job(db, created["id"])
     assert job["status"] == "cancelled"
     assert job["cancelled_at"]
+
+
+def test_heartbeat_renews_current_worker_lease(tmp_path):
+    db = migrated_db(tmp_path)
+    created = enqueue_job(db, "worker.healthcheck")
+    claimed = claim_next_job(db, worker_id="worker-a", lease_seconds=2)
+    first_expiry = claimed["lease_expires_at"]
+    time.sleep(1.05)
+    assert heartbeat_job(db, created["id"], worker_id="worker-a", lease_seconds=2)
+    renewed = get_job(db, created["id"])
+    assert renewed["lease_expires_at"] > first_expiry
+    assert worker_owns_job(db, created["id"], worker_id="worker-a")
+
+
+def test_long_running_job_is_not_reclaimed_while_heartbeating(tmp_path):
+    db = migrated_db(tmp_path)
+    created = enqueue_job(db, "test.slow")
+
+    def slow(_job):
+        time.sleep(1.5)
+        return {"status": "completed", "result_ref": {"ok": True}}
+
+    def resolver(job_type):
+        return slow if job_type == "test.slow" else None
+
+    runner = threading.Thread(
+        target=run_once,
+        kwargs={
+            "db_path": db,
+            "claimed_by": "worker-a",
+            "lease_seconds": 1,
+            "heartbeat_interval_seconds": 0.2,
+            "resolver": resolver,
+        },
+    )
+    runner.start()
+    time.sleep(1.15)
+    assert recover_abandoned_jobs(db) == {"requeued": 0, "failed": 0}
+    assert claim_next_job(db, worker_id="worker-b", lease_seconds=1) is None
+    runner.join(timeout=3)
+    assert not runner.is_alive()
+    job = get_job(db, created["id"])
+    assert job["status"] == "completed"
+    assert job["result_ref"] == {"ok": True}
+
+
+def test_crashed_worker_job_is_recoverable_after_lease_expiry(tmp_path):
+    db = migrated_db(tmp_path)
+    created = enqueue_job(db, "worker.healthcheck", max_attempts=3)
+    past = datetime.now(timezone.utc) - timedelta(seconds=5)
+    claim_next_job(db, worker_id="crashed-worker", lease_seconds=1, at=past)
+    assert recover_abandoned_jobs(db) == {"requeued": 1, "failed": 0}
+    recovered = claim_next_job(db, worker_id="worker-b", lease_seconds=30)
+    assert recovered["id"] == created["id"]
+    assert recovered["worker_id"] == "worker-b"
+
+
+def test_stale_worker_cannot_heartbeat_or_finish_after_recovery(tmp_path):
+    db = migrated_db(tmp_path)
+    created = enqueue_job(db, "worker.healthcheck", max_attempts=3)
+    past = datetime.now(timezone.utc) - timedelta(seconds=5)
+    claim_next_job(db, worker_id="worker-a", lease_seconds=1, at=past)
+    assert recover_abandoned_jobs(db) == {"requeued": 1, "failed": 0}
+    replacement = claim_next_job(db, worker_id="worker-b", lease_seconds=30)
+    assert replacement["id"] == created["id"]
+
+    assert not heartbeat_job(db, created["id"], worker_id="worker-a", lease_seconds=30)
+    assert not finish_job(db, created["id"], worker_id="worker-a", status="completed")
+    current = get_job(db, created["id"])
+    assert current["status"] == "running"
+    assert current["worker_id"] == "worker-b"
