@@ -4,11 +4,11 @@ import gzip
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from db.sqlite import connect_sqlite
 from integrations.opengsc_adapter import OpenGSCAdapter
 from services.safe_fetcher import SafeFetcher, safe_fetcher
+from services.url_policy import site_page_identity as normalize_site_page_url, url_path as site_page_path
 
 DEFAULT_MAX_DEPTH = 5
 DEFAULT_MAX_URLS = 20_000
@@ -20,37 +20,6 @@ SITEMAP_CONTENT_TYPES = {
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def normalize_site_page_url(raw_url: str | None, domain: str) -> str | None:
-    if not raw_url:
-        return None
-    raw_url = str(raw_url).strip()
-    wanted = domain.lower().split(":")[0].strip().strip("/")
-    if raw_url.startswith("/"):
-        raw_url = f"https://{wanted}{raw_url}"
-    try:
-        parsed = urlsplit(raw_url)
-    except Exception:
-        return None
-    host = (parsed.hostname or "").lower().rstrip(".")
-    if host != wanted:
-        return None
-    if parsed.scheme.lower() not in {"http", "https"}:
-        return None
-    path = parsed.path or "/"
-    if path != "/":
-        path = path.rstrip("/") or "/"
-    # Existing site-page identity intentionally canonicalizes to HTTPS and drops
-    # query/fragment. Task 9 will document this as the site-page policy.
-    return f"https://{wanted}{path}"
-
-
-def site_page_path(url: str) -> str:
-    try:
-        return urlsplit(url).path or "/"
-    except Exception:
-        return "/"
 
 
 def _parse_sitemap(raw: bytes, source_url: str):
