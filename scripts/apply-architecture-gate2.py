@@ -8,10 +8,12 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "pulse-app" / "app.py"
 FULL_PDF = ROOT / "pulse-app" / "reports" / "full_pdf.py"
 WORKFLOWS = ROOT / "pulse-app" / "jobs" / "workflows.py"
+CRAWLER = ROOT / "pulse-app" / "crawlers" / "seo.py"
 PATCHED_PATHS = [
     "pulse-app/app.py",
     "pulse-app/reports/full_pdf.py",
     "pulse-app/jobs/workflows.py",
+    "pulse-app/crawlers/seo.py",
 ]
 
 
@@ -332,6 +334,51 @@ def patch_workflows() -> None:
     WORKFLOWS.write_text(text)
 
 
+def patch_crawler() -> None:
+    text = CRAWLER.read_text()
+    anchor = "from services.safe_fetcher import SafeFetchError, safe_fetcher\n"
+    import_line = "from services.page_discovery import discover_domain_sitemap, discover_sitemap_urls\n"
+    if import_line not in text:
+        text = replace_once(text, anchor, anchor + import_line)
+
+    text = replace_between(
+        text,
+        "def parse_sitemap(url: str, domain: str, seen=None, depth=0):",
+        "UTILITY_SEGMENTS = {",
+        '''def parse_sitemap(url: str, domain: str, seen=None, depth=0):
+    # Compatibility wrapper. Sitemap traversal lives in services.page_discovery.
+    urls, _errors = discover_sitemap_urls(
+        url,
+        domain,
+        max_depth=max(0, 5 - int(depth or 0)),
+    )
+    return sorted(urls)''',
+    )
+
+    text = replace_between(
+        text,
+        "def discover_seed_urls(base_url: str, domain: str):",
+        "def build_robot_parser(base_url: str):",
+        '''def discover_seed_urls(base_url: str, domain: str):
+    try:
+        urls, _source, _warnings = discover_domain_sitemap(domain)
+        out = [normalize_url(url) for url in sorted(urls)]
+    except Exception:
+        out = [normalize_url(base_url.rstrip("/") + "/")]
+    seen = set()
+    unique = []
+    for url in out:
+        if url not in seen:
+            seen.add(url)
+            unique.append(url)
+    return unique''',
+    )
+
+    # XML parsing for sitemap traversal now belongs only to page_discovery.py.
+    text = text.replace("import xml.etree.ElementTree as ET\n", "")
+    CRAWLER.write_text(text)
+
+
 def test_in_isolated_runtime() -> None:
     run("python3", "-m", "compileall", "-q", "pulse-app")
     run("docker", "compose", "build", "pulse-app")
@@ -339,10 +386,11 @@ def test_in_isolated_runtime() -> None:
         "docker", "compose", "run", "--rm", "--no-deps",
         "-e", "RESEARCH_DB=/tmp/pulse-gate2-targeted.db",
         "pulse-app", "sh", "-lc",
-        "python -m db.migrate up && python -m pytest -q "
+        "rm -f /tmp/pulse-gate2-targeted.db* && python -m db.migrate up && python -m pytest -q "
         "tests/test_no_flask_daemon_workflows.py "
         "tests/test_request_paths_no_discovery_io.py "
         "tests/test_page_discovery.py "
+        "tests/test_single_sitemap_implementation.py "
         "tests/test_opengsc_adapter.py "
         "tests/test_opengsc_schema_isolation.py "
         "tests/test_worker_workflows_idempotency.py "
@@ -352,7 +400,7 @@ def test_in_isolated_runtime() -> None:
         "docker", "compose", "run", "--rm", "--no-deps",
         "-e", "RESEARCH_DB=/tmp/pulse-gate2-full.db",
         "pulse-app", "sh", "-lc",
-        "python -m db.migrate up && python -m pytest -q",
+        "rm -f /tmp/pulse-gate2-full.db* && python -m db.migrate up && python -m pytest -q",
     )
 
 
@@ -376,6 +424,7 @@ def main() -> int:
         patch_app()
         patch_full_pdf()
         patch_workflows()
+        patch_crawler()
         test_in_isolated_runtime()
     except BaseException:
         print("Gate 2 verification failed; restoring locally transformed files.", flush=True)
@@ -384,10 +433,10 @@ def main() -> int:
 
     run("git", "add", *PATCHED_PATHS)
     run("git", "commit", "-m", "Complete application service and discovery boundaries")
-    run("git", "push", "origin", "architecture-hardening")
 
     deploy_verified_gate()
-    print("Gate 2 applied, tested, committed, pushed, migrated, and restarted.")
+    run("git", "push", "origin", "architecture-hardening")
+    print("Gate 2 applied, tested, committed, migrated, restarted, and pushed.")
     return 0
 
 
