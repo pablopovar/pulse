@@ -164,16 +164,48 @@ def set_discovery_state(
     status: str,
     *,
     job_id: str = "",
+    worker_id: str | None = None,
     sitemap_source: str | None = None,
     sitemap_count: int | None = None,
     ranking_count: int | None = None,
     error: str = "",
     successful: bool = False,
 ) -> dict:
+    """Update the current discovery projection.
+
+    When ``worker_id`` is supplied, ownership of ``job_id`` is verified inside
+    the same SQLite write transaction as the projection update. This prevents a
+    stale/recovered worker from publishing ``ready`` or ``failed`` state after
+    its lease has been lost. Request-side ``queued`` updates intentionally omit
+    ``worker_id`` because the job has not been claimed yet.
+    """
     if status not in {"not_started", "queued", "running", "ready", "failed"}:
         raise ValueError(f"invalid discovery status: {status}")
+    if worker_id and not job_id:
+        raise ValueError("job_id is required when worker_id is provided")
+
     ts = now()
     with connect_sqlite(db_path) as con:
+        con.execute("BEGIN IMMEDIATE")
+        if worker_id:
+            owned = con.execute(
+                """
+                SELECT 1
+                FROM durable_job
+                WHERE id=?
+                  AND status='running'
+                  AND worker_id=?
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at>=?
+                """,
+                (job_id, worker_id, ts),
+            ).fetchone()
+            if owned is None:
+                con.rollback()
+                raise RuntimeError(
+                    "Durable job ownership lost before discovery-state publication."
+                )
+
         existing = con.execute(
             "SELECT * FROM domain_discovery_state WHERE domain=? COLLATE NOCASE", (domain,)
         ).fetchone()
