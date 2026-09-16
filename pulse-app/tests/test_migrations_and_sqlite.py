@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import re
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -147,29 +148,52 @@ def test_readonly_connections_are_query_only(tmp_path):
         con.close()
 
 
-def test_writer_contention_waits_before_predictable_lock_failure(tmp_path):
+def test_writer_contention_waits_for_lock_release(tmp_path):
     db = tmp_path / "contention.db"
     migrate_up(db)
 
-    first = connect_sqlite(db, busy_timeout_ms=200)
-    second = connect_sqlite(db, busy_timeout_ms=200)
-    try:
-        first.execute("BEGIN IMMEDIATE")
-        first.execute(
-            "INSERT INTO schema_migration(version,name,applied_at) "
-            "VALUES (9998,'lock-holder','now')"
-        )
+    lock_held = threading.Event()
+    release_lock = threading.Event()
+    holder_error = []
 
-        started = time.monotonic()
-        with pytest.raises(sqlite3.OperationalError, match="locked"):
-            second.execute("BEGIN IMMEDIATE")
-        elapsed = time.monotonic() - started
-        assert elapsed >= 0.15
-    finally:
-        first.rollback()
+    def hold_write_lock():
+        con = connect_sqlite(db, busy_timeout_ms=1_000)
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute(
+                "INSERT INTO schema_migration(version,name,applied_at) "
+                "VALUES (9998,'lock-holder','now')"
+            )
+            lock_held.set()
+            if not release_lock.wait(timeout=2):
+                raise RuntimeError("test did not release the writer lock")
+            con.rollback()
+        except BaseException as exc:
+            holder_error.append(exc)
+            lock_held.set()
+        finally:
+            con.close()
+
+    holder = threading.Thread(target=hold_write_lock)
+    holder.start()
+    assert lock_held.wait(timeout=2)
+    assert holder_error == []
+
+    second = connect_sqlite(db, busy_timeout_ms=1_000)
+    try:
+        assert second.execute("PRAGMA busy_timeout").fetchone()[0] == 1_000
+        timer = threading.Timer(0.05, release_lock.set)
+        timer.start()
+        second.execute("BEGIN IMMEDIATE")
         second.rollback()
-        first.close()
+        timer.join(timeout=1)
+    finally:
+        release_lock.set()
         second.close()
+        holder.join(timeout=2)
+
+    assert not holder.is_alive()
+    assert holder_error == []
 
 
 def test_every_migration_table_has_exactly_one_owner(tmp_path):
