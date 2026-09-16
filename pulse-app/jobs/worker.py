@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import inspect
+import logging
 import os
 import socket
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -10,13 +13,48 @@ from typing import Callable
 
 from db.migrate import validate_schema_current
 from jobs.handlers import handler_for
-from jobs.store import claim_next_job, fail_from_exception, finish_job, recover_abandoned_jobs
+from jobs.store import (
+    claim_next_job,
+    fail_from_exception,
+    finish_job,
+    heartbeat_job,
+    recover_abandoned_jobs,
+)
 
 DEFAULT_DB = Path(os.environ.get("RESEARCH_DB", "/data/audit/research.db"))
+LOG = logging.getLogger(__name__)
 
 
 def worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+
+
+def _heartbeat_loop(
+    db_path: str | Path,
+    job_id: str,
+    *,
+    claimed_by: str,
+    lease_seconds: int,
+    interval_seconds: float,
+    stop_event: threading.Event,
+    ownership_lost: threading.Event,
+) -> None:
+    while not stop_event.wait(interval_seconds):
+        try:
+            renewed = heartbeat_job(
+                db_path,
+                job_id,
+                worker_id=claimed_by,
+                lease_seconds=lease_seconds,
+            )
+        except BaseException:
+            LOG.exception("heartbeat failed for job %s owned by %s", job_id, claimed_by)
+            ownership_lost.set()
+            return
+        if not renewed:
+            LOG.error("job ownership lost during heartbeat: job=%s worker=%s", job_id, claimed_by)
+            ownership_lost.set()
+            return
 
 
 def execute_claimed_job(
@@ -24,11 +62,13 @@ def execute_claimed_job(
     job: dict,
     *,
     claimed_by: str,
+    lease_seconds: int = 120,
+    heartbeat_interval_seconds: float | None = None,
     resolver: Callable[[str], Callable | None] = handler_for,
 ) -> None:
     handler = resolver(str(job.get("job_type") or ""))
     if handler is None:
-        finish_job(
+        finished = finish_job(
             db_path,
             job["id"],
             worker_id=claimed_by,
@@ -39,31 +79,104 @@ def execute_claimed_job(
                 "stage": "dispatch",
             },
         )
+        if not finished:
+            LOG.error(
+                "unable to record unknown job type because ownership was lost: job=%s worker=%s",
+                job["id"],
+                claimed_by,
+            )
         return
 
+    interval = (
+        float(heartbeat_interval_seconds)
+        if heartbeat_interval_seconds is not None
+        else max(0.25, float(lease_seconds) / 3.0)
+    )
+    stop_event = threading.Event()
+    ownership_lost = threading.Event()
+    heartbeat = threading.Thread(
+        target=_heartbeat_loop,
+        args=(db_path, job["id"]),
+        kwargs={
+            "claimed_by": claimed_by,
+            "lease_seconds": lease_seconds,
+            "interval_seconds": interval,
+            "stop_event": stop_event,
+            "ownership_lost": ownership_lost,
+        },
+        daemon=True,
+        name=f"pulse-heartbeat-{job['id']}",
+    )
+    heartbeat.start()
+
+    outcome: dict = {}
+    handler_error: BaseException | None = None
     try:
-        import inspect
         if len(inspect.signature(handler).parameters) >= 2:
             outcome = handler(job, claimed_by) or {}
         else:
             outcome = handler(job) or {}
-        status = str(outcome.get("status") or "completed")
-        if status not in {"completed", "partial", "failed"}:
-            raise ValueError(f"invalid terminal status returned by handler: {status!r}")
-        finish_job(
+    except BaseException as exc:
+        handler_error = exc
+    finally:
+        stop_event.set()
+        heartbeat.join(timeout=max(1.0, interval + 1.0))
+
+    if ownership_lost.is_set():
+        LOG.error(
+            "discarding terminal result from stale worker: job=%s worker=%s",
+            job["id"],
+            claimed_by,
+        )
+        return
+
+    if handler_error is not None:
+        failed = fail_from_exception(
             db_path,
             job["id"],
             worker_id=claimed_by,
-            status=status,
-            result_ref=outcome.get("result_ref") or {},
-            error=outcome.get("error") or {},
+            exc=handler_error,
         )
+        if not failed:
+            LOG.error(
+                "handler failed after ownership was lost; terminal mutation suppressed: job=%s worker=%s",
+                job["id"],
+                claimed_by,
+            )
+        return
+
+    try:
+        status = str(outcome.get("status") or "completed")
+        if status not in {"completed", "partial", "failed"}:
+            raise ValueError(f"invalid terminal status returned by handler: {status!r}")
     except BaseException as exc:
-        fail_from_exception(
+        failed = fail_from_exception(
             db_path,
             job["id"],
             worker_id=claimed_by,
             exc=exc,
+        )
+        if not failed:
+            LOG.error(
+                "invalid handler result after ownership was lost; terminal mutation suppressed: job=%s worker=%s",
+                job["id"],
+                claimed_by,
+            )
+        return
+
+    finished = finish_job(
+        db_path,
+        job["id"],
+        worker_id=claimed_by,
+        status=status,
+        result_ref=outcome.get("result_ref") or {},
+        error=outcome.get("error") or {},
+    )
+    if not finished:
+        LOG.error(
+            "finish_job rejected stale worker ownership: job=%s worker=%s",
+            job["id"],
+            claimed_by,
         )
 
 
@@ -72,6 +185,7 @@ def run_once(
     *,
     claimed_by: str | None = None,
     lease_seconds: int = 120,
+    heartbeat_interval_seconds: float | None = None,
     resolver: Callable[[str], Callable | None] = handler_for,
 ) -> bool:
     wid = claimed_by or worker_id()
@@ -79,7 +193,14 @@ def run_once(
     job = claim_next_job(db_path, worker_id=wid, lease_seconds=lease_seconds)
     if job is None:
         return False
-    execute_claimed_job(db_path, job, claimed_by=wid, resolver=resolver)
+    execute_claimed_job(
+        db_path,
+        job,
+        claimed_by=wid,
+        lease_seconds=lease_seconds,
+        heartbeat_interval_seconds=heartbeat_interval_seconds,
+        resolver=resolver,
+    )
     return True
 
 
