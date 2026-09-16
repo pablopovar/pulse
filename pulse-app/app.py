@@ -44,6 +44,7 @@ from services.page_discovery import (
     sync_site_pages as canonical_sync_site_pages,
 )
 from services.source_inventory import (
+    SOURCE_CATALOG,
     detected_source_state as service_detected_source_state,
     domain_sources_for_site as service_domain_sources_for_site,
     selected_source_keys as service_selected_source_keys,
@@ -80,23 +81,6 @@ def research_db():
 
 
 
-SOURCE_CATALOG = [
-    ("gsc", "Google Search Console", "Observed Google search queries, landing pages, impressions, clicks, CTR and positions."),
-    ("ga4", "Google Analytics 4", "Audience, session, engagement, event, conversion and revenue context."),
-    ("dataforseo", "DataForSEO", "Keyword demand, SERP, competitive and supplemental search visibility data."),
-    ("chatgpt", "ChatGPT API", "AI answer, mention and citation observations from configured OpenAI models."),
-    ("claude", "Claude API", "AI answer, mention and citation observations from configured Anthropic models."),
-    ("gemini", "Gemini API", "AI answer, mention and citation observations from configured Gemini models."),
-    ("semrush", "Semrush", "Search demand, competitor, backlink and authority datasets."),
-    ("google_apis", "Google APIs", "Additional Google services and evidence sources used by report checks."),
-    ("manual_ai", "Manual AI Responses", "Copy one editable provider-agnostic prompt, then paste or upload the raw ChatGPT, Claude and Gemini responses."),
-]
-
-def ensure_domain_source_schema(con):
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
 def detected_source_state(site):
     return service_detected_source_state(site, SEO_DB)
 
@@ -107,12 +91,6 @@ def domain_sources_for_site(site):
         research_db=RESEARCH_DB,
         opengsc_db=SEO_DB,
     )
-
-def ensure_manual_ai_source_schema(con):
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
 
 def manual_ai_default_prompt(domain, phase, state):
     company=infer_company_name(domain)
@@ -139,7 +117,6 @@ def manual_ai_default_prompt(domain, phase, state):
 
 def load_manual_ai_source(domain):
     with research_db() as con:
-        ensure_manual_ai_source_schema(con)
         parent=con.execute("SELECT * FROM manual_ai_source WHERE domain=? COLLATE NOCASE",(domain,)).fetchone()
         rows=con.execute("SELECT * FROM manual_ai_state_source WHERE domain=? COLLATE NOCASE ORDER BY phase,state",(domain,)).fetchall()
     out=dict(parent) if parent else {"domain":domain,"question_set_version":1,"analysis_status":"not_run","updated_at":""}
@@ -169,136 +146,6 @@ def _manual_ai_upload_text(field_name):
     return raw.decode("utf-8",errors="replace")
 
 
-def _parse_manual_provider_payload(raw):
-    raw=str(raw or "").strip()
-    if not raw: return None,""
-    candidates=[raw]
-    if raw.startswith("```"):
-        match=re.match(r"^```(?:json)?\s*([\s\S]*?)\s*```$",raw,flags=re.I)
-        if match: candidates.append(match.group(1))
-    error=""
-    for candidate in candidates:
-        try:
-            value=json.loads(candidate)
-            if isinstance(value,dict): return value,""
-            error="Top-level JSON value must be an object."
-        except Exception as exc:
-            error=str(exc)
-    return None,error
-
-
-def manual_ai_source_for_report(domain):
-    # Build report evidence from the active two-phase Manual AI workflow only.
-    source = load_manual_ai_source(domain)
-    phase_rows = []
-    total_answers = 0
-    parsed_runs = 0
-    provider_runs = 0
-
-    def parse_payload(raw):
-        text = str(raw or "").strip()
-        if not text:
-            return None
-
-        fence = re.match(r"^```(?:json)?\s*([\s\S]*?)\s*```$", text, re.I)
-        if fence:
-            text = fence.group(1).strip()
-
-        try:
-            value = json.loads(text)
-            return value if isinstance(value, dict) else None
-        except Exception:
-            pass
-
-        start = text.find("{")
-        if start < 0:
-            return None
-        try:
-            value, _end = json.JSONDecoder().raw_decode(text[start:])
-        except Exception:
-            return None
-        return value if isinstance(value, dict) else None
-
-    for phase in ("phase1", "phase2"):
-        prefix = f"{phase}_state2"
-        providers = []
-
-        for provider in ("chatgpt", "claude", "gemini"):
-            raw = source.get(f"{prefix}_{provider}_response") or ""
-            parsed = parse_payload(raw)
-            results = parsed.get("results") if isinstance(parsed, dict) else None
-            result_count = len(results) if isinstance(results, list) else 0
-
-            if str(raw).strip():
-                provider_runs += 1
-            if parsed is not None:
-                parsed_runs += 1
-                total_answers += result_count
-
-            providers.append({
-                "provider": provider,
-                "response": raw,
-                "parsed": parsed,
-                "result_count": result_count,
-            })
-
-        phase_rows.append({
-            "phase": phase,
-            "states": [{
-                "state": "retrieval_enabled",
-                "providers": providers,
-                "provider_count": sum(
-                    1 for p in providers if str(p["response"]).strip()
-                ),
-            }],
-        })
-
-    source["available"] = provider_runs > 0
-    source["phases"] = phase_rows
-    source["provider_runs"] = provider_runs
-    source["expected_provider_runs"] = 6
-    source["provider_count"] = len({
-        p["provider"]
-        for phase_row in phase_rows
-        for state in phase_row["states"]
-        for p in state["providers"]
-        if str(p["response"]).strip()
-    })
-    source["answer_count"] = total_answers
-    source["expected_answer_count"] = 24
-    source["valid_json_providers"] = parsed_runs
-    source["complete"] = bool(
-        provider_runs == 6
-        and parsed_runs == 6
-        and total_answers == 24
-    )
-    return source
-
-
-def ensure_domain_ready(domain):
-    with research_db() as con:
-        row = con.execute(
-            "SELECT COUNT(*) AS n FROM site_page WHERE domain=?", (domain,)
-        ).fetchone()
-        count = int(row["n"] if row else 0)
-    discovery = get_discovery_state(RESEARCH_DB, domain)
-    ready = count > 0
-    label = "Ready" if ready else discovery.get("status", "not_started").replace("_", " ").title()
-    return {
-        "ready": ready,
-        "label": label,
-        "pages": count,
-        "discovery": discovery,
-    }
-
-
-def selected_source_keys(site):
-    return service_selected_source_keys(
-        site,
-        research_db=RESEARCH_DB,
-        opengsc_db=SEO_DB,
-    )
-
 REPORT_FAMILY_DEFAULT_QUESTIONS = {
     "ai-visibility": [
         "What does [Company] do, and how does its business model generate cash flows?",
@@ -317,11 +164,6 @@ REPORT_FAMILY_DEFAULT_QUESTIONS = {
 
 
 
-def ensure_domain_company_schema(con):
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
 def _company_name_from_title(title):
     if not title:
         return ""
@@ -334,7 +176,6 @@ def _company_name_from_title(title):
 
 def infer_company_name(domain):
     with research_db() as con:
-        ensure_domain_company_schema(con)
         row = con.execute(
             "SELECT company_name FROM domain_company_settings WHERE domain=? COLLATE NOCASE",
             (domain,),
@@ -909,7 +750,6 @@ def domain_sources(domain):
     if request.method=="POST":
         selected=set(request.form.getlist("selected")); custom_name=request.form.get("custom_name","").strip(); custom_detail=request.form.get("custom_detail","").strip(); now=datetime.now(timezone.utc).isoformat(timespec="seconds"); detected=detected_source_state(site)
         with research_db() as con:
-            ensure_domain_source_schema(con)
             for key,name,_ in SOURCE_CATALOG:
                 connected=bool(detected.get(key,{}).get("connected"))
                 con.execute("INSERT INTO domain_source(domain,source_key,source_name,selected,connection_status,detail,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(domain,source_key) DO UPDATE SET source_name=excluded.source_name,selected=excluded.selected,connection_status=excluded.connection_status,detail=CASE WHEN excluded.detail<>'' THEN excluded.detail ELSE domain_source.detail END,updated_at=excluded.updated_at",(domain,key,name,int(key in selected or connected),"connected" if connected else "not_connected",detected.get(key,{}).get("detail",""),now))
@@ -929,7 +769,6 @@ def save_source_company_name(domain):
     company_name = request.form.get("company_name", "").strip() or domain
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with research_db() as con:
-        ensure_domain_company_schema(con)
         con.execute(
             """INSERT INTO domain_company_settings(domain,company_name,updated_at)
                VALUES (?,?,?)
@@ -963,13 +802,11 @@ def manual_ai_source(domain):
         version=int(current.get("question_set_version") or 1)+(1 if old_prompts!=new_prompts else 0)
         now=datetime.now(timezone.utc).isoformat(timespec="seconds")
         with research_db() as con:
-            ensure_manual_ai_source_schema(con)
-            con.execute("INSERT INTO manual_ai_source(domain,question_set_version,analysis_model,analysis_system_prompt,analysis_text,analysis_status,analysis_error,analysis_updated_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(domain) DO UPDATE SET question_set_version=excluded.question_set_version,updated_at=excluded.updated_at",(domain,version,current.get("analysis_model") or "",current.get("analysis_system_prompt") or DEFAULT_ANALYSIS_SYSTEM_PROMPT,current.get("analysis_text") or "",current.get("analysis_status") or "not_run",current.get("analysis_error") or "",current.get("analysis_updated_at") or "",now))
+                con.execute("INSERT INTO manual_ai_source(domain,question_set_version,analysis_model,analysis_system_prompt,analysis_text,analysis_status,analysis_error,analysis_updated_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(domain) DO UPDATE SET question_set_version=excluded.question_set_version,updated_at=excluded.updated_at",(domain,version,current.get("analysis_model") or "",current.get("analysis_system_prompt") or DEFAULT_ANALYSIS_SYSTEM_PROMPT,current.get("analysis_text") or "",current.get("analysis_status") or "not_run",current.get("analysis_error") or "",current.get("analysis_updated_at") or "",now))
             for phase in ("phase1","phase2"):
                 for state in ("state1","state2"):
                     prefix=f"{phase}_{state}"
                     con.execute("INSERT INTO manual_ai_state_source(domain,phase,state,prompt_text,chatgpt_response,claude_response,gemini_response,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(domain,phase,state) DO UPDATE SET prompt_text=excluded.prompt_text,chatgpt_response=excluded.chatgpt_response,claude_response=excluded.claude_response,gemini_response=excluded.gemini_response,updated_at=excluded.updated_at",(domain,phase,state,prompts[prefix],responses[f"{prefix}_chatgpt"],responses[f"{prefix}_claude"],responses[f"{prefix}_gemini"],now))
-            ensure_domain_source_schema(con)
             con.execute("INSERT INTO domain_source(domain,source_key,source_name,selected,connection_status,detail,updated_at) VALUES (?,?,?,1,'not_connected',?,?) ON CONFLICT(domain,source_key) DO UPDATE SET source_name=excluded.source_name,selected=1,detail=excluded.detail,updated_at=excluded.updated_at",(domain,"manual_ai","Manual AI Responses",f"Four-state Manual AI source · question-set v{version}",now))
             con.commit()
         return redirect(url_for("manual_ai_source",domain=domain,message=f"Saved question-set v{version}: 2 phases × 2 states."))
@@ -986,7 +823,6 @@ def manual_ai_analysis_models(domain):
     return {"provider":provider,**result}
 
 
-@app.post("/d/<domain>/sources/manual-ai/analyze")
 @app.post("/d/<domain>/sources/manual-ai/analyze")
 def manual_ai_source_analyze(domain):
     get_site(domain); source=load_manual_ai_source(domain)
@@ -1851,7 +1687,6 @@ def reports(domain):
 
 
 @app.post("/d/<domain>/reports/full")
-@app.post("/d/<domain>/reports/full")
 def generate_full_web_report(domain):
     get_site(domain); ensure_domain_ready(domain)
     job=enqueue_job(RESEARCH_DB,"report_refresh",domain=domain,payload={"domain":domain,"page_cap":5000,"delay_ms":0,"obey_robots":True},max_attempts=3)
@@ -1875,7 +1710,6 @@ def public_report_note_reply(report_id):
         return {"ok": False, "error": "missing note key or reply"}, 400
 
     with research_db() as con:
-        _ensure_report_conversation_schema(con)
 
         report_row = con.execute(
             "SELECT domain FROM report_session WHERE id=? LIMIT 1",
@@ -1923,15 +1757,8 @@ def public_report(report_id):
 
 
 
-def _ensure_report_workflow_schema(con):
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
-
 def _load_report_exclusions(domain):
     with research_db() as con:
-        _ensure_report_workflow_schema(con)
         rows = con.execute(
             "SELECT scope,item_key,page_id FROM report_exclusion "
             "WHERE domain=? COLLATE NOCASE",
@@ -1977,7 +1804,6 @@ def _apply_report_exclusions(snapshot, domain):
 
 def _load_human_interpretation(domain, report_id):
     with research_db() as con:
-        _ensure_report_workflow_schema(con)
         row = con.execute(
             "SELECT content,updated_at FROM report_human_interpretation "
             "WHERE domain=? COLLATE NOCASE AND report_id=?",
@@ -2011,7 +1837,6 @@ def report_workflow_exclusion(domain):
 
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with research_db() as con:
-        _ensure_report_workflow_schema(con)
         for row_scope, row_key, row_page_id in target_rows:
             if action == "include":
                 con.execute(
@@ -2039,7 +1864,6 @@ def save_report_human_interpretation(domain, report_id):
     content = str(payload.get("content") or "")
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with research_db() as con:
-        _ensure_report_workflow_schema(con)
         con.execute(
             "INSERT INTO report_human_interpretation(domain,report_id,content,updated_at) "
             "VALUES (?,?,?,?) "
@@ -2052,15 +1876,8 @@ def save_report_human_interpretation(domain, report_id):
 
 
 
-def _ensure_report_conversation_schema(con):
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
-
 def _load_report_notes(domain):
     with research_db() as con:
-        _ensure_report_conversation_schema(con)
         rows = con.execute(
             "SELECT note_key,content,discussion_enabled,updated_at "
             "FROM report_note WHERE domain=? COLLATE NOCASE",
@@ -2102,7 +1919,6 @@ def save_report_note(domain):
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     with research_db() as con:
-        _ensure_report_conversation_schema(con)
         con.execute(
             "INSERT INTO report_note(domain,note_key,content,discussion_enabled,updated_at) "
             "VALUES (?,?,?,?,?) "
@@ -2136,7 +1952,6 @@ def save_report_note_reply(domain):
         return {"ok": False, "error": "missing note key or reply"}, 400
 
     with research_db() as con:
-        _ensure_report_conversation_schema(con)
         note = con.execute(
             "SELECT discussion_enabled FROM report_note "
             "WHERE domain=? COLLATE NOCASE AND note_key=?",
