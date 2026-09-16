@@ -121,6 +121,13 @@ def execute_claimed_job(
     finally:
         stop_event.set()
         heartbeat.join(timeout=max(1.0, interval + 1.0))
+        if heartbeat.is_alive():
+            LOG.error(
+                "heartbeat thread did not stop cleanly; treating ownership as lost: job=%s worker=%s",
+                job["id"],
+                claimed_by,
+            )
+            ownership_lost.set()
 
     if ownership_lost.is_set():
         LOG.error(
