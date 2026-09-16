@@ -28,12 +28,27 @@ SEO_DB = Path(os.environ.get("SEO_DB", "/data/opengsc/prod.db"))
 REPORTS_DIR = Path(os.environ.get("REPORTS_DIR", "/data/reports"))
 RESEARCH_DB = Path(os.environ.get("RESEARCH_DB", "/data/dashboard/research.db"))
 from audits.geo_aeo.service import run_audit as run_geo_aeo_audit
-from reports.full_pdf import collect_report_data, build_full_report_pdf
+from reports.full_pdf import build_full_report_pdf
+from services.report_data import collect_report_data
 from reports.web_report import create_report_session, load_report_session, list_report_sessions, prepare_report_view
 from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, list_models as list_manual_ai_analysis_models, run_analysis as run_manual_ai_analysis
 from services.security_boundary import configure_security
 from jobs.store import enqueue_job
 from jobs.store import cancel_queued_job, get_job, list_jobs
+from integrations.opengsc_adapter import OpenGSCAdapter
+from services.page_discovery import (
+    discover_domain_sitemap,
+    discover_sitemap_urls,
+    get_discovery_state,
+    set_discovery_state,
+    sync_site_pages as canonical_sync_site_pages,
+)
+from services.source_inventory import (
+    detected_source_state as service_detected_source_state,
+    domain_sources_for_site as service_domain_sources_for_site,
+    selected_source_keys as service_selected_source_keys,
+    site_id_value as service_site_id_value,
+)
 
 app = Flask(__name__)
 configure_security(app)
@@ -83,46 +98,15 @@ def ensure_domain_source_schema(con):
 
 
 def detected_source_state(site):
-    states={
-      "gsc":{"connected":not bool(site.get("gsc_missing")),"detail":"OpenGSC / GSC property linked" if not site.get("gsc_missing") else ""},
-      "dataforseo":{"connected":bool(os.environ.get("DATAFORSEO_LOGIN") and os.environ.get("DATAFORSEO_PASSWORD")),"detail":"Credentials configured" if os.environ.get("DATAFORSEO_LOGIN") and os.environ.get("DATAFORSEO_PASSWORD") else ""},
-    }
-    try:
-        site_id=_site_id_value(site)
-        if site_id and SEO_DB.exists():
-            with db() as con:
-                names={r["name"] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-                if "ClaritySnapshot" in names and con.execute('SELECT 1 FROM "ClaritySnapshot" WHERE siteId=? LIMIT 1',(site_id,)).fetchone():
-                    states["ga4"]={"connected":True,"detail":"Analytics/Clarity snapshot available"}
-                if "AeoCheck" in names and "TrackedQuestion" in names:
-                    engines=con.execute('SELECT DISTINCT c.engine FROM "AeoCheck" c JOIN "TrackedQuestion" q ON q.id=c.questionId WHERE q.siteId=?',(site_id,)).fetchall()
-                    found={str(r["engine"]).lower() for r in engines if r["engine"]}
-                    for key in ("chatgpt","claude","gemini"):
-                        if key in found: states[key]={"connected":True,"detail":f"Stored {key.title()} observations available"}
-    except Exception:
-        pass
-    return states
+    return service_detected_source_state(site, SEO_DB)
+
 
 def domain_sources_for_site(site):
-    detected=detected_source_state(site); now=datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with research_db() as con:
-        ensure_domain_source_schema(con)
-        rows={r["source_key"]:dict(r) for r in con.execute("SELECT * FROM domain_source WHERE domain=? COLLATE NOCASE",(site["domain"],)).fetchall()}
-        for key,name,_ in SOURCE_CATALOG:
-            d=detected.get(key,{})
-            if key not in rows and d.get("connected"):
-                con.execute("INSERT OR IGNORE INTO domain_source(domain,source_key,source_name,selected,connection_status,detail,updated_at) VALUES (?,?,?,?,?,?,?)",(site["domain"],key,name,1,"connected",d.get("detail",""),now))
-        con.commit()
-        rows={r["source_key"]:dict(r) for r in con.execute("SELECT * FROM domain_source WHERE domain=? COLLATE NOCASE",(site["domain"],)).fetchall()}
-    out=[]
-    for key,name,description in SOURCE_CATALOG:
-        stored=rows.get(key,{}); d=detected.get(key,{}); connected=bool(d.get("connected")); selected=bool(stored.get("selected")) or connected
-        out.append({"key":key,"name":name,"description":description,"selected":selected,"status":"Connected" if connected else ("Selected" if selected else "Not selected"),"status_class":"connected" if connected else ("selected" if selected else "off"),"detail":d.get("detail") or stored.get("detail") or ""})
-    catalog={x[0] for x in SOURCE_CATALOG}
-    for key,stored in rows.items():
-        if key in catalog: continue
-        out.append({"key":key,"name":stored["source_name"],"description":"Custom or future evidence source.","selected":bool(stored["selected"]),"status":"Selected" if stored["selected"] else "Not selected","status_class":"selected" if stored["selected"] else "off","detail":stored["detail"] or ""})
-    return out
+    return service_domain_sources_for_site(
+        site,
+        research_db=RESEARCH_DB,
+        opengsc_db=SEO_DB,
+    )
 
 def ensure_manual_ai_source_schema(con):
     # Compatibility hook only. Schema is owned by versioned migrations.
@@ -292,23 +276,28 @@ def manual_ai_source_for_report(domain):
 
 
 def ensure_domain_ready(domain):
-    now=datetime.now(timezone.utc).isoformat(timespec="seconds")
     with research_db() as con:
-        row=con.execute("SELECT COUNT(*) AS n FROM site_page WHERE domain=?",(domain,)).fetchone(); count=row["n"] if row else 0
-    if not count:
-        try: sync_site_pages(domain)
-        except Exception: pass
-    with research_db() as con:
-        row=con.execute("SELECT COUNT(*) AS n FROM site_page WHERE domain=?",(domain,)).fetchone(); count=row["n"] if row else 0
-        if not count:
-            url="https://"+domain.rstrip("/")+"/"
-            con.execute("INSERT OR IGNORE INTO site_page(domain,url,path,source,discovered_at,updated_at) VALUES (?,?,?,'domain',?,?)",(domain,url,"/",now,now)); con.commit(); count=1
-    return {"ready":True,"label":"Ready","pages":count}
+        row = con.execute(
+            "SELECT COUNT(*) AS n FROM site_page WHERE domain=?", (domain,)
+        ).fetchone()
+        count = int(row["n"] if row else 0)
+    discovery = get_discovery_state(RESEARCH_DB, domain)
+    ready = count > 0
+    label = "Ready" if ready else discovery.get("status", "not_started").replace("_", " ").title()
+    return {
+        "ready": ready,
+        "label": label,
+        "pages": count,
+        "discovery": discovery,
+    }
+
 
 def selected_source_keys(site):
-    return [s["key"] for s in domain_sources_for_site(site) if s["selected"]]
-
-
+    return service_selected_source_keys(
+        site,
+        research_db=RESEARCH_DB,
+        opengsc_db=SEO_DB,
+    )
 
 REPORT_FAMILY_DEFAULT_QUESTIONS = {
     "ai-visibility": [
@@ -436,131 +425,39 @@ def site_page_path(url):
 
 
 def _fetch_sitemap_urls(url, domain, seen=None, depth=0):
-    seen = seen or set()
-    if depth > 5 or url in seen:
-        return set()
-    seen.add(url)
-    response = safe_fetcher.get(
+    urls, _errors = discover_sitemap_urls(
         url,
-        headers={"User-Agent": "SEO-GEO-AEO-Auditor/1.0"},
-        max_response_bytes=5 * 1024 * 1024,
-        allowed_content_types={"application/xml", "text/xml", "text/plain", "application/gzip", "application/x-gzip", "application/octet-stream"},
+        domain,
+        max_depth=max(0, 5 - int(depth or 0)),
     )
-    raw = response.content
-    if raw[:2] == b"\x1f\x8b" or url.lower().endswith(".gz"):
-        raw = gzip.decompress(raw)
-    root = ET.fromstring(raw)
-    root_name = root.tag.rsplit("}", 1)[-1].lower()
-    urls = set()
-    if root_name == "sitemapindex":
-        for loc in root.findall(".//{*}loc"):
-            child = (loc.text or "").strip()
-            if child:
-                try:
-                    urls.update(_fetch_sitemap_urls(child, domain, seen, depth + 1))
-                except Exception:
-                    pass
-        return urls
-    for loc in root.findall(".//{*}loc"):
-        normalized = normalize_site_page_url((loc.text or "").strip(), domain)
-        if normalized:
-            urls.add(normalized)
     return urls
 
 
 def sitemap_pages(domain):
-    errors = []
-    for sitemap_url in (f"https://{domain}/sitemap.xml", f"https://{domain}/sitemap_index.xml"):
-        try:
-            urls = _fetch_sitemap_urls(sitemap_url, domain)
-            if urls:
-                return urls, sitemap_url
-        except Exception as exc:
-            errors.append(str(exc))
-    raise RuntimeError("Could not retrieve sitemap: " + " | ".join(errors))
+    urls, source, _errors = discover_domain_sitemap(domain)
+    return urls, source
 
 
 def _site_id_value(site):
-    for key in ("id", "site_id"):
-        try:
-            value = site[key]
-            if value:
-                return value
-        except Exception:
-            pass
-        try:
-            value = getattr(site, key)
-            if value:
-                return value
-        except Exception:
-            pass
-    return None
+    return service_site_id_value(site)
 
 
 def gsc_rows_for_domain(domain):
     site = get_site(domain)
     if site.get("gsc_missing"):
         return []
-    site_id = _site_id_value(site)
-    con = connect_sqlite(SEO_DB, readonly=True)
-    try:
-        cols = {row["name"] for row in con.execute("PRAGMA table_info(gsc_keyword_inventory)").fetchall()}
-        if not cols:
-            return []
-        keyword_col = "query" if "query" in cols else "keyword" if "keyword" in cols else None
-        if not keyword_col or "page" not in cols:
-            return []
-        latest_col = "latest_position" if "latest_position" in cols else None
-        impressions_col = "total_impressions" if "total_impressions" in cols else "impressions" if "impressions" in cols else None
-        clicks_col = "total_clicks" if "total_clicks" in cols else "clicks" if "clicks" in cols else None
-        parts = [
-            f"{keyword_col} AS keyword",
-            "page AS page",
-            f"{latest_col} AS latest_position" if latest_col else "NULL AS latest_position",
-            f"{impressions_col} AS impressions" if impressions_col else "0 AS impressions",
-            f"{clicks_col} AS clicks" if clicks_col else "0 AS clicks",
-        ]
-        sql = "SELECT " + ", ".join(parts) + " FROM gsc_keyword_inventory"
-        params = []
-        if "site_id" in cols and site_id:
-            sql += " WHERE site_id = ?"
-            params.append(site_id)
-        return con.execute(sql, params).fetchall()
-    finally:
-        con.close()
+    return OpenGSCAdapter(SEO_DB).gsc_keyword_rows(_site_id_value(site))
 
 
 def sync_site_pages(domain):
-    sitemap_urls, sitemap_source = sitemap_pages(domain)
-    ranking_rows = gsc_rows_for_domain(domain)
-    ranking_urls = {
-        u for row in ranking_rows
-        for u in [normalize_site_page_url(row["page"], domain)]
-        if u
-    }
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with research_db() as con:
-        for url in sorted(sitemap_urls):
-            con.execute("""
-                INSERT INTO site_page(domain,url,path,source,discovered_at,updated_at)
-                VALUES (?,?,?,'sitemap',?,?)
-                ON CONFLICT(domain,url) DO UPDATE SET
-                    path=excluded.path,
-                    source=CASE WHEN site_page.source='ranking' THEN 'sitemap+ranking' ELSE site_page.source END,
-                    updated_at=excluded.updated_at
-            """, (domain, url, site_page_path(url), now, now))
-        for url in sorted(ranking_urls):
-            con.execute("""
-                INSERT INTO site_page(domain,url,path,source,discovered_at,updated_at)
-                VALUES (?,?,?,'ranking',?,?)
-                ON CONFLICT(domain,url) DO UPDATE SET
-                    source=CASE WHEN site_page.source='sitemap' THEN 'sitemap+ranking' ELSE site_page.source END,
-                    updated_at=excluded.updated_at
-            """, (domain, url, site_page_path(url), now, now))
-        con.commit()
-    return len(sitemap_urls), len(ranking_urls), sitemap_source
-
-
+    site = get_site(domain)
+    outcome = canonical_sync_site_pages(
+        domain,
+        research_db=RESEARCH_DB,
+        opengsc_db=SEO_DB,
+        site_id=_site_id_value(site),
+    )
+    return outcome["sitemap_count"], outcome["ranking_count"], outcome["sitemap_source"]
 
 def canonical_keyword_tags(con, domain, keyword):
     return con.execute(
@@ -669,20 +566,12 @@ def host_from_site(site_id: str, url: str) -> str:
 
 
 def _opengsc_get_sites():
-    with db() as con:
-        rows = con.execute("""
-            SELECT id, url, siteId, archivedAt
-            FROM Site
-            WHERE archivedAt IS NULL
-            ORDER BY url
-        """).fetchall()
     out = []
-    for r in rows:
-        d = dict(r)
-        d["domain"] = host_from_site(d["siteId"], d["url"])
-        out.append(d)
+    for row in OpenGSCAdapter(SEO_DB).list_sites():
+        item = dict(row)
+        item["domain"] = host_from_site(item.get("siteId", ""), item.get("url", ""))
+        out.append(item)
     return out
-
 
 def _opengsc_get_site(domain: str):
     for site in get_sites():
@@ -691,211 +580,27 @@ def _opengsc_get_site(domain: str):
     abort(404)
 
 
-def table_exists(con, name: str, kind: str | None = None) -> bool:
-    if kind:
-        row = con.execute(
-            "SELECT 1 FROM sqlite_master WHERE name=? AND type=? LIMIT 1",
-            (name, kind),
-        ).fetchone()
-    else:
-        row = con.execute(
-            "SELECT 1 FROM sqlite_master WHERE name=? LIMIT 1", (name,)
-        ).fetchone()
-    return bool(row)
-
-
 def domain_seo(site_id: str):
-    with db() as con:
-        if table_exists(con, "gsc_keyword_observation", "table"):
-            summary = con.execute("""
-                SELECT
-                    COUNT(*) AS observations,
-                    COUNT(DISTINCT query) AS keywords,
-                    COUNT(DISTINCT page) AS pages,
-                    COALESCE(SUM(impressions), 0) AS impressions,
-                    COALESCE(SUM(clicks), 0) AS clicks,
-                    ROUND(MIN(position), 1) AS best_position,
-                    ROUND(MAX(position), 1) AS worst_position
-                FROM gsc_keyword_observation
-                WHERE site_id = ?
-            """, (site_id,)).fetchone()
-        else:
-            summary = None
-
-        recent = []
-        if table_exists(con, "gsc_keyword_inventory", "view"):
-            recent = con.execute("""
-                SELECT
-                    query,
-                    page,
-                    impressions,
-                    clicks,
-                    ROUND(best_position, 1) AS best_position,
-                    ROUND(latest_position, 1) AS latest_position,
-                    status,
-                    first_seen,
-                    last_seen
-                FROM gsc_keyword_inventory
-                WHERE site_id = ?
-                ORDER BY
-                    CASE status
-                        WHEN 'active_7d' THEN 1
-                        WHEN 'active_30d' THEN 2
-                        WHEN 'stale_90d' THEN 3
-                        ELSE 4
-                    END,
-                    impressions DESC,
-                    best_position ASC
-                LIMIT 20
-            """, (site_id,)).fetchall()
-
-    return summary, recent
+    return OpenGSCAdapter(SEO_DB).domain_seo(site_id)
 
 
 def page_rows(site_id: str, q: str = ""):
-    with db() as con:
-        if not table_exists(con, "gsc_keyword_inventory", "view"):
-            return []
-        sql = """
-            SELECT
-                page,
-                COUNT(DISTINCT query) AS keywords,
-                COALESCE(SUM(impressions),0) AS impressions,
-                COALESCE(SUM(clicks),0) AS clicks,
-                ROUND(MIN(best_position),1) AS best_position,
-                ROUND(AVG(avg_position),1) AS avg_position,
-                MAX(last_seen) AS last_seen
-            FROM gsc_keyword_inventory
-            WHERE site_id = ?
-        """
-        params = [site_id]
-        if q:
-            sql += " AND (page LIKE ? OR query LIKE ?)"
-            like = f"%{q}%"
-            params.extend([like, like])
-        sql += """
-            GROUP BY page
-            ORDER BY impressions DESC, best_position ASC, page
-        """
-        return con.execute(sql, params).fetchall()
+    return OpenGSCAdapter(SEO_DB).landing_page_rows(site_id, q)
 
 
 def page_detail(site_id: str, page_url: str):
-    with db() as con:
-        if not table_exists(con, "gsc_keyword_inventory", "view"):
-            return [], None
-
-        kws = con.execute("""
-            SELECT
-                query,
-                observations,
-                impressions,
-                clicks,
-                ROUND(best_position,1) AS best_position,
-                ROUND(avg_position,1) AS avg_position,
-                ROUND(latest_position,1) AS latest_position,
-                ROUND(worst_position,1) AS worst_position,
-                status,
-                first_seen,
-                last_seen
-            FROM gsc_keyword_inventory
-            WHERE site_id=? AND page=?
-            ORDER BY impressions DESC, best_position ASC
-        """, (site_id, page_url)).fetchall()
-
-        summary = con.execute("""
-            SELECT
-                COUNT(DISTINCT query) AS keywords,
-                COALESCE(SUM(impressions),0) AS impressions,
-                COALESCE(SUM(clicks),0) AS clicks,
-                ROUND(MIN(best_position),1) AS best_position,
-                ROUND(AVG(avg_position),1) AS avg_position,
-                MAX(last_seen) AS last_seen
-            FROM gsc_keyword_inventory
-            WHERE site_id=? AND page=?
-        """, (site_id, page_url)).fetchone()
-
-    return kws, summary
-
+    return OpenGSCAdapter(SEO_DB).page_detail(site_id, page_url)
 
 
 def keyword_rows(site_id: str):
-    with db() as con:
-        if not table_exists(con, "gsc_keyword_inventory", "view"):
-            return []
-
-        return con.execute("""
-            SELECT
-                query,
-                page,
-                ROUND(latest_position, 1) AS ranking
-            FROM gsc_keyword_inventory
-            WHERE site_id = ?
-            ORDER BY
-                CASE WHEN latest_position IS NULL THEN 1 ELSE 0 END,
-                latest_position ASC,
-                query COLLATE NOCASE ASC,
-                page ASC
-        """, (site_id,)).fetchall()
+    return OpenGSCAdapter(SEO_DB).keyword_rows(site_id)
 
 
 def build_domain_export(site):
-    with db() as con:
-        if not table_exists(con, "gsc_keyword_inventory", "view"):
-            raise RuntimeError("gsc_keyword_inventory view is not available")
-
-        keywords = con.execute("""
-            SELECT
-                query AS keyword,
-                ROUND(MIN(best_position), 1) AS best_ranking,
-                ROUND(MIN(latest_position), 1) AS latest_ranking,
-                SUM(impressions) AS impressions,
-                SUM(clicks) AS clicks,
-                MIN(first_seen) AS first_seen,
-                MAX(last_seen) AS last_seen,
-                COUNT(DISTINCT page) AS landing_pages
-            FROM gsc_keyword_inventory
-            WHERE site_id = ?
-            GROUP BY query
-            ORDER BY
-                CASE WHEN MIN(latest_position) IS NULL THEN 1 ELSE 0 END,
-                MIN(latest_position) ASC,
-                query COLLATE NOCASE ASC
-        """, (site["id"],)).fetchall()
-
-        landing_pages = con.execute("""
-            SELECT
-                page AS landing_page,
-                COUNT(DISTINCT query) AS keywords,
-                SUM(impressions) AS impressions,
-                SUM(clicks) AS clicks,
-                ROUND(MIN(best_position), 1) AS best_ranking,
-                ROUND(AVG(avg_position), 1) AS avg_ranking,
-                MIN(first_seen) AS first_seen,
-                MAX(last_seen) AS last_seen
-            FROM gsc_keyword_inventory
-            WHERE site_id = ?
-            GROUP BY page
-            ORDER BY impressions DESC, best_ranking ASC, landing_page ASC
-        """, (site["id"],)).fetchall()
-
-        page_keywords = con.execute("""
-            SELECT
-                page AS landing_page,
-                query AS keyword,
-                ROUND(best_position, 1) AS best_ranking,
-                ROUND(avg_position, 1) AS avg_ranking,
-                ROUND(latest_position, 1) AS latest_ranking,
-                ROUND(worst_position, 1) AS worst_ranking,
-                impressions,
-                clicks,
-                status,
-                first_seen,
-                last_seen
-            FROM gsc_keyword_inventory
-            WHERE site_id = ?
-            ORDER BY landing_page ASC, latest_ranking ASC, keyword COLLATE NOCASE ASC
-        """, (site["id"],)).fetchall()
+    adapter = OpenGSCAdapter(SEO_DB)
+    if not adapter.available():
+        raise RuntimeError("OpenGSC database is not available")
+    payload = adapter.domain_export(site["id"])
 
     def csv_bytes(rows):
         buf = io.StringIO()
@@ -908,10 +613,9 @@ def build_domain_export(site):
 
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("keywords.csv", csv_bytes(keywords))
-        zf.writestr("landing-pages.csv", csv_bytes(landing_pages))
-        zf.writestr("landing-page-keywords.csv", csv_bytes(page_keywords))
-
+        zf.writestr("keywords.csv", csv_bytes(payload["keywords"]))
+        zf.writestr("landing-pages.csv", csv_bytes(payload["landing_pages"]))
+        zf.writestr("landing-page-keywords.csv", csv_bytes(payload["page_keywords"]))
     archive.seek(0)
     return archive
 
@@ -1182,22 +886,22 @@ def domain_new():
         except ValueError as exc:
             return render_template("domain_new.html",sites=get_sites(),site=None,message=str(exc))
 
-        sitemap_message=""
         if created:
-            try:
-                sitemap_count,ranking_count,source=sync_site_pages(domain)
-                sitemap_message=f" Added {sitemap_count} sitemap page(s)."
-            except Exception as exc:
-                sitemap_message=f" Domain added; sitemap discovery failed: {exc}"
+            job=enqueue_job(
+                RESEARCH_DB,
+                "page_discovery",
+                domain=domain,
+                payload={"domain":domain},
+                max_attempts=3,
+            )
+            set_discovery_state(RESEARCH_DB,domain,"queued",job_id=job["id"],error="")
+            message=f"Domain added. Page discovery queued · job {job['id']}."
+        else:
+            message="Domain already exists."
 
-        site=get_site(domain)
-        gsc_message=" GSC linked." if not site["gsc_missing"] else " GSC missing; SEO ranking fields will remain empty."
-
-        ensure_domain_ready(domain)
-        return redirect(url_for("domain_sources",domain=domain,message=("Domain added." if created else "Domain already exists.")+" Select any additional data sources, then continue to Reports."))
+        return redirect(url_for("domain_sources",domain=domain,message=message))
 
     return render_template("domain_new.html",sites=get_sites(),site=None,message=message)
-
 
 @app.route("/d/<domain>/sources",methods=["GET","POST"])
 def domain_sources(domain):
@@ -1330,14 +1034,7 @@ def pages(domain):
     q = request.args.get("q", "").strip()
     message = request.args.get("message", "").strip()
 
-    with research_db() as con:
-        count = con.execute("SELECT COUNT(*) AS n FROM site_page WHERE domain=?", (domain,)).fetchone()["n"]
-    if count == 0:
-        try:
-            sync_site_pages(domain)
-        except Exception as exc:
-            if not message:
-                message = f"Initial sitemap sync failed: {exc}"
+    discovery = get_discovery_state(RESEARCH_DB, domain)
 
     ranking_counts = {}
     for row in gsc_rows_for_domain(domain):
@@ -1367,7 +1064,7 @@ def pages(domain):
         "has_note": r["id"] in note_ids,
     } for r in page_rows]
 
-    return render_template("pages.html", sites=get_sites(), site=site, rows=rows, total=total, q=q, message=message)
+    return render_template("pages.html", sites=get_sites(), site=site, rows=rows, total=total, q=q, message=message, discovery=discovery)
 
 
 
@@ -1736,13 +1433,15 @@ def research_delete(domain,keyword_id):
 @app.post("/d/<domain>/pages/sync")
 def pages_sync(domain):
     get_site(domain)
-    try:
-        sitemap_count, ranking_count, source = sync_site_pages(domain)
-        message = f"Pages refreshed: {sitemap_count} sitemap page(s), {ranking_count} ranking landing page(s). Source: {source}"
-    except Exception as exc:
-        message = f"Page refresh failed: {exc}"
-    return redirect(url_for("pages", domain=domain, message=message))
-
+    job=enqueue_job(
+        RESEARCH_DB,
+        "page_discovery",
+        domain=domain,
+        payload={"domain":domain},
+        max_attempts=3,
+    )
+    set_discovery_state(RESEARCH_DB,domain,"queued",job_id=job["id"],error="")
+    return redirect(url_for("pages",domain=domain,message=f"Page discovery queued · job {job['id']}"))
 
 @app.route("/d/<domain>/pages/<int:page_id>")
 def page_workspace(domain, page_id):
