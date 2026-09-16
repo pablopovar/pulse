@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -128,3 +129,68 @@ def selected_source_keys(site: dict, *, research_db: str | Path, opengsc_db: str
         for row in domain_sources_for_site(site, research_db=research_db, opengsc_db=opengsc_db)
         if row["selected"]
     ]
+
+
+def save_domain_sources(
+    site: dict,
+    *,
+    research_db: str | Path,
+    opengsc_db: str | Path,
+    selected: set[str],
+    custom_name: str = "",
+    custom_detail: str = "",
+) -> None:
+    detected = detected_source_state(site, opengsc_db)
+    updated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    domain = site["domain"]
+    with connect_sqlite(research_db) as con:
+        for key, name, _description in SOURCE_CATALOG:
+            state = detected.get(key, {})
+            connected = bool(state.get("connected"))
+            con.execute(
+                """
+                INSERT INTO domain_source(
+                    domain,source_key,source_name,selected,connection_status,detail,updated_at
+                ) VALUES (?,?,?,?,?,?,?)
+                ON CONFLICT(domain,source_key) DO UPDATE SET
+                    source_name=excluded.source_name,
+                    selected=excluded.selected,
+                    connection_status=excluded.connection_status,
+                    detail=CASE
+                        WHEN excluded.detail<>'' THEN excluded.detail
+                        ELSE domain_source.detail
+                    END,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    domain,
+                    key,
+                    name,
+                    int(key in selected or connected),
+                    "connected" if connected else "not_connected",
+                    state.get("detail", ""),
+                    updated_at,
+                ),
+            )
+
+        clean_name = str(custom_name or "").strip()
+        if clean_name:
+            custom_key = "custom_" + re.sub(
+                r"[^a-z0-9]+", "_", clean_name.lower()
+            ).strip("_")
+            if custom_key == "custom_":
+                custom_key = "custom_source"
+            con.execute(
+                """
+                INSERT INTO domain_source(
+                    domain,source_key,source_name,selected,connection_status,detail,updated_at
+                ) VALUES (?,?,?,1,'not_connected',?,?)
+                ON CONFLICT(domain,source_key) DO UPDATE SET
+                    source_name=excluded.source_name,
+                    selected=1,
+                    detail=excluded.detail,
+                    updated_at=excluded.updated_at
+                """,
+                (domain, custom_key, clean_name, custom_detail, updated_at),
+            )
+        con.commit()
