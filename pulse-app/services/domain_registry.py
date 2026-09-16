@@ -2,26 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from db.sqlite import connect_sqlite
 from integrations.opengsc_adapter import OpenGSCAdapter
+from services.url_policy import URLPolicyError, domain_hostname
 
 
 def normalize_dashboard_domain(value: str | None):
-    value = (value or "").strip()
-    if not value:
-        return None, None
-    if value.lower().startswith("sc-domain:"):
-        value = value.split(":", 1)[1].strip()
-    if "://" not in value:
-        value = "https://" + value
     try:
-        parsed = urlsplit(value)
-    except Exception:
+        host = domain_hostname(value)
+    except URLPolicyError:
         return None, None
-    host = (parsed.hostname or "").strip().lower()
-    if not host or "." not in host:
+    if "." not in host:
         return None, None
     return host, "https://" + host
 
