@@ -5,22 +5,23 @@ from pathlib import Path
 APP = Path(__file__).resolve().parents[1]
 ADAPTER = APP / "integrations" / "opengsc_adapter.py"
 
-# OpenGSC-owned tables/views referenced by the adapter. If application code
-# starts naming any of these directly, the integration boundary has leaked.
-OPEN_GSC_SCHEMA_NAMES = {
-    "Site",
+# Distinctive OpenGSC-owned schema identifiers can be checked as literals.
+# Generic Prisma model names use quoted SQL tokens so ordinary prose such as
+# "site" or "backlink" does not create false positives.
+OPEN_GSC_SCHEMA_TOKENS = {
+    '"Site"',
     "gsc_keyword_inventory",
     "gsc_keyword_observation",
     "ClaritySnapshot",
     "AeoCheck",
     "TrackedQuestion",
     "TrackedKeyword",
-    "Backlink",
+    '"Backlink"',
     "RefDomainRow",
     "BacklinkSnapshot",
     "DomainMetricCache",
     "CompetitorKeyword",
-    "SiteAudit",
+    '"SiteAudit"',
     "SiteAuditPage",
     "SitemapUrl",
     "SiteHealth",
@@ -33,7 +34,7 @@ def test_opengsc_schema_names_are_confined_to_adapter():
         if path == ADAPTER or "tests" in path.parts:
             continue
         text = path.read_text()
-        hits = sorted(name for name in OPEN_GSC_SCHEMA_NAMES if name in text)
+        hits = sorted(token for token in OPEN_GSC_SCHEMA_TOKENS if token in text)
         if hits:
             offenders[str(path.relative_to(APP))] = hits
     assert offenders == {}
