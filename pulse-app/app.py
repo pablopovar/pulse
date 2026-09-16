@@ -11,6 +11,18 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 from services.safe_fetcher import safe_fetcher
 from services.url_policy import site_page_identity as normalize_site_page_url, url_path as site_page_path
+from services.report_collaboration import (
+    DiscussionDisabled,
+    ReportNotFound,
+    add_public_reply,
+    add_reply,
+    load_human_interpretation,
+    load_report_notes,
+    report_domain,
+    save_human_interpretation,
+    save_report_note as persist_report_note,
+    set_exclusions,
+)
 from db.sqlite import connect_sqlite
 from db.migrate import validate_schema_current
 
@@ -1679,111 +1691,23 @@ def public_report_note_reply(report_id):
     payload = request.get_json(silent=True) or {}
     key = str(payload.get("key") or "").strip()
     content = str(payload.get("content") or "").strip()
-
     if not key or not content:
         return {"ok": False, "error": "missing note key or reply"}, 400
-
-    with research_db() as con:
-
-        report_row = con.execute(
-            "SELECT domain FROM report_session WHERE id=? LIMIT 1",
-            (report_id,),
-        ).fetchone()
-        if not report_row:
-            return {"ok": False, "error": "report not found"}, 404
-
-        domain = report_row["domain"]
-        note = con.execute(
-            "SELECT discussion_enabled FROM report_note "
-            "WHERE domain=? COLLATE NOCASE AND note_key=?",
-            (domain, key),
-        ).fetchone()
-
-        if not note or not bool(note["discussion_enabled"]):
-            return {"ok": False, "error": "discussion is not enabled for this note"}, 403
-
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        cur = con.execute(
-            "INSERT INTO report_note_reply(domain,note_key,author_role,content,created_at) "
-            "VALUES (?,?,?,?,?)",
-            (domain, key, "client", content, now),
-        )
-        con.commit()
-
-    return {
-        "ok": True,
-        "id": cur.lastrowid,
-        "created_at": now,
-        "author_role": "client",
-    }
+    try:
+        reply = add_public_reply(RESEARCH_DB, report_id, key, content)
+    except ReportNotFound as exc:
+        return {"ok": False, "error": str(exc)}, 404
+    except DiscussionDisabled as exc:
+        return {"ok": False, "error": str(exc)}, 403
+    return {"ok": True, **reply}
 
 
 @app.get("/reports/<report_id>")
 def public_report(report_id):
-    with research_db() as con:
-        row = con.execute(
-            "SELECT domain FROM report_session WHERE id=? LIMIT 1",
-            (report_id,),
-        ).fetchone()
-    if not row:
+    domain = report_domain(RESEARCH_DB, report_id)
+    if not domain:
         abort(404)
-    return report_session_view(row["domain"], report_id)
-
-
-
-def _load_report_exclusions(domain):
-    with research_db() as con:
-        rows = con.execute(
-            "SELECT scope,item_key,page_id FROM report_exclusion "
-            "WHERE domain=? COLLATE NOCASE",
-            (domain,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def _apply_report_exclusions(snapshot, domain):
-    # Work on a detached copy. Stored report_session snapshots stay immutable.
-    data = json.loads(json.dumps(snapshot))
-    exclusions = _load_report_exclusions(domain)
-    check_keys = {r["item_key"] for r in exclusions if r["scope"] == "check"}
-    categories = {r["item_key"] for r in exclusions if r["scope"] == "category"}
-    families = {r["item_key"] for r in exclusions if r["scope"] == "family"}
-    page_checks = {
-        (r["item_key"], int(r["page_id"]))
-        for r in exclusions
-        if r["scope"] == "page_check"
-    }
-
-    filtered = []
-    for signal in data.get("audit_signals") or []:
-        signal_key = str(signal.get("signal_key") or "")
-        family = str(signal.get("family") or "")
-        category = str(signal.get("category") or "")
-        try:
-            page_id = int(signal.get("page_id"))
-        except Exception:
-            page_id = -1
-        if signal_key and signal_key in check_keys:
-            continue
-        if family and family in families:
-            continue
-        if category and category in categories:
-            continue
-        if signal_key and (signal_key, page_id) in page_checks:
-            continue
-        filtered.append(signal)
-    data["audit_signals"] = filtered
-    return data
-
-
-def _load_human_interpretation(domain, report_id):
-    with research_db() as con:
-        row = con.execute(
-            "SELECT content,updated_at FROM report_human_interpretation "
-            "WHERE domain=? COLLATE NOCASE AND report_id=?",
-            (domain, report_id),
-        ).fetchone()
-    return dict(row) if row else {"content": "", "updated_at": None}
+    return report_session_view(domain, report_id)
 
 
 @app.post("/d/<domain>/report-workflow/exclusion")
@@ -1793,7 +1717,7 @@ def report_workflow_exclusion(domain):
     action = str(payload.get("action") or "exclude").strip().lower()
     scope = str(payload.get("scope") or "").strip()
     key = str(payload.get("key") or "").strip()
-    keys = [str(x).strip() for x in (payload.get("keys") or []) if str(x).strip()]
+    keys = [str(item).strip() for item in (payload.get("keys") or []) if str(item).strip()]
     try:
         page_id = int(payload.get("page_id") or -1)
     except Exception:
@@ -1801,83 +1725,27 @@ def report_workflow_exclusion(domain):
 
     if scope not in {"check", "category", "page_check", "checks", "family"}:
         return {"ok": False, "error": "invalid scope"}, 400
-
     if scope == "checks":
-        target_rows = [("check", x, -1) for x in keys]
+        targets = [("check", item, -1) for item in keys]
     elif key:
-        target_rows = [(scope, key, page_id if scope == "page_check" else -1)]
+        targets = [(scope, key, page_id if scope == "page_check" else -1)]
     else:
         return {"ok": False, "error": "missing key"}, 400
 
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with research_db() as con:
-        for row_scope, row_key, row_page_id in target_rows:
-            if action == "include":
-                con.execute(
-                    "DELETE FROM report_exclusion "
-                    "WHERE domain=? COLLATE NOCASE AND scope=? AND item_key=? AND page_id=?",
-                    (domain, row_scope, row_key, row_page_id),
-                )
-            else:
-                con.execute(
-                    "INSERT OR IGNORE INTO report_exclusion"
-                    "(domain,scope,item_key,page_id,created_at) VALUES (?,?,?,?,?)",
-                    (domain, row_scope, row_key, row_page_id, now),
-                )
-        con.commit()
-    return {"ok": True, "action": action, "count": len(target_rows)}
+    count = set_exclusions(RESEARCH_DB, domain, action=action, targets=targets)
+    return {"ok": True, "action": action, "count": count}
 
 
 @app.post("/d/<domain>/reports/<report_id>/human-interpretation")
 def save_report_human_interpretation(domain, report_id):
     get_site(domain)
-    session = load_report_session(RESEARCH_DB, domain, report_id)
-    if not session:
+    if not load_report_session(RESEARCH_DB, domain, report_id):
         abort(404)
     payload = request.get_json(silent=True) or {}
-    content = str(payload.get("content") or "")
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with research_db() as con:
-        con.execute(
-            "INSERT INTO report_human_interpretation(domain,report_id,content,updated_at) "
-            "VALUES (?,?,?,?) "
-            "ON CONFLICT(domain,report_id) DO UPDATE SET "
-            "content=excluded.content,updated_at=excluded.updated_at",
-            (domain, report_id, content, now),
-        )
-        con.commit()
-    return {"ok": True, "updated_at": now}
-
-
-
-def _load_report_notes(domain):
-    with research_db() as con:
-        rows = con.execute(
-            "SELECT note_key,content,discussion_enabled,updated_at "
-            "FROM report_note WHERE domain=? COLLATE NOCASE",
-            (domain,),
-        ).fetchall()
-        replies = con.execute(
-            "SELECT id,note_key,author_role,content,created_at "
-            "FROM report_note_reply WHERE domain=? COLLATE NOCASE ORDER BY id",
-            (domain,),
-        ).fetchall()
-
-    notes = {
-        row["note_key"]: {
-            "content": row["content"],
-            "discussion_enabled": bool(row["discussion_enabled"]),
-            "updated_at": row["updated_at"],
-            "replies": [],
-        }
-        for row in rows
-    }
-    for row in replies:
-        notes.setdefault(
-            row["note_key"],
-            {"content": "", "discussion_enabled": False, "updated_at": None, "replies": []},
-        )["replies"].append(dict(row))
-    return notes
+    updated_at = save_human_interpretation(
+        RESEARCH_DB, domain, report_id, str(payload.get("content") or "")
+    )
+    return {"ok": True, "updated_at": updated_at}
 
 
 @app.post("/d/<domain>/report-notes")
@@ -1887,29 +1755,14 @@ def save_report_note(domain):
     key = str(payload.get("key") or "").strip()
     if not key:
         return {"ok": False, "error": "missing note key"}, 400
-
-    content = str(payload.get("content") or "")
-    discussion_enabled = 1 if payload.get("discussion_enabled") else 0
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-    with research_db() as con:
-        con.execute(
-            "INSERT INTO report_note(domain,note_key,content,discussion_enabled,updated_at) "
-            "VALUES (?,?,?,?,?) "
-            "ON CONFLICT(domain,note_key) DO UPDATE SET "
-            "content=excluded.content,"
-            "discussion_enabled=excluded.discussion_enabled,"
-            "updated_at=excluded.updated_at",
-            (domain, key, content, discussion_enabled, now),
-        )
-        con.commit()
-
-    return {
-        "ok": True,
-        "updated_at": now,
-        "has_note": bool(content.strip()),
-        "discussion_enabled": bool(discussion_enabled),
-    }
+    saved = persist_report_note(
+        RESEARCH_DB,
+        domain,
+        key,
+        str(payload.get("content") or ""),
+        bool(payload.get("discussion_enabled")),
+    )
+    return {"ok": True, **saved}
 
 
 @app.post("/d/<domain>/report-notes/reply")
@@ -1918,38 +1771,25 @@ def save_report_note_reply(domain):
     payload = request.get_json(silent=True) or {}
     key = str(payload.get("key") or "").strip()
     content = str(payload.get("content") or "").strip()
-    author_role = str(payload.get("author_role") or "client").strip().lower()
-
-    if author_role not in {"owner", "client"}:
-        author_role = "client"
     if not key or not content:
         return {"ok": False, "error": "missing note key or reply"}, 400
-
-    with research_db() as con:
-        note = con.execute(
-            "SELECT discussion_enabled FROM report_note "
-            "WHERE domain=? COLLATE NOCASE AND note_key=?",
-            (domain, key),
-        ).fetchone()
-        if not note or not bool(note["discussion_enabled"]):
-            return {"ok": False, "error": "discussion is not enabled for this note"}, 403
-
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        cur = con.execute(
-            "INSERT INTO report_note_reply(domain,note_key,author_role,content,created_at) "
-            "VALUES (?,?,?,?,?)",
-            (domain, key, author_role, content, now),
+    try:
+        reply = add_reply(
+            RESEARCH_DB,
+            domain,
+            key,
+            content,
+            author_role=str(payload.get("author_role") or "client").strip().lower(),
         )
-        con.commit()
-
-    return {"ok": True, "id": cur.lastrowid, "created_at": now, "author_role": author_role}
-
+    except DiscussionDisabled as exc:
+        return {"ok": False, "error": str(exc)}, 403
+    return {"ok": True, **reply}
 
 
 @app.get("/d/<domain>/report-notes.json")
 def report_notes_json(domain):
     get_site(domain)
-    return {"ok": True, "notes": _load_report_notes(domain)}
+    return {"ok": True, "notes": load_report_notes(RESEARCH_DB, domain)}
 
 
 @app.get("/d/<domain>/reports/<report_id>")
@@ -1964,8 +1804,8 @@ def report_session_view(domain, report_id):
     # injected into an existing observation.
     historical_snapshot = json.loads(json.dumps(session["snapshot"]))
     report = prepare_report_view(historical_snapshot)
-    human_interpretation = _load_human_interpretation(domain, report_id)
-    report_notes = _load_report_notes(domain)
+    human_interpretation = load_human_interpretation(RESEARCH_DB, domain, report_id)
+    report_notes = load_report_notes(RESEARCH_DB, domain)
 
     return render_template(
         "full_report.html",
