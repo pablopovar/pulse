@@ -6,6 +6,7 @@ import pytest
 
 from db.migrate import migrate_up
 from db.sqlite import connect_sqlite
+from jobs.store import claim_next_job, enqueue_job
 from services.page_discovery import (
     discover_sitemap_urls,
     get_discovery_state,
@@ -153,6 +154,46 @@ def test_failed_refresh_preserves_last_successful_state(tmp_path):
     assert after["last_successful_at"] == before["last_successful_at"]
     assert after["sitemap_count"] == 10
     assert after["ranking_count"] == 2
+
+
+def test_stale_worker_cannot_publish_discovery_projection(tmp_path):
+    db = tmp_path / "pulse.db"
+    migrate_up(db)
+    job = enqueue_job(db, "page_discovery", domain="example.com", payload={"domain": "example.com"})
+    claimed = claim_next_job(db, worker_id="worker-a", lease_seconds=60)
+    assert claimed and claimed["id"] == job["id"]
+
+    set_discovery_state(
+        db,
+        "example.com",
+        "running",
+        job_id=job["id"],
+        worker_id="worker-a",
+    )
+
+    with connect_sqlite(db) as con:
+        con.execute(
+            "UPDATE durable_job SET worker_id='worker-b' WHERE id=? AND status='running'",
+            (job["id"],),
+        )
+        con.commit()
+
+    with pytest.raises(RuntimeError, match="ownership lost"):
+        set_discovery_state(
+            db,
+            "example.com",
+            "ready",
+            job_id=job["id"],
+            worker_id="worker-a",
+            sitemap_source="https://example.com/sitemap.xml",
+            sitemap_count=99,
+            successful=True,
+        )
+
+    state = get_discovery_state(db, "example.com")
+    assert state["status"] == "running"
+    assert state["sitemap_count"] == 0
+    assert state["last_successful_at"] is None
 
 
 def test_sync_upserts_without_deleting_existing_pages(tmp_path):
