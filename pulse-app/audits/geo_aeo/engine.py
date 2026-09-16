@@ -161,7 +161,12 @@ def capture_page(raw_url: str, selected_page_type: str = "auto") -> dict[str, An
     title = _text(soup.title)
     description = _meta(soup, "description")
     canonical_tag = soup.find("link", rel=lambda value: value and "canonical" in value)
-    canonical = safe_url_join(final_url, str(canonical_tag.get("href", ""))) if isinstance(canonical_tag, Tag) else ""
+    canonical = ""
+    if isinstance(canonical_tag, Tag):
+        try:
+            canonical = safe_url_join(final_url, str(canonical_tag.get("href", "")))
+        except URLPolicyError:
+            canonical = ""
     robots_meta = " ".join(filter(None, [_meta(soup, "robots"), response.headers.get("x-robots-tag", "")])).lower()
 
     schema_objects, schema_errors = _schema_objects(soup)
