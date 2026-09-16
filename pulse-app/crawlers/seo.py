@@ -398,11 +398,6 @@ def build_robot_parser(base_url: str):
         return None, robots_url, f"robots.txt parse failed: {exc}"
 
 
-def ensure_schema(con):
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
 
 def add_issue(con, run_id, page_url, key, severity, title, detail=""):
     con.execute(
@@ -539,7 +534,6 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
 def crawl_worker(run_id, domain, base_url, page_cap, delay_ms, obey_robots, db_factory, selected_urls=None, follow_links=True):
     rp, robots_url, robots_error = build_robot_parser(base_url)
     with db_factory() as con:
-        ensure_schema(con)
         con.execute(
             """UPDATE crawl_run SET status='running',started_at=?,robots_url=? WHERE id=?""",
             (utcnow(), robots_url, run_id),
@@ -590,7 +584,6 @@ def crawl_worker(run_id, domain, base_url, page_cap, delay_ms, obey_robots, db_f
                     failed += 1
 
             with db_factory() as con:
-                ensure_schema(con)
                 new_links = persist_page(con, run_id, domain, url, allowed, result, parsed)
 
                 if follow_links:
@@ -639,7 +632,6 @@ def crawl_worker(run_id, domain, base_url, page_cap, delay_ms, obey_robots, db_f
             con.commit()
     except Exception as exc:
         with db_factory() as con:
-            ensure_schema(con)
             con.execute(
                 "UPDATE crawl_run SET status='failed',completed_at=?,error=? WHERE id=?",
                 (utcnow(), str(exc), run_id),
@@ -651,13 +643,11 @@ def register_crawler(app, research_db: Callable, get_site: Callable):
     from flask import abort, jsonify, redirect, render_template, request, url_for
 
     with research_db() as con:
-        ensure_schema(con)
 
     @app.route("/d/<domain>/crawl")
     def seo_crawl(domain):
         site = get_site(domain)
         with research_db() as con:
-            ensure_schema(con)
             runs = con.execute(
                 """SELECT * FROM crawl_run WHERE domain=? ORDER BY id DESC LIMIT 20""",
                 (site["domain"],),
@@ -793,7 +783,6 @@ def register_crawler(app, research_db: Callable, get_site: Callable):
     def seo_crawl_status(domain, run_id):
         site = get_site(domain)
         with research_db() as con:
-            ensure_schema(con)
             run = con.execute(
                 "SELECT * FROM crawl_run WHERE id=? AND domain=?",
                 (run_id, site["domain"]),
