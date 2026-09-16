@@ -68,7 +68,7 @@ def test_sources_and_overview_get_routes_render_with_readiness(monkeypatch, tmp_
 
     with app_module.app.test_request_context("/d/example.com/sources"):
         rendered = app_module.domain_sources("example.com")
-        assert "Sources &amp; Settings" in rendered
+        assert "Sources & Settings" in rendered
         assert "Discovery not started" in rendered
 
     with app_module.app.test_request_context("/d/example.com/"):
