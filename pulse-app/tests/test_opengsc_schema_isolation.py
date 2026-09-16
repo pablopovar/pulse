@@ -5,17 +5,22 @@ from pathlib import Path
 APP = Path(__file__).resolve().parents[1]
 ADAPTER = APP / "integrations" / "opengsc_adapter.py"
 
+# OpenGSC-owned tables/views referenced by the adapter. If application code
+# starts naming any of these directly, the integration boundary has leaked.
 OPEN_GSC_SCHEMA_NAMES = {
+    "Site",
     "gsc_keyword_inventory",
     "gsc_keyword_observation",
     "ClaritySnapshot",
     "AeoCheck",
     "TrackedQuestion",
     "TrackedKeyword",
+    "Backlink",
     "RefDomainRow",
     "BacklinkSnapshot",
     "DomainMetricCache",
     "CompetitorKeyword",
+    "SiteAudit",
     "SiteAuditPage",
     "SitemapUrl",
     "SiteHealth",
