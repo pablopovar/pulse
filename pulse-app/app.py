@@ -5,12 +5,10 @@ import csv
 import io
 import zipfile
 import sqlite3
-import subprocess
 from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import urlparse
-from services.safe_fetcher import safe_fetcher
-from services.url_policy import site_page_identity as normalize_site_page_url, url_path as site_page_path
+from services.url_policy import site_page_identity as normalize_site_page_url
 from services.manual_ai_sources import load_manual_ai_source as load_manual_ai_source_state, save_manual_ai_source
 from services.domain_company import infer_company_name as infer_company_name_from_db, save_company_name
 from services.report_collaboration import (
@@ -29,13 +27,9 @@ from db.sqlite import connect_sqlite
 from db.migrate import validate_schema_current
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, send_from_directory, url_for
-import xml.etree.ElementTree as ET
-import urllib.request
 import urllib.parse
-import gzip
 import re
 import json
-import urllib.error
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -44,9 +38,8 @@ REPORTS_DIR = Path(os.environ.get("REPORTS_DIR", "/data/reports"))
 RESEARCH_DB = Path(os.environ.get("RESEARCH_DB", "/data/dashboard/research.db"))
 from audits.geo_aeo.service import run_audit as run_geo_aeo_audit
 from reports.full_pdf import build_full_report_pdf
-from services.report_data import collect_report_data
-from reports.web_report import create_report_session, load_report_session, list_report_sessions, prepare_report_view
-from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, list_models as list_manual_ai_analysis_models, run_analysis as run_manual_ai_analysis
+from reports.web_report import load_report_session, list_report_sessions, prepare_report_view
+from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, list_models as list_manual_ai_analysis_models
 from services.security_boundary import configure_security
 from jobs.store import enqueue_job
 from jobs.store import cancel_queued_job, get_job, list_jobs
@@ -59,10 +52,8 @@ from services.page_discovery import (
     sync_site_pages as canonical_sync_site_pages,
 )
 from services.source_inventory import (
-    SOURCE_CATALOG,
     detected_source_state as service_detected_source_state,
     domain_sources_for_site as service_domain_sources_for_site,
-    selected_source_keys as service_selected_source_keys,
     save_domain_sources as persist_domain_sources,
     site_id_value as service_site_id_value,
 )
