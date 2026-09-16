@@ -33,6 +33,7 @@ REQUIRED_TABLES = {
     "report_session",
     "manual_ai_source",
     "domain_source",
+    "domain_discovery_state",
     "extension_global",
     "ai_question_set",
     "ai_question_definition",
@@ -101,10 +102,11 @@ def test_upgrade_from_version_one_applies_only_pending_migrations(tmp_path):
     finally:
         raw.close()
 
-    assert migrate_up(db) == [2, 3, 4, 5]
+    assert migrate_up(db) == [2, 3, 4, 5, 6]
 
     validate_schema_current(db)
     assert "cross_model_comparison" in _table_names(db)
+    assert "domain_discovery_state" in _table_names(db)
 
 
 def test_migrations_are_idempotent(tmp_path):
