@@ -28,13 +28,7 @@ def _delete_ids(con, table, col, ids):
     marks = ",".join("?" for _ in ids)
     con.execute(f'DELETE FROM "{table}" WHERE "{col}" IN ({marks})', ids)
 
-def ensure_delete_schema(con):
-    # Compatibility hook only. Schema is owned by versioned migrations.
-    return None
-
-
 def delete_domain_data(con, domain):
-    ensure_delete_schema(con)
     tables = _tables(con)
 
     page_ids = _ids(con, "site_page", domain)
