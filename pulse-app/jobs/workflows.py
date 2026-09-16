@@ -193,10 +193,19 @@ def run_page_discovery(job, worker_id):
         set_job_stage(RESEARCH_DB, rid, worker_id=worker_id, stage="page_discovery"),
         stage="page_discovery",
     )
-    set_discovery_state(RESEARCH_DB, domain, "running", job_id=rid, error="")
+    set_discovery_state(
+        RESEARCH_DB, domain, "running", job_id=rid, worker_id=worker_id, error=""
+    )
     site = get_site(RESEARCH_DB, domain)
     if not site:
-        set_discovery_state(RESEARCH_DB, domain, "failed", job_id=rid, error="Domain not found.")
+        set_discovery_state(
+            RESEARCH_DB,
+            domain,
+            "failed",
+            job_id=rid,
+            worker_id=worker_id,
+            error="Domain not found.",
+        )
         raise RuntimeError(f"Domain not found: {domain}")
     try:
         outcome = sync_site_pages(
@@ -208,13 +217,21 @@ def run_page_discovery(job, worker_id):
             max_urls=int(p.get("max_urls") or 20_000),
         )
     except Exception as exc:
-        set_discovery_state(RESEARCH_DB, domain, "failed", job_id=rid, error=str(exc))
+        set_discovery_state(
+            RESEARCH_DB,
+            domain,
+            "failed",
+            job_id=rid,
+            worker_id=worker_id,
+            error=str(exc),
+        )
         raise
     set_discovery_state(
         RESEARCH_DB,
         domain,
         "ready",
         job_id=rid,
+        worker_id=worker_id,
         sitemap_source=outcome["sitemap_source"],
         sitemap_count=outcome["sitemap_count"],
         ranking_count=outcome["ranking_count"],
