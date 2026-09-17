@@ -127,6 +127,36 @@ def get_discovery_state(db_path: str | Path, domain: str) -> dict:
     }
 
 
+def get_domain_readiness(db_path: str | Path, domain: str) -> dict:
+    """Return the durable, read-only page-discovery state used by request views."""
+
+    with connect_sqlite(db_path, readonly=True) as con:
+        row = con.execute(
+            "SELECT COUNT(*) AS n FROM site_page WHERE domain=? COLLATE NOCASE",
+            (domain,),
+        ).fetchone()
+    pages = int(row["n"] if row else 0)
+    discovery = get_discovery_state(db_path, domain)
+    status = str(discovery.get("status") or "not_started")
+    if pages:
+        label = "Ready"
+    elif status == "queued":
+        label = "Discovery queued"
+    elif status == "running":
+        label = "Discovering"
+    elif status == "failed":
+        label = "Discovery failed"
+    else:
+        label = "Discovery not started"
+    return {
+        "ready": pages > 0,
+        "label": label,
+        "pages": pages,
+        "status": status,
+        "error": str(discovery.get("error") or ""),
+    }
+
+
 def set_discovery_state(
     db_path: str | Path,
     domain: str,
