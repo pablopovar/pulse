@@ -48,6 +48,7 @@ from services.page_discovery import (
     discover_domain_sitemap,
     discover_sitemap_urls,
     get_discovery_state,
+    get_domain_readiness,
     set_discovery_state,
     sync_site_pages as canonical_sync_site_pages,
 )
@@ -666,7 +667,7 @@ def domain_new():
 @app.route("/d/<domain>/sources", methods=["GET", "POST"])
 def domain_sources(domain):
     site = get_site(domain)
-    readiness = ensure_domain_ready(domain)
+    readiness = get_domain_readiness(RESEARCH_DB, domain)
     message = request.args.get("message", "").strip()
     if request.method == "POST":
         persist_domain_sources(
@@ -797,7 +798,7 @@ def tools(domain):
 def overview(domain):
     site = get_site(domain)
     summary, recent = domain_seo(site["id"])
-    return render_template("overview.html",sites=get_sites(),site=site,summary=summary,recent=recent,reports=report_files(domain)[:5],readiness=ensure_domain_ready(domain),sources=domain_sources_for_site(site))
+    return render_template("overview.html",sites=get_sites(),site=site,summary=summary,recent=recent,reports=report_files(domain)[:5],readiness=get_domain_readiness(RESEARCH_DB, domain),sources=domain_sources_for_site(site))
 
 
 @app.route("/d/<domain>/pages")
@@ -1624,7 +1625,7 @@ def reports(domain):
 
 @app.post("/d/<domain>/reports/full")
 def generate_full_web_report(domain):
-    get_site(domain); ensure_domain_ready(domain)
+    get_site(domain)
     job=enqueue_job(RESEARCH_DB,"report_refresh",domain=domain,payload={"domain":domain,"page_cap":5000,"delay_ms":0,"obey_robots":True},max_attempts=3)
     return redirect(url_for("reports",domain=domain,message=f"Full Pulse refresh queued · job {job['id']}"))
 
