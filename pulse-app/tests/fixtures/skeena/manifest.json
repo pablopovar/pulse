@@ -1,0 +1,16 @@
+{
+  "captured_at": "2026-09-24",
+  "source": "https://skeenagoldsilver.com/sitemap_index.xml",
+  "counts": {
+    "post-sitemap.xml": 38,
+    "page-sitemap.xml": 32,
+    "article-sitemap.xml": 66,
+    "corporate-media-sitemap.xml": 44,
+    "news-release-sitemap1.xml": 201,
+    "news-release-sitemap2.xml": 66,
+    "webcast-sitemap.xml": 2,
+    "category-sitemap.xml": 1
+  },
+  "total": 450,
+  "notes": "The compact XML fixtures preserve the index and representative entries. The regression test expands each child to its captured count so frontier behavior remains deterministic without live-site I/O."
+}

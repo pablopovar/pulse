@@ -99,7 +99,10 @@ def same_origin(left: str, right: str) -> bool:
 def same_hostname(url: str, domain: str) -> bool:
     try:
         _parsed, _scheme, host, _port = _http_parts(url)
-        return host == domain_hostname(domain)
+        wanted = domain_hostname(domain)
+        return (host[4:] if host.startswith("www.") else host) == (
+            wanted[4:] if wanted.startswith("www.") else wanted
+        )
     except URLPolicyError:
         return False
 
@@ -154,7 +157,9 @@ def site_page_identity(value: str | None, domain: str) -> str | None:
         parsed, _scheme, host, _port = _http_parts(raw)
     except URLPolicyError:
         return None
-    if host != wanted:
+    if (host[4:] if host.startswith("www.") else host) != (
+        wanted[4:] if wanted.startswith("www.") else wanted
+    ):
         return None
     path = parsed.path or "/"
     if path != "/":

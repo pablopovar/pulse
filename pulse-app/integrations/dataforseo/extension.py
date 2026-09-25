@@ -1,4 +1,5 @@
 from flask import redirect, render_template, request, url_for
+from db.migrate import SchemaCompatibilityError
 from . import connector as dfs
 
 def register_dataforseo_extension(app,research_db,get_site,get_sites):
@@ -19,24 +20,25 @@ def register_dataforseo_extension(app,research_db,get_site,get_sites):
         except Exception: calls=2
         try: items=max(1,min(1000,int(request.form.get("max_items_per_run","10"))))
         except Exception: items=10
-        with research_db() as con:
-            dfs.ensure_schema(con); dfs.get_project(con,site["domain"])
-            con.execute("""UPDATE extension_project SET enabled=?,max_items_per_run=?,
-                         max_calls_per_run=?,updated_at=?
-                         WHERE domain=? AND extension_key='dataforseo'""",
-                        (enabled,items,calls,dfs.now(),site["domain"]))
-            con.commit()
-        return redirect(url_for("dataforseo_extension",domain=site["domain"],message="DataForSEO project settings saved."))
+        try:
+            with research_db() as con:
+                dfs.save_project_settings(
+                    con,site["domain"],enabled=enabled,
+                    max_items_per_run=items,max_calls_per_run=calls,
+                )
+            msg="DataForSEO project settings saved."
+        except SchemaCompatibilityError as exc:
+            msg=f"DataForSEO schema is not current: {exc}"
+        except Exception as exc:
+            msg=f"DataForSEO settings were not saved: {exc}"
+        return redirect(url_for("dataforseo_extension",domain=site["domain"],message=msg))
 
     @app.post("/d/<domain>/extensions/dataforseo/kill-switch")
     def dataforseo_kill_switch(domain):
         site=get_site(domain)
         kill=1 if request.form.get("kill")=="1" else 0
         with research_db() as con:
-            dfs.ensure_schema(con)
-            con.execute("UPDATE extension_global SET kill_switch=?,updated_at=? WHERE extension_key='dataforseo'",
-                        (kill,dfs.now()))
-            con.commit()
+            dfs.set_kill_switch(con,kill)
         msg="DataForSEO kill switch ON. All API calls disabled." if kill else "DataForSEO kill switch OFF."
         return redirect(url_for("dataforseo_extension",domain=site["domain"],message=msg))
 

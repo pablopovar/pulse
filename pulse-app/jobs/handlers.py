@@ -1,4 +1,11 @@
-from jobs.workflows import run_crawl, run_audit, run_ai, run_page_discovery, run_report_refresh
+from jobs.workflows import (
+    run_audit,
+    run_ai,
+    run_background_crawl,
+    run_crawl,
+    run_page_discovery,
+    run_report_refresh,
+)
 
 
 def _healthcheck(job, worker_id=None):
@@ -8,6 +15,7 @@ def _healthcheck(job, worker_id=None):
 HANDLERS={
     "worker.healthcheck":_healthcheck,
     "crawl":run_crawl,
+    "background_crawl":run_background_crawl,
     "page_discovery":run_page_discovery,
     "geo_aeo_audit":run_audit,
     "manual_ai_analysis":run_ai,

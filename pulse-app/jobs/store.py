@@ -8,7 +8,7 @@ from typing import Any
 
 from db.sqlite import connect_sqlite
 
-ALL_STATUSES = frozenset({"queued", "running", "completed", "partial", "failed", "cancelled"})
+ALL_STATUSES = frozenset({"queued", "running", "paused", "completed", "partial", "failed", "cancelled"})
 TERMINAL_STATUSES = frozenset({"completed", "partial", "failed", "cancelled"})
 
 
@@ -50,6 +50,7 @@ def enqueue_job(
     payload: dict[str, Any] | None = None,
     max_attempts: int = 3,
     job_id: str | None = None,
+    available_at: str | None = None,
 ) -> dict[str, Any]:
     job_type = str(job_type or "").strip()
     if not job_type:
@@ -64,8 +65,8 @@ def enqueue_job(
             """
             INSERT INTO durable_job(
                 id,domain,job_type,status,payload_json,result_ref_json,error_json,
-                attempts,max_attempts,queued_at,created_at,updated_at
-            ) VALUES (?,?,?,'queued',?,'{}','{}',0,?,?,?,?)
+                attempts,max_attempts,queued_at,available_at,created_at,updated_at
+            ) VALUES (?,?,?,'queued',?,'{}','{}',0,?,?,?,?,?)
             """,
             (
                 job_id,
@@ -74,6 +75,7 @@ def enqueue_job(
                 json.dumps(payload or {}, separators=(",", ":")),
                 int(max_attempts),
                 now,
+                available_at or now,
                 now,
                 now,
             ),
@@ -138,10 +140,11 @@ def claim_next_job(
             """
             SELECT id
             FROM durable_job
-            WHERE status='queued'
+            WHERE status='queued' AND (available_at<=? OR available_at=queued_at)
             ORDER BY queued_at ASC, created_at ASC
             LIMIT 1
-            """
+            """,
+            (now,),
         ).fetchone()
         if row is None:
             con.commit()
@@ -291,19 +294,108 @@ def fail_from_exception(
     )
 
 
-def cancel_queued_job(db_path: str | Path, job_id: str) -> bool:
+def cancel_job(db_path: str | Path, job_id: str, *, reason: str = "Cancelled by operator.") -> bool:
     now = iso()
     with connect_sqlite(db_path) as con:
+        con.execute("BEGIN IMMEDIATE")
         changed = con.execute(
             """
             UPDATE durable_job
-            SET status='cancelled',cancelled_at=?,updated_at=?
-            WHERE id=? AND status='queued'
+            SET status='cancelled',cancelled_at=?,completed_at=?,heartbeat_at=NULL,
+                lease_expires_at=NULL,worker_id='',
+                error_json=?,updated_at=?
+            WHERE id=? AND status IN ('queued','running','paused')
+            """,
+            (
+                now,
+                now,
+                json.dumps({"kind": "cancelled", "message": reason, "at": now}, separators=(",", ":")),
+                now,
+                job_id,
+            ),
+        ).rowcount
+        if changed:
+            con.execute(
+                """
+                UPDATE crawl_run
+                SET status='cancelled',cancelled_at=?,completed_at=?,status_reason=?,current_url=''
+                WHERE execution_run_id=? AND status IN ('queued','running','paused')
+                """,
+                (now, now, reason, job_id),
+            )
+            con.execute(
+                """
+                UPDATE crawl_frontier SET state='cancelled',reason=?,updated_at=?
+                WHERE crawl_run_id IN (SELECT id FROM crawl_run WHERE execution_run_id=?)
+                  AND state IN ('queued','fetching')
+                """,
+                (reason, now, job_id),
+            )
+        con.commit()
+    return changed == 1
+
+
+def cancel_queued_job(db_path: str | Path, job_id: str) -> bool:
+    """Backward-compatible name; cancellation now also supports running jobs."""
+
+    return cancel_job(db_path, job_id)
+
+
+def pause_job(db_path: str | Path, job_id: str) -> bool:
+    now = iso()
+    with connect_sqlite(db_path) as con:
+        con.execute("BEGIN IMMEDIATE")
+        changed = con.execute(
+            """
+            UPDATE durable_job
+            SET status='paused',paused_at=?,heartbeat_at=NULL,lease_expires_at=NULL,
+                worker_id='',updated_at=?
+            WHERE id=? AND status IN ('queued','running')
             """,
             (now, now, job_id),
         ).rowcount
+        if changed:
+            con.execute(
+                """
+                UPDATE crawl_run
+                SET status='paused',paused_at=?,status_reason='Paused by operator.',current_url=''
+                WHERE execution_run_id=? AND status IN ('queued','running')
+                """,
+                (now, job_id),
+            )
         con.commit()
     return changed == 1
+
+
+def resume_job(db_path: str | Path, job_id: str) -> bool:
+    now = iso()
+    with connect_sqlite(db_path) as con:
+        con.execute("BEGIN IMMEDIATE")
+        changed = con.execute(
+            """
+            UPDATE durable_job
+            SET status='queued',queued_at=?,available_at=?,paused_at=NULL,
+                error_json='{}',updated_at=?
+            WHERE id=? AND status='paused'
+            """,
+            (now, now, now, job_id),
+        ).rowcount
+        if changed:
+            con.execute(
+                """
+                UPDATE crawl_run SET status='queued',paused_at=NULL,status_reason='Resumed by operator.'
+                WHERE execution_run_id=? AND status='paused'
+                """,
+                (job_id,),
+            )
+        con.commit()
+    return changed == 1
+
+
+def job_control_state(db_path: str | Path, job_id: str) -> str | None:
+    with connect_sqlite(db_path, readonly=True) as con:
+        row = con.execute("SELECT status FROM durable_job WHERE id=?", (job_id,)).fetchone()
+    return str(row["status"]) if row else None
 
 
 def recover_abandoned_jobs(

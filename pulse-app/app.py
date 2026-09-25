@@ -42,7 +42,7 @@ from reports.web_report import load_report_session, list_report_sessions, prepar
 from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, list_models as list_manual_ai_analysis_models
 from services.security_boundary import configure_security
 from jobs.store import enqueue_job
-from jobs.store import cancel_queued_job, get_job, list_jobs
+from jobs.store import cancel_job, get_job, list_jobs, pause_job, resume_job
 from integrations.opengsc_adapter import OpenGSCAdapter
 from services.page_discovery import (
     discover_domain_sitemap,
@@ -1614,12 +1614,15 @@ def geo_aeo_report(domain,run_id):
 @app.route("/d/<domain>/reports")
 def reports(domain):
     site = get_site(domain)
+    jobs = list_jobs(RESEARCH_DB, domain=domain, limit=20)
     return render_template(
         "reports.html",
         sites=get_sites(),
         site=site,
         reports=report_files(domain),
         report_sessions=list_report_sessions(RESEARCH_DB, domain),
+        jobs=jobs,
+        active_jobs=[job for job in jobs if job["status"] in {"queued", "running", "paused"}],
     )
 
 
@@ -1856,13 +1859,62 @@ def durable_job_cancel(job_id):
     job = get_job(RESEARCH_DB, job_id)
     if not job:
         abort(404)
-    if job["status"] != "queued":
+    if job["status"] not in {"queued", "running", "paused"}:
         return jsonify({
-            "error": "Only queued jobs can be cancelled at this stage.",
+            "error": "Only queued, running, or paused jobs can be cancelled.",
             "status": job["status"],
         }), 409
-    cancel_queued_job(RESEARCH_DB, job_id)
+    cancel_job(RESEARCH_DB, job_id)
     return jsonify(get_job(RESEARCH_DB, job_id))
+
+
+@app.post("/api/jobs/<job_id>/pause")
+def durable_job_pause(job_id):
+    job = get_job(RESEARCH_DB, job_id)
+    if not job:
+        abort(404)
+    if not pause_job(RESEARCH_DB, job_id):
+        return jsonify({"error": "Only queued or running jobs can be paused.", "status": job["status"]}), 409
+    return jsonify(get_job(RESEARCH_DB, job_id))
+
+
+@app.post("/api/jobs/<job_id>/resume")
+def durable_job_resume(job_id):
+    job = get_job(RESEARCH_DB, job_id)
+    if not job:
+        abort(404)
+    if not resume_job(RESEARCH_DB, job_id):
+        return jsonify({"error": "Only paused jobs can be resumed.", "status": job["status"]}), 409
+    return jsonify(get_job(RESEARCH_DB, job_id))
+
+
+def _domain_job_or_404(domain, job_id):
+    site = get_site(domain)
+    job = get_job(RESEARCH_DB, job_id)
+    if not job or job["domain"].lower() != site["domain"].lower():
+        abort(404)
+    return site, job
+
+
+@app.post("/d/<domain>/jobs/<job_id>/cancel")
+def domain_job_cancel(domain, job_id):
+    site, _job = _domain_job_or_404(domain, job_id)
+    cancel_job(RESEARCH_DB, job_id)
+    return redirect(url_for("reports", domain=site["domain"]))
+
+
+@app.post("/d/<domain>/jobs/<job_id>/pause")
+def domain_job_pause(domain, job_id):
+    site, _job = _domain_job_or_404(domain, job_id)
+    pause_job(RESEARCH_DB, job_id)
+    return redirect(url_for("reports", domain=site["domain"]))
+
+
+@app.post("/d/<domain>/jobs/<job_id>/resume")
+def domain_job_resume(domain, job_id):
+    site, _job = _domain_job_or_404(domain, job_id)
+    resume_job(RESEARCH_DB, job_id)
+    return redirect(url_for("reports", domain=site["domain"]))
 
 if __name__ == "__main__":
     validate_schema_current(RESEARCH_DB)

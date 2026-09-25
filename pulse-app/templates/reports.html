@@ -7,6 +7,27 @@
 </div>
 <div class="panel report-workflow-note"><p><strong>{{ site.domain }} is ready.</strong> Crawl, GEO/AEO inspection and other evidence retrieval happen internally as needed.</p><p><a href="{{ url_for('domain_sources', domain=site.domain) }}">Add / select sources</a> to expand monitoring coverage. Historical observations are retained; they are not separate client reports.</p></div>
 
+{% if active_jobs %}
+<h2>Active work</h2>
+<section class="panel">
+  <table><thead><tr><th>Job</th><th>Type</th><th>Status</th><th>Stage</th><th>Queued</th><th>Controls</th></tr></thead><tbody>
+  {% for job in active_jobs %}
+  <tr>
+    <td><code>{{ job.id }}</code></td><td>{{ job.job_type }}</td><td>{{ job.status }}</td><td>{{ job.stage }}</td><td>{{ job.queued_at }}</td>
+    <td>
+      {% if job.status in ['queued','running'] %}
+      <form method="post" action="{{ url_for('domain_job_pause', domain=site.domain, job_id=job.id) }}" style="display:inline"><button type="submit">Pause</button></form>
+      {% elif job.status == 'paused' %}
+      <form method="post" action="{{ url_for('domain_job_resume', domain=site.domain, job_id=job.id) }}" style="display:inline"><button type="submit">Resume</button></form>
+      {% endif %}
+      <form method="post" action="{{ url_for('domain_job_cancel', domain=site.domain, job_id=job.id) }}" style="display:inline"><button type="submit">Cancel</button></form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
+
 {% if report_sessions %}
 {% set current = report_sessions[0] %}
 <h2>Current pulse</h2>

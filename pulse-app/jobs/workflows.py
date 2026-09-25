@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from db.sqlite import connect_sqlite
 from jobs.publication import publish_report_if_owned
-from jobs.store import set_job_stage, set_job_publication_status
+from jobs.store import enqueue_job, set_job_stage, set_job_publication_status
+from services.crawl_frontier import get_policy
 from services.report_data import collect_report_data
 from reports.manual_ai_analysis import run_analysis as run_manual_ai_analysis
 from reports.web_report import create_report_session
@@ -38,6 +39,42 @@ def _research_db():
     return connect_sqlite(RESEARCH_DB)
 
 
+def schedule_background_crawl(domain, policy, *, exclude_job_id="", available_at=None):
+    if not policy["background_enabled"]:
+        return None
+    with connect_sqlite(RESEARCH_DB, readonly=True) as con:
+        remaining = con.execute(
+            """
+            SELECT COUNT(*) AS n FROM crawl_url_inventory
+            WHERE domain=? COLLATE NOCASE AND eligibility='eligible' AND last_crawled_at IS NULL
+            """,
+            (domain,),
+        ).fetchone()["n"]
+        active = con.execute(
+            """
+            SELECT 1 FROM durable_job
+            WHERE domain=? COLLATE NOCASE AND job_type='background_crawl'
+              AND status IN ('queued','running','paused') AND id<>?
+            LIMIT 1
+            """,
+            (domain, exclude_job_id),
+        ).fetchone()
+    if not remaining or active:
+        return None
+    available = available_at or (
+        datetime.now(timezone.utc)
+        + timedelta(seconds=int(policy["batch_cooldown_seconds"]))
+    ).isoformat(timespec="seconds")
+    return enqueue_job(
+        RESEARCH_DB,
+        "background_crawl",
+        domain=domain,
+        payload={"domain": domain},
+        max_attempts=3,
+        available_at=available,
+    )
+
+
 def ensure_crawl(job):
     p = job["payload"]
     rid = job["id"]
@@ -52,14 +89,14 @@ def ensure_crawl(job):
             """
             INSERT INTO crawl_run(
                 domain,base_url,status,page_cap,delay_ms,obey_robots,
-                report_scope,selected_urls_json,execution_run_id
-            ) VALUES (?,?,?,?,?,?,?,?,?)
+                report_scope,selected_urls_json,execution_run_id,crawl_mode,configuration_json
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 p["domain"], p.get("base_url") or "https://" + p["domain"], "queued",
                 int(p.get("page_cap") or len(urls) or 100), int(p.get("delay_ms") or 0),
                 int(bool(p.get("obey_robots", True))), p.get("report_scope") or "",
-                json.dumps(urls), rid,
+                json.dumps(urls), rid, p.get("crawl_mode") or "initial", json.dumps(p),
             ),
         )
         con.commit()
@@ -83,6 +120,23 @@ def reset_crawl(run_id):
         con.commit()
 
 
+def resume_crawl(run_id):
+    with connect_sqlite(RESEARCH_DB) as con:
+        con.execute(
+            """
+            UPDATE crawl_frontier
+            SET state='queued',reason='resumed_after_interruption',updated_at=?
+            WHERE crawl_run_id=? AND state='fetching'
+            """,
+            (now(), run_id),
+        )
+        con.execute(
+            "UPDATE crawl_run SET status='queued',completed_at=NULL,error=NULL,current_url='' WHERE id=?",
+            (run_id,),
+        )
+        con.commit()
+
+
 def run_crawl(job, worker_id):
     from crawlers.seo import crawl_worker
 
@@ -90,7 +144,8 @@ def run_crawl(job, worker_id):
     run_id, status = ensure_crawl(job)
     if status in {"completed", "partial"}:
         return result(status, crawl_run_id=run_id)
-    reset_crawl(run_id)
+    if status in {"running", "paused", "failed"}:
+        resume_crawl(run_id)
     _require_owned(
         set_job_stage(RESEARCH_DB, job["id"], worker_id=worker_id, stage="crawl"),
         stage="crawl",
@@ -106,6 +161,8 @@ def run_crawl(job, worker_id):
         _research_db,
         urls,
         bool(p.get("follow_links", not bool(urls))),
+        crawl_mode=p.get("crawl_mode") or "initial",
+        execution_run_id=job["id"],
     )
     with connect_sqlite(RESEARCH_DB, readonly=True) as con:
         row = con.execute("SELECT status,error FROM crawl_run WHERE id=?", (run_id,)).fetchone()
@@ -113,6 +170,49 @@ def run_crawl(job, worker_id):
     if status == "failed":
         raise RuntimeError(row["error"] or "crawl failed")
     return result(status, crawl_run_id=run_id)
+
+
+def run_background_crawl(job, worker_id):
+    p = job["payload"]
+    domain = p["domain"]
+    with connect_sqlite(RESEARCH_DB) as con:
+        policy = get_policy(con, domain)
+        con.commit()
+    if not policy["background_enabled"]:
+        return result("completed", background="disabled")
+    outcome = run_crawl(
+        {
+            **job,
+            "payload": {
+                **p,
+                "domain": domain,
+                "base_url": p.get("base_url") or "https://" + domain,
+                "page_cap": min(
+                    int(p.get("page_cap") or policy["max_urls_per_batch"]),
+                    int(policy["max_urls_per_batch"]),
+                ),
+                "delay_ms": int(p.get("delay_ms") or policy["delay_ms"]),
+                "obey_robots": True,
+                "report_scope": "background",
+                "selected_urls": [],
+                "follow_links": True,
+                "crawl_mode": "background",
+            },
+        },
+        worker_id,
+    )
+    with connect_sqlite(RESEARCH_DB, readonly=True) as con:
+        run = con.execute(
+            "SELECT cooldown_until FROM crawl_run WHERE id=?",
+            (outcome.get("result_ref") or {}).get("crawl_run_id"),
+        ).fetchone()
+    schedule_background_crawl(
+        domain,
+        policy,
+        exclude_job_id=job["id"],
+        available_at=run["cooldown_until"] if run and run["cooldown_until"] else None,
+    )
+    return outcome
 
 
 def ensure_audit(job, scope):
@@ -349,23 +449,29 @@ def run_report_refresh(job, worker_id):
         stage="report_refresh",
     )
 
+    with connect_sqlite(RESEARCH_DB) as con:
+        policy = get_policy(con, domain)
+        con.commit()
+
+    initial_target = max(1, min(100, int(p.get("initial_target") or policy["initial_target"])))
     crawl = run_crawl(
         {
             **job,
             "payload": {
                 "domain": domain,
                 "base_url": "https://" + domain,
-                "page_cap": int(p.get("page_cap") or 5000),
-                "delay_ms": int(p.get("delay_ms") or 0),
+                "page_cap": initial_target,
+                "delay_ms": int(p.get("delay_ms") or policy["delay_ms"]),
                 "obey_robots": True,
                 "report_scope": "report",
                 "selected_urls": [],
                 "follow_links": True,
+                "crawl_mode": "initial",
             },
         },
         worker_id,
     )
-    if crawl["status"] != "completed":
+    if crawl["status"] not in {"completed", "partial"}:
         _require_owned(
             set_job_publication_status(
                 RESEARCH_DB, rid, worker_id=worker_id, publication_status="withheld"
@@ -378,28 +484,35 @@ def run_report_refresh(job, worker_id):
             "error": {"kind": "prerequisite_partial", "message": "crawl incomplete"},
         }
 
-    # The crawl is allowed to discover links, but the audit consumes the durable
-    # site_page inventory. If this is a new domain, run the canonical discovery
-    # service explicitly rather than hiding network work inside audit_pages().
-    if not audit_pages(domain, []):
-        discovery = run_page_discovery(
-            {**job, "payload": {"domain": domain, "max_urls": int(p.get("page_cap") or 5000)}},
-            worker_id,
+    with connect_sqlite(RESEARCH_DB, readonly=True) as con:
+        page_rows = con.execute(
+            """
+            SELECT DISTINCT sp.id
+            FROM crawl_page cp
+            JOIN site_page sp ON sp.domain=? COLLATE NOCASE
+              AND (sp.url=cp.final_url OR sp.url=cp.url)
+            WHERE cp.crawl_run_id=? AND cp.status_code BETWEEN 200 AND 399
+            """,
+            (domain, crawl["result_ref"]["crawl_run_id"]),
+        ).fetchall()
+    page_ids = [int(row["id"]) for row in page_rows]
+    if not page_ids:
+        _require_owned(
+            set_job_publication_status(
+                RESEARCH_DB, rid, worker_id=worker_id, publication_status="withheld"
+            ),
+            stage="withhold_report",
         )
-        if discovery["status"] != "completed":
-            _require_owned(
-                set_job_publication_status(
-                    RESEARCH_DB, rid, worker_id=worker_id, publication_status="withheld"
-                ),
-                stage="withhold_report",
-            )
-            return {
-                "status": "partial",
-                "result_ref": {**crawl["result_ref"], **discovery["result_ref"], "publication": "withheld"},
-                "error": {"kind": "prerequisite_partial", "message": "page discovery incomplete"},
-            }
+        return {
+            "status": "partial",
+            "result_ref": {**crawl["result_ref"], "publication": "withheld"},
+            "error": {"kind": "no_initial_evidence", "message": "Initial crawl produced no auditable pages."},
+        }
 
-    audit = run_audit({**job, "payload": {"domain": domain, "scope": "report", "page_ids": []}}, worker_id)
+    audit = run_audit(
+        {**job, "payload": {"domain": domain, "scope": "report", "page_ids": page_ids}},
+        worker_id,
+    )
     if audit["status"] != "completed":
         _require_owned(
             set_job_publication_status(
@@ -452,6 +565,8 @@ def run_report_refresh(job, worker_id):
         raise
     if not published:
         raise RuntimeError("Durable job ownership lost immediately before report publication.")
+
+    schedule_background_crawl(domain, policy, exclude_job_id=rid)
 
     return result(
         "completed",

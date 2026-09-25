@@ -70,4 +70,10 @@
     <a class="button" href="{{ url_for('reports', domain=site.domain) }}">Skip / Continue</a>
   </div>
 </form>
+
+<section class="panel danger-zone">
+  <h2>Danger zone</h2>
+  <p>Permanently remove this domain and all Pulse-owned reports, evidence, crawl state, settings, and collaboration data.</p>
+  <a class="button" href="{{ url_for('domain_delete_confirm', domain=site.domain) }}">Remove domain…</a>
+</section>
 {% endblock %}

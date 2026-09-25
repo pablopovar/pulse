@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
-from flask import redirect, render_template, url_for
+import json
+from flask import redirect, render_template, request, url_for
 
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -52,7 +53,7 @@ def delete_domain_data(con, domain):
     for t in ("site_page_tag", "page_note"):
         _delete_ids(con, t, "page_id", page_ids)
 
-    preserve = {"keyword_tag", "page_tag", "domain_suppression"}
+    preserve = {"keyword_tag", "page_tag", "domain_suppression", "operational_audit"}
     for table in sorted(tables):
         if table in preserve:
             continue
@@ -78,20 +79,64 @@ def delete_domain_data(con, domain):
            ON CONFLICT(domain) DO UPDATE SET suppressed_at=excluded.suppressed_at""",
         (domain, _now())
     )
-    con.commit()
+
+
+def active_domain_jobs(con, domain):
+    if "durable_job" not in _tables(con):
+        return []
+    return con.execute(
+        """
+        SELECT id,job_type,status,stage,created_at FROM durable_job
+        WHERE domain=? COLLATE NOCASE AND status IN ('queued','running','paused')
+        ORDER BY created_at
+        """,
+        (domain,),
+    ).fetchall()
 
 def register_delete_domain(app, research_db, get_site, get_sites):
     @app.get("/d/<domain>/delete")
     def domain_delete_confirm(domain):
         site = get_site(domain)
-        return render_template("domain_delete.html", sites=get_sites(), site=site)
+        with research_db() as con:
+            active_jobs = active_domain_jobs(con, site["domain"])
+        return render_template(
+            "domain_delete.html", sites=get_sites(), site=site,
+            active_jobs=active_jobs, error="",
+        )
 
     @app.post("/d/<domain>/delete")
     def domain_delete(domain):
         site = get_site(domain)
         deleted = site["domain"]
+        confirmation = request.form.get("confirmation", "").strip()
+        if confirmation != deleted:
+            with research_db() as con:
+                active_jobs = active_domain_jobs(con, deleted)
+            return render_template(
+                "domain_delete.html", sites=get_sites(), site=site,
+                active_jobs=active_jobs,
+                error="Confirmation did not exactly match the domain.",
+            ), 400
         with research_db() as con:
+            con.execute("BEGIN IMMEDIATE")
+            active_jobs = active_domain_jobs(con, deleted)
+            if active_jobs:
+                con.rollback()
+                return render_template(
+                    "domain_delete.html", sites=get_sites(), site=site,
+                    active_jobs=active_jobs,
+                    error="Cancel active and paused jobs before permanently deleting this domain.",
+                ), 409
             delete_domain_data(con, deleted)
+            con.execute(
+                "INSERT INTO operational_audit(domain,action,detail_json,created_at) VALUES (?,?,?,?)",
+                (
+                    deleted, "domain_deleted",
+                    json.dumps({"recovery": "not_available", "confirmation": "exact_domain"}),
+                    _now(),
+                ),
+            )
+            con.commit()
 
         sites = get_sites()
         if sites:

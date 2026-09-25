@@ -20,6 +20,26 @@ def get_project(con,domain):
     con.commit()
     return con.execute("SELECT * FROM extension_project WHERE domain=? AND extension_key='dataforseo'",(domain,)).fetchone()
 
+def save_project_settings(con,domain,*,enabled,max_items_per_run,max_calls_per_run):
+    con.execute("BEGIN IMMEDIATE")
+    con.execute("""INSERT INTO extension_project
+      (domain,extension_key,enabled,max_items_per_run,max_calls_per_run,enabled_features_json,updated_at)
+      VALUES(?,'dataforseo',?,?,?,'[]',?)
+      ON CONFLICT(domain,extension_key) DO UPDATE SET
+        enabled=excluded.enabled,max_items_per_run=excluded.max_items_per_run,
+        max_calls_per_run=excluded.max_calls_per_run,updated_at=excluded.updated_at""",
+      (domain,int(bool(enabled)),int(max_items_per_run),int(max_calls_per_run),now()))
+    con.commit()
+
+def set_kill_switch(con,kill):
+    con.execute("BEGIN IMMEDIATE")
+    con.execute("""INSERT INTO extension_global(extension_key,kill_switch,updated_at)
+      VALUES('dataforseo',?,?)
+      ON CONFLICT(extension_key) DO UPDATE SET
+        kill_switch=excluded.kill_switch,updated_at=excluded.updated_at""",
+      (int(bool(kill)),now()))
+    con.commit()
+
 def killed(con):
     row=con.execute("SELECT kill_switch FROM extension_global WHERE extension_key='dataforseo'").fetchone()
     return truthy(os.environ.get(ENV_KILL)) or bool(row["kill_switch"])

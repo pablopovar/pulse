@@ -30,6 +30,9 @@ REQUIRED_TABLES = {
     "site_page",
     "audit_run",
     "crawl_run",
+    "crawl_url_inventory",
+    "crawl_frontier",
+    "domain_crawl_policy",
     "report_session",
     "manual_ai_source",
     "domain_source",
@@ -102,7 +105,7 @@ def test_upgrade_from_version_one_applies_only_pending_migrations(tmp_path):
     finally:
         raw.close()
 
-    assert migrate_up(db) == [2, 3, 4, 5, 6]
+    assert migrate_up(db) == list(range(2, latest_version() + 1))
 
     validate_schema_current(db)
     assert "cross_model_comparison" in _table_names(db)

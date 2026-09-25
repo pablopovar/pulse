@@ -16,30 +16,107 @@
 </section>
 
 <section class="panel">
-  <form method="post" action="{{ url_for('seo_crawl_run', domain=site.domain) }}" class="crawl-run-form">
-    <label>Page cap
-      <input type="number" name="page_cap" min="1" max="5000" value="100">
+  <h2>Two-speed crawl policy</h2>
+  <p>The initial crawl is bounded for reporting. Remaining eligible evidence is collected later in separate background batches.</p>
+  <form method="post" action="{{ url_for('seo_crawl_policy', domain=site.domain) }}" class="crawl-run-form">
+    <label>Initial pages
+      <input type="number" name="initial_target" min="1" max="100" value="{{ policy.initial_target }}">
+    </label>
+    <label>Background batch
+      <input type="number" name="max_urls_per_batch" min="1" max="500" value="{{ policy.max_urls_per_batch }}">
     </label>
     <label>Delay (ms)
-      <input type="number" name="delay_ms" min="0" max="10000" value="250">
+      <input type="number" name="delay_ms" min="0" max="60000" value="{{ policy.delay_ms }}">
+    </label>
+    <label>Batch cooldown (seconds)
+      <input type="number" name="batch_cooldown_seconds" min="0" max="604800" value="{{ policy.batch_cooldown_seconds }}">
+    </label>
+    <label>Daily budget
+      <input type="number" name="daily_page_budget" min="0" value="{{ policy.daily_page_budget }}">
+    </label>
+    <label>Weekly budget
+      <input type="number" name="weekly_page_budget" min="0" value="{{ policy.weekly_page_budget }}">
+    </label>
+    <label>Failure circuit breaker
+      <input type="number" name="max_consecutive_failures" min="1" value="{{ policy.max_consecutive_failures }}">
+    </label>
+    <label>Retry limit
+      <input type="number" name="max_retry_count" min="0" value="{{ policy.max_retry_count }}">
+    </label>
+    <label>Maximum depth
+      <input type="number" name="max_crawl_depth" min="0" value="{{ policy.max_crawl_depth }}">
+    </label>
+    <label>
+      <input type="checkbox" name="background_enabled" value="1" {% if policy.background_enabled %}checked{% endif %}>
+      Background crawling enabled
+    </label>
+    <label>Allowed URL patterns (one regular expression per line)
+      <textarea name="allowed_patterns" rows="3">{{ policy_allowed_patterns }}</textarea>
+    </label>
+    <label>Excluded URL patterns (one regular expression per line)
+      <textarea name="excluded_patterns" rows="3">{{ policy_excluded_patterns }}</textarea>
+    </label>
+    <label>Included child sitemaps (one URL or pattern per line; empty means all)
+      <textarea name="included_sitemaps" rows="3">{{ policy_included_sitemaps }}</textarea>
+    </label>
+    <button type="submit">Save policy</button>
+  </form>
+</section>
+
+<section class="panel">
+  <form method="post" action="{{ url_for('seo_crawl_run', domain=site.domain) }}" class="crawl-run-form">
+    <label>Initial page target
+      <input type="number" name="page_cap" min="1" max="100" value="{{ policy.initial_target }}">
+    </label>
+    <label>Delay (ms)
+      <input type="number" name="delay_ms" min="0" max="60000" value="{{ policy.delay_ms }}">
     </label>
     <label>
       <input type="checkbox" name="obey_robots" value="1" checked>
       Obey robots.txt
     </label>
-    <button type="submit" class="primary">Run Crawl</button>
+    <button type="submit" class="primary">Run bounded initial crawl</button>
   </form>
-  <p class="research-help">Sitemap-first, same-domain, sequential crawler. Internal links discovered during the crawl are added to the queue.</p>
+  <p class="research-help">Sitemap-aware, classified and same-domain. Discovery does not automatically make a URL eligible to crawl.</p>
 </section>
+
+<section class="panel crawl-summary">
+  <div class="metric"><strong>Eligible</strong><span>{{ inventory_counts.get('eligible', 0) }}</span></div>
+  <div class="metric"><strong>Deferred</strong><span>{{ inventory_counts.get('deferred', 0) }}</span></div>
+  <div class="metric"><strong>Duplicates</strong><span>{{ inventory_counts.get('duplicate', 0) }}</span></div>
+  <div class="metric"><strong>Excluded</strong><span>{{ inventory_counts.get('excluded', 0) }}</span></div>
+</section>
+{% if source_counts %}
+<section class="panel">
+  <h2>URL discovery provenance</h2>
+  <table><thead><tr><th>Source</th><th>URLs</th></tr></thead><tbody>
+  {% for row in source_counts %}<tr><td>{{ row.source }}</td><td>{{ row.n }}</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
+{% if exclusion_counts %}
+<section class="panel">
+  <h2>Deferred and excluded reasons</h2>
+  <table><thead><tr><th>Reason</th><th>URLs</th></tr></thead><tbody>
+  {% for row in exclusion_counts %}<tr><td>{{ row.decision_reason }}</td><td>{{ row.n }}</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
 
 {% if latest %}
 <section class="panel crawl-summary">
   <div class="metric"><strong>Status</strong><span>{{ latest.status }}</span></div>
   <div class="metric"><strong>Discovered</strong><span>{{ latest.pages_discovered }}</span></div>
+  <div class="metric"><strong>Eligible</strong><span>{{ latest.pages_eligible }}</span></div>
   <div class="metric"><strong>Crawled</strong><span>{{ latest.pages_crawled }}</span></div>
+  <div class="metric"><strong>Unchanged</strong><span>{{ latest.pages_unchanged }}</span></div>
+  <div class="metric"><strong>Skipped</strong><span>{{ latest.pages_skipped }}</span></div>
   <div class="metric"><strong>Failed</strong><span>{{ latest.pages_failed }}</span></div>
+  <div class="metric"><strong>Remaining</strong><span>{{ latest.pages_remaining }}</span></div>
   <div class="metric"><strong>Started</strong><span>{{ latest.started_at or '—' }}</span></div>
   <div class="metric"><strong>Completed</strong><span>{{ latest.completed_at or '—' }}</span></div>
+  {% if latest.current_url %}<div class="metric"><strong>Current URL</strong><span>{{ latest.current_url }}</span></div>{% endif %}
+  {% if latest.status_reason %}<div class="metric"><strong>Reason</strong><span>{{ latest.status_reason }}</span></div>{% endif %}
 </section>
 
 {% if issues %}
@@ -53,6 +130,15 @@
     {% endfor %}
     </tbody>
   </table>
+</section>
+{% endif %}
+
+{% if failure_counts %}
+<section class="panel">
+  <h2>Fetch failures by category</h2>
+  <table><thead><tr><th>Category</th><th>Pages</th></tr></thead><tbody>
+  {% for row in failure_counts %}<tr><td>{{ row.failure_kind }}</td><td>{{ row.n }}</td></tr>{% endfor %}
+  </tbody></table>
 </section>
 {% endif %}
 
@@ -96,12 +182,21 @@
 <section class="panel">
   <h2>Recent Crawl Runs</h2>
   <table>
-    <thead><tr><th>ID</th><th>Status</th><th>Crawled</th><th>Failed</th><th>Started</th><th>Completed</th></tr></thead>
+    <thead><tr><th>ID</th><th>Mode</th><th>Status</th><th>Crawled</th><th>Unchanged</th><th>Failed</th><th>Remaining</th><th>Started</th><th>Completed</th><th>Controls</th></tr></thead>
     <tbody>
     {% for r in runs %}
       <tr>
-        <td>{{ r.id }}</td><td>{{ r.status }}</td><td>{{ r.pages_crawled }}</td>
-        <td>{{ r.pages_failed }}</td><td>{{ r.started_at or '—' }}</td><td>{{ r.completed_at or '—' }}</td>
+        <td>{{ r.id }}</td><td>{{ r.crawl_mode }}</td><td>{{ r.status }}</td><td>{{ r.pages_crawled }}</td>
+        <td>{{ r.pages_unchanged }}</td><td>{{ r.pages_failed }}</td><td>{{ r.pages_remaining }}</td><td>{{ r.started_at or '—' }}</td><td>{{ r.completed_at or '—' }}</td>
+        <td>
+          {% if r.execution_run_id and r.status in ['queued','running'] %}
+          <form method="post" action="{{ url_for('seo_crawl_pause', domain=site.domain, job_id=r.execution_run_id) }}" style="display:inline"><button type="submit">Pause</button></form>
+          <form method="post" action="{{ url_for('seo_crawl_cancel', domain=site.domain, job_id=r.execution_run_id) }}" style="display:inline"><button type="submit">Cancel</button></form>
+          {% elif r.execution_run_id and r.status == 'paused' %}
+          <form method="post" action="{{ url_for('seo_crawl_resume', domain=site.domain, job_id=r.execution_run_id) }}" style="display:inline"><button type="submit">Resume</button></form>
+          <form method="post" action="{{ url_for('seo_crawl_cancel', domain=site.domain, job_id=r.execution_run_id) }}" style="display:inline"><button type="submit">Cancel</button></form>
+          {% else %}—{% endif %}
+        </td>
       </tr>
     {% endfor %}
     </tbody>

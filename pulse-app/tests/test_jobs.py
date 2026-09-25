@@ -6,13 +6,16 @@ from datetime import datetime, timedelta, timezone
 
 from db.migrate import migrate_up
 from jobs.store import (
+    cancel_job,
     cancel_queued_job,
     claim_next_job,
     enqueue_job,
     finish_job,
     get_job,
     heartbeat_job,
+    pause_job,
     recover_abandoned_jobs,
+    resume_job,
     worker_owns_job,
 )
 from jobs.worker import run_once
@@ -131,6 +134,46 @@ def test_queued_job_can_be_cancelled(tmp_path):
     job = get_job(db, created["id"])
     assert job["status"] == "cancelled"
     assert job["cancelled_at"]
+
+
+def test_running_job_cancellation_is_persistent_and_not_reclaimed(tmp_path):
+    db = migrated_db(tmp_path)
+    created = enqueue_job(db, "worker.healthcheck")
+    claimed = claim_next_job(db, worker_id="worker-a", lease_seconds=60)
+    assert claimed and claimed["id"] == created["id"]
+    assert cancel_job(db, created["id"])
+    cancelled = get_job(db, created["id"])
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["worker_id"] == ""
+    assert cancelled["lease_expires_at"] is None
+    assert recover_abandoned_jobs(db) == {"requeued": 0, "failed": 0}
+    assert claim_next_job(db, worker_id="worker-b") is None
+
+
+def test_pause_and_resume_survive_job_reopen(tmp_path):
+    db = migrated_db(tmp_path)
+    created = enqueue_job(db, "worker.healthcheck")
+    claim_next_job(db, worker_id="worker-a")
+    assert pause_job(db, created["id"])
+    assert get_job(db, created["id"])["status"] == "paused"
+    assert claim_next_job(db, worker_id="worker-b") is None
+    assert resume_job(db, created["id"])
+    replacement = claim_next_job(db, worker_id="worker-b")
+    assert replacement and replacement["id"] == created["id"]
+
+
+def test_delayed_background_job_is_not_claimed_early(tmp_path):
+    db = migrated_db(tmp_path)
+    future = datetime.now(timezone.utc) + timedelta(hours=1)
+    created = enqueue_job(
+        db,
+        "background_crawl",
+        domain="example.com",
+        available_at=future.isoformat(timespec="seconds"),
+    )
+    assert claim_next_job(db, worker_id="worker-a") is None
+    claimed = claim_next_job(db, worker_id="worker-a", at=future + timedelta(seconds=1))
+    assert claimed and claimed["id"] == created["id"]
 
 
 def test_heartbeat_renews_current_worker_lease(tmp_path):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,21 +29,26 @@ def _parse_sitemap(raw: bytes, source_url: str):
     return ET.fromstring(raw)
 
 
-def discover_sitemap_urls(
+@dataclass(frozen=True)
+class SitemapEntry:
+    url: str
+    source_sitemap: str
+    lastmod: str = ""
+    priority: float | None = None
+
+
+def discover_sitemap_inventory(
     sitemap_url: str,
     domain: str,
     *,
     fetcher: SafeFetcher = safe_fetcher,
     max_depth: int = DEFAULT_MAX_DEPTH,
     max_urls: int = DEFAULT_MAX_URLS,
-) -> tuple[set[str], list[str]]:
-    """Traverse one sitemap tree and return canonical site-page URLs plus child errors.
+) -> tuple[list[SitemapEntry], list[str]]:
+    """Traverse a sitemap tree without discarding child-sitemap provenance."""
 
-    A failed child sitemap is recorded but does not discard URLs already obtained
-    from healthy siblings. Failure of the root sitemap is raised to the caller.
-    """
     seen_sitemaps: set[str] = set()
-    pages: set[str] = set()
+    entries: dict[str, SitemapEntry] = {}
     errors: list[str] = []
 
     def visit(url: str, depth: int, *, root: bool = False) -> None:
@@ -51,7 +57,7 @@ def discover_sitemap_urls(
         if depth > max_depth:
             errors.append(f"recursion limit reached at {url}")
             return
-        if len(pages) >= max_urls:
+        if len(entries) >= max_urls:
             return
         seen_sitemaps.add(url)
         try:
@@ -69,22 +75,90 @@ def discover_sitemap_urls(
             return
 
         root_name = root_node.tag.rsplit("}", 1)[-1].lower()
-        locations = [(loc.text or "").strip() for loc in root_node.findall(".//{*}loc")]
         if root_name == "sitemapindex":
-            for child in locations:
+            for sitemap in root_node.findall(".//{*}sitemap"):
+                loc = sitemap.find("{*}loc")
+                child = (loc.text or "").strip() if loc is not None else ""
                 if child:
                     visit(child, depth + 1)
             return
 
-        for raw_url in locations:
-            normalized = normalize_site_page_url(raw_url, domain)
-            if normalized:
-                pages.add(normalized)
-                if len(pages) >= max_urls:
-                    break
+        for item in root_node.findall(".//{*}url"):
+            loc = item.find("{*}loc")
+            normalized = normalize_site_page_url(
+                (loc.text or "").strip() if loc is not None else "", domain
+            )
+            if not normalized:
+                continue
+            lastmod_node = item.find("{*}lastmod")
+            priority_node = item.find("{*}priority")
+            try:
+                priority = float((priority_node.text or "").strip()) if priority_node is not None else None
+            except ValueError:
+                priority = None
+            entries.setdefault(
+                normalized,
+                SitemapEntry(
+                    url=normalized,
+                    source_sitemap=url,
+                    lastmod=(lastmod_node.text or "").strip() if lastmod_node is not None else "",
+                    priority=priority,
+                ),
+            )
+            if len(entries) >= max_urls:
+                break
 
     visit(sitemap_url, 0, root=True)
-    return pages, errors
+    return list(entries.values()), errors
+
+
+def discover_sitemap_urls(
+    sitemap_url: str,
+    domain: str,
+    *,
+    fetcher: SafeFetcher = safe_fetcher,
+    max_depth: int = DEFAULT_MAX_DEPTH,
+    max_urls: int = DEFAULT_MAX_URLS,
+) -> tuple[set[str], list[str]]:
+    """Traverse one sitemap tree and return canonical site-page URLs plus child errors.
+
+    A failed child sitemap is recorded but does not discard URLs already obtained
+    from healthy siblings. Failure of the root sitemap is raised to the caller.
+    """
+    entries, errors = discover_sitemap_inventory(
+        sitemap_url,
+        domain,
+        fetcher=fetcher,
+        max_depth=max_depth,
+        max_urls=max_urls,
+    )
+    return {entry.url for entry in entries}, errors
+
+
+def discover_domain_sitemap_inventory(
+    domain: str,
+    *,
+    fetcher: SafeFetcher = safe_fetcher,
+    max_depth: int = DEFAULT_MAX_DEPTH,
+    max_urls: int = DEFAULT_MAX_URLS,
+) -> tuple[list[SitemapEntry], str, list[str]]:
+    failures: list[str] = []
+    for sitemap_url in (f"https://{domain}/sitemap.xml", f"https://{domain}/sitemap_index.xml"):
+        try:
+            entries, child_errors = discover_sitemap_inventory(
+                sitemap_url,
+                domain,
+                fetcher=fetcher,
+                max_depth=max_depth,
+                max_urls=max_urls,
+            )
+            if entries:
+                return entries, sitemap_url, child_errors
+            failures.extend(child_errors)
+            failures.append(f"{sitemap_url}: empty sitemap")
+        except Exception as exc:
+            failures.append(f"{sitemap_url}: {exc}")
+    raise RuntimeError("Could not retrieve sitemap: " + " | ".join(failures))
 
 
 def discover_domain_sitemap(
@@ -94,23 +168,13 @@ def discover_domain_sitemap(
     max_depth: int = DEFAULT_MAX_DEPTH,
     max_urls: int = DEFAULT_MAX_URLS,
 ) -> tuple[set[str], str, list[str]]:
-    failures: list[str] = []
-    for sitemap_url in (f"https://{domain}/sitemap.xml", f"https://{domain}/sitemap_index.xml"):
-        try:
-            urls, child_errors = discover_sitemap_urls(
-                sitemap_url,
-                domain,
-                fetcher=fetcher,
-                max_depth=max_depth,
-                max_urls=max_urls,
-            )
-            if urls:
-                return urls, sitemap_url, child_errors
-            failures.extend(child_errors)
-            failures.append(f"{sitemap_url}: empty sitemap")
-        except Exception as exc:
-            failures.append(f"{sitemap_url}: {exc}")
-    raise RuntimeError("Could not retrieve sitemap: " + " | ".join(failures))
+    entries, source, errors = discover_domain_sitemap_inventory(
+        domain,
+        fetcher=fetcher,
+        max_depth=max_depth,
+        max_urls=max_urls,
+    )
+    return {entry.url for entry in entries}, source, errors
 
 
 def get_discovery_state(db_path: str | Path, domain: str) -> dict:
