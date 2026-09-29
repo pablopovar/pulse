@@ -7,7 +7,7 @@ import secrets
 from dataclasses import dataclass
 
 from flask import abort, redirect, request, session, url_for
-from services.public_report_access import access_state
+from services.public_report_access import access_state_for_report
 
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
@@ -162,35 +162,13 @@ def _enforce_public_report_capability(config: SecurityConfig):
         abort(404)
 
 
-def _public_report_domain(report_id: str) -> str | None:
-    """Resolve report ownership without importing Flask route modules."""
-    import sqlite3
-
-    path = os.environ.get("RESEARCH_DB", "/data/audit/research.db")
-    try:
-        con = sqlite3.connect(path)
-        try:
-            row = con.execute(
-                "SELECT domain FROM report_session WHERE id=? LIMIT 1", (report_id,)
-            ).fetchone()
-            return str(row[0]) if row else None
-        finally:
-            con.close()
-    except sqlite3.Error:
-        return None
-
-
 def _require_public_report_password(report_id: str):
-    domain = _public_report_domain(report_id)
-    if not domain:
-        abort(404)
     path = os.environ.get("RESEARCH_DB", "/data/audit/research.db")
-    try:
-        state = access_state(path, domain)
-    except Exception:
-        # Normal schema validation will make configuration errors explicit at
-        # startup. Do not turn a migration mismatch into an accidental bypass.
-        abort(503)
+    state = access_state_for_report(path, report_id)
+    if state is None:
+        # Route handlers own report existence. A generic security fixture does
+        # not necessarily have a Pulse database behind it.
+        return None
     if not state["enabled"]:
         return None
     authorised = session.get("_pulse_client_report_ids") or []
