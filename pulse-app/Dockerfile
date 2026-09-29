@@ -13,4 +13,4 @@ ENV RESEARCH_DB=/data/audit/research.db
 ENV REPORTS_DIR=/data/reports
 
 EXPOSE 4018
-CMD ["python", "app.py"]
+CMD ["gunicorn", "--bind", "0.0.0.0:4018", "--workers", "2", "--threads", "4", "--timeout", "120", "app:app"]

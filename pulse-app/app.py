@@ -38,9 +38,16 @@ REPORTS_DIR = Path(os.environ.get("REPORTS_DIR", "/data/reports"))
 RESEARCH_DB = Path(os.environ.get("RESEARCH_DB", "/data/dashboard/research.db"))
 from audits.geo_aeo.service import run_audit as run_geo_aeo_audit
 from reports.full_pdf import build_full_report_pdf
-from reports.web_report import load_report_session, list_report_sessions, prepare_report_view
+from reports.web_report import (
+    load_client_report_config,
+    load_report_session,
+    list_report_sessions,
+    prepare_report_view,
+    save_client_report_config,
+)
 from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, list_models as list_manual_ai_analysis_models
 from services.security_boundary import configure_security
+from services.public_report_access import access_state as public_report_access_state, disable_access_password, set_access_password
 from jobs.store import enqueue_job
 from jobs.store import cancel_job, get_job, list_jobs, pause_job, resume_job
 from integrations.opengsc_adapter import OpenGSCAdapter
@@ -693,6 +700,8 @@ def domain_sources(domain):
         readiness=readiness,
         message=message,
         company_name=infer_company_name(domain),
+        client_config=load_client_report_config(RESEARCH_DB, domain),
+        public_report_access=public_report_access_state(RESEARCH_DB, domain),
     )
 
 
@@ -702,6 +711,51 @@ def save_source_company_name(domain):
     get_site(domain)
     save_company_name(RESEARCH_DB, domain, request.form.get("company_name", ""))
     return redirect(url_for("domain_sources", domain=domain, message="Domain settings saved."))
+
+
+@app.post("/d/<domain>/sources/report-scope")
+def save_report_scope(domain):
+    get_site(domain)
+    def lines(name):
+        return [line.strip() for line in request.form.get(name, "").splitlines() if line.strip()]
+    config = save_client_report_config(
+        RESEARCH_DB,
+        domain,
+        {
+            "priority_pages": lines("priority_pages"),
+            "target_topics": lines("target_topics"),
+            "competitors": lines("competitors"),
+            "page_groups": lines("page_groups"),
+            "integrations": lines("integrations"),
+            "monitored_ai_prompts": lines("monitored_ai_prompts"),
+        },
+    )
+    return redirect(url_for(
+        "domain_sources", domain=domain,
+        message=("Monitoring scope saved: "
+                 f"{len(config['priority_pages'])} priority page(s), "
+                 f"{len(config['target_topics'])} topic(s)."),
+    ))
+
+
+@app.post("/d/<domain>/sources/client-report-access")
+def save_client_report_access(domain):
+    get_site(domain)
+    action = request.form.get("action", "set").strip().lower()
+    if action == "disable":
+        disable_access_password(RESEARCH_DB, domain)
+        message = "Password protection disabled for this domain's client reports."
+    else:
+        password = request.form.get("password", "")
+        confirmation = request.form.get("password_confirmation", "")
+        if password != confirmation:
+            return redirect(url_for("domain_sources", domain=domain, message="Client report passwords did not match."))
+        try:
+            set_access_password(RESEARCH_DB, domain, password)
+        except ValueError as exc:
+            return redirect(url_for("domain_sources", domain=domain, message=str(exc)))
+        message = "Password protection enabled for this domain's client reports."
+    return redirect(url_for("domain_sources", domain=domain, message=message))
 
 
 @app.get("/d/<domain>/settings")

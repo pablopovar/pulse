@@ -28,6 +28,30 @@
   </form>
 </section>
 
+<section class="panel source-domain-settings">
+  <h2>Monitoring scope</h2>
+  <p>These are the pages, topics and comparisons Pulse should preserve as explicit monitoring context. One item per line. Priority-page URLs are promoted in the initial crawl; the rest are captured with each report for transparent scope.</p>
+  <form method="post" action="{{ url_for('save_report_scope', domain=site.domain) }}" class="source-domain-settings-form">
+    <label><span>Priority pages (URLs)</span><textarea name="priority_pages" rows="4" placeholder="https://example.com/investors/">{{ (client_config.priority_pages or [])|join('\n') }}</textarea></label>
+    <label><span>Target topics</span><textarea name="target_topics" rows="3" placeholder="Capital allocation&#10;Project evidence">{{ (client_config.target_topics or [])|join('\n') }}</textarea></label>
+    <label><span>Competitors or comparison set</span><textarea name="competitors" rows="3">{{ (client_config.competitors or [])|join('\n') }}</textarea></label>
+    <label><span>Page groups</span><textarea name="page_groups" rows="3" placeholder="Investor pages&#10;Technical evidence">{{ (client_config.page_groups or [])|join('\n') }}</textarea></label>
+    <label><span>Monitored AI questions</span><textarea name="monitored_ai_prompts" rows="4">{{ (client_config.monitored_ai_prompts or [])|join('\n') }}</textarea></label>
+    <button type="submit">Save Monitoring Scope</button>
+  </form>
+</section>
+
+<section class="panel source-domain-settings">
+  <h2>Client report access</h2>
+  <p>{% if public_report_access.enabled %}Password protection is enabled for this domain's public report links.{% else %}Public report links currently do not require a password.{% endif %} The password is never displayed or stored in readable form.</p>
+  <form method="post" action="{{ url_for('save_client_report_access', domain=site.domain) }}" class="source-domain-settings-form">
+    <label><span>New client-report password</span><input type="password" name="password" minlength="12" autocomplete="new-password"></label>
+    <label><span>Confirm password</span><input type="password" name="password_confirmation" minlength="12" autocomplete="new-password"></label>
+    <button type="submit" name="action" value="set">Set / replace password</button>
+    {% if public_report_access.enabled %}<button type="submit" name="action" value="disable">Disable password protection</button>{% endif %}
+  </form>
+</section>
+
 <form method="post" action="{{ url_for('domain_sources', domain=site.domain) }}">
   <div class="source-grid">
     {% for source in sources %}

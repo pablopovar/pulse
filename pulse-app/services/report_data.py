@@ -38,6 +38,7 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
         "audit_signals": [],
         "domain_score_history": [],
         "page_score_history": [],
+        "dataforseo_snapshots": [],
     }
 
     adapter = OpenGSCAdapter(seo_db)
@@ -56,6 +57,16 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
                     WHERE w.domain=?
                     ORDER BY w.keyword COLLATE NOCASE
                     """,
+                    (domain,),
+                )
+
+            if _exists(con, "dataforseo_snapshot"):
+                data["dataforseo_snapshots"] = _rows(
+                    con,
+                    """SELECT endpoint,created_at,report_run_id
+                       FROM dataforseo_snapshot
+                       WHERE domain=? COLLATE NOCASE
+                       ORDER BY id DESC LIMIT 20""",
                     (domain,),
                 )
 

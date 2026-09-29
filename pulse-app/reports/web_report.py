@@ -111,6 +111,177 @@ def _load_client_config(con, domain: str) -> dict[str, Any]:
     }
 
 
+def load_client_report_config(db_path: Path, domain: str) -> dict[str, Any]:
+    """Return the operator-defined monitoring scope for a domain.
+
+    The public report receives a snapshot of this configuration when a report
+    session is created; this helper is for the authenticated setup interface.
+    """
+    with _connect(db_path) as con:
+        return _load_client_config(con, domain)
+
+
+def _table_exists(con, name: str) -> bool:
+    return bool(con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone())
+
+
+def _json_list(value: Any) -> list[Any]:
+    try:
+        parsed = json.loads(value or "[]")
+        return parsed if isinstance(parsed, list) else []
+    except (TypeError, ValueError):
+        return []
+
+
+def _build_monitoring_inventory_snapshot(con, domain: str, snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Capture the complete URL decision inventory with an immutable report.
+
+    A URL that Pulse declines to fetch is still evidence about monitoring
+    coverage.  Snapshot it with the report so a historical client view never
+    silently changes when later crawls update the live frontier.
+    """
+    empty = {"crawl_run": {}, "urls": [], "summary": {}}
+    if not (_table_exists(con, "crawl_url_inventory") and _table_exists(con, "crawl_run")):
+        return empty
+
+    crawl = dict(snapshot.get("crawl") or {})
+    crawl_run_id = crawl.get("id")
+    if not crawl_run_id:
+        row = con.execute(
+            "SELECT * FROM crawl_run WHERE domain=? COLLATE NOCASE ORDER BY id DESC LIMIT 1",
+            (domain,),
+        ).fetchone()
+        crawl = dict(row) if row else {}
+        crawl_run_id = crawl.get("id")
+
+    frontier_by_inventory: dict[int, dict[str, Any]] = {}
+    if crawl_run_id and _table_exists(con, "crawl_frontier"):
+        for row in con.execute(
+            "SELECT url_inventory_id,state,reason,attempts,queued_at,started_at,completed_at "
+            "FROM crawl_frontier WHERE crawl_run_id=?", (crawl_run_id,)
+        ).fetchall():
+            frontier_by_inventory[int(row["url_inventory_id"])] = dict(row)
+
+    page_by_url: dict[str, dict[str, Any]] = {}
+    if crawl_run_id and _table_exists(con, "crawl_page"):
+        for row in con.execute(
+            "SELECT url,final_url,status_code,unchanged,duplicate_of_url,failure_kind,error,created_at "
+            "FROM crawl_page WHERE crawl_run_id=?", (crawl_run_id,)
+        ).fetchall():
+            value = dict(row)
+            page_by_url[str(value.get("url") or "")] = value
+            if value.get("final_url"):
+                page_by_url[str(value["final_url"])] = value
+
+    urls: list[dict[str, Any]] = []
+    for raw in con.execute(
+        "SELECT * FROM crawl_url_inventory WHERE domain=? COLLATE NOCASE "
+        "ORDER BY priority_score DESC,url", (domain,)
+    ).fetchall():
+        row = dict(raw)
+        frontier = frontier_by_inventory.get(int(row["id"])) or {}
+        page = page_by_url.get(str(row.get("url") or "")) or {}
+        outcome = str(frontier.get("state") or "")
+        if not outcome:
+            if row.get("eligibility") == "duplicate":
+                outcome = "duplicate"
+            elif row.get("eligibility") == "excluded":
+                outcome = "excluded"
+            elif row.get("last_error"):
+                outcome = "failed"
+            elif row.get("last_crawled_at"):
+                outcome = "crawled"
+            else:
+                outcome = "deferred"
+        urls.append({
+            "url": row.get("url") or "",
+            "final_url": row.get("final_url") or "",
+            "canonical_url": row.get("canonical_url") or "",
+            "duplicate_of_url": row.get("duplicate_of_url") or page.get("duplicate_of_url") or "",
+            "source": row.get("source") or "unknown",
+            "source_sitemap": row.get("source_sitemap") or "",
+            "classification": row.get("classification") or "unknown",
+            "eligibility": row.get("eligibility") or "deferred",
+            "decision_reason": row.get("decision_reason") or frontier.get("reason") or "",
+            "priority_score": row.get("priority_score") or 0,
+            "operator_selected": bool(row.get("operator_selected")),
+            "http_status": page.get("status_code") or row.get("http_status"),
+            "outcome": outcome,
+            "unchanged": bool(page.get("unchanged")),
+            "failure_kind": page.get("failure_kind") or "",
+            "last_error": page.get("error") or row.get("last_error") or "",
+            "discovered_at": row.get("discovered_at") or "",
+            "last_crawled_at": row.get("last_crawled_at") or "",
+            "frontier_completed_at": frontier.get("completed_at") or "",
+        })
+
+    counts = Counter()
+    for row in urls:
+        if row["eligibility"] == "duplicate" or row["outcome"] == "duplicate":
+            counts["duplicate"] += 1
+        elif row["eligibility"] == "excluded" or row["outcome"] == "excluded":
+            counts["excluded"] += 1
+        elif row["outcome"] == "failed":
+            counts["failed"] += 1
+        elif row["outcome"] == "unchanged" or row["unchanged"]:
+            counts["unchanged"] += 1
+        elif row["outcome"] in {"completed", "crawled"}:
+            counts["crawled"] += 1
+        else:
+            counts["deferred"] += 1
+
+    return {
+        "crawl_run": crawl,
+        "urls": urls,
+        "summary": {
+            "known_urls": len(urls),
+            "eligible": sum(1 for row in urls if row["eligibility"] == "eligible"),
+            "crawled": counts["crawled"],
+            "unchanged": counts["unchanged"],
+            "failed": counts["failed"],
+            "excluded": counts["excluded"],
+            "duplicate": counts["duplicate"],
+            "deferred": counts["deferred"],
+        },
+    }
+
+
+def _monitoring_change(current: dict[str, Any], previous: dict[str, Any] | None) -> str:
+    if current.get("eligibility") == "duplicate" or current.get("outcome") == "duplicate":
+        return "duplicate"
+    if current.get("eligibility") == "excluded" or current.get("outcome") == "excluded":
+        return "excluded"
+    if current.get("outcome") == "failed":
+        return "failed"
+    if previous is None:
+        return "new"
+    fields = ("final_url", "canonical_url", "duplicate_of_url", "eligibility", "classification", "http_status", "outcome")
+    if any(current.get(key) != previous.get(key) for key in fields):
+        return "changed"
+    return "unchanged"
+
+
+def _attach_monitoring_history(records: list[dict[str, Any]]) -> None:
+    previous_by_url: dict[str, dict[str, Any]] = {}
+    for record in records:
+        monitoring = record["snapshot"].get("monitoring_inventory") or {}
+        rows = [dict(row) for row in monitoring.get("urls") or []]
+        counts = Counter()
+        for row in rows:
+            change = _monitoring_change(row, previous_by_url.get(str(row.get("url") or "")))
+            row["change"] = change
+            counts[change] += 1
+        monitoring["urls"] = rows
+        monitoring["changes_since_previous"] = {
+            key: int(counts.get(key) or 0)
+            for key in ("changed", "new", "unchanged", "failed", "excluded", "duplicate")
+        }
+        record["snapshot"]["monitoring_inventory"] = monitoring
+        previous_by_url = {str(row.get("url") or ""): row for row in rows}
+
+
 def save_client_report_config(db_path:Path,domain:str,config:dict[str,Any])->dict[str,Any]:
     now=datetime.now(timezone.utc).isoformat(timespec="seconds")
     fields=("competitors","priority_pages","target_topics","page_groups","integrations","monitored_ai_prompts")
@@ -188,6 +359,7 @@ def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any],*,execu
         audit=immutable.get("audit") or {}
         audit_summary=immutable.get("audit_summary") or {}
         immutable["client_config"]=_load_client_config(con,domain)
+        immutable["monitoring_inventory"]=_build_monitoring_inventory_snapshot(con,domain,immutable)
         immutable["recommendation_tracking"]=_load_recommendation_tracking(con,domain)
         immutable["snapshot_contract"]={
             "version":SNAPSHOT_VERSION,
@@ -230,12 +402,22 @@ def _session_with_history(con, row):
         (row["domain"],row["created_at"]),
     ).fetchall()
     records=[{"id":r["id"],"domain":r["domain"],"created_at":r["created_at"],"snapshot":json.loads(r["snapshot_json"])} for r in history_rows]
+    _attach_monitoring_history(records)
     history=build_finding_history(records)
     snapshot["finding_history"]=history
     snapshot["pulse_summary"]=pulse_summary(history)
     snapshot["family_pulse_summary"]=family_pulse_summary(history, FAMILIES)
     snapshot.setdefault("report_metadata",{})["report_mode"]="living"
     snapshot["report_metadata"]["pulse_updated_at"]=row["created_at"]
+    # Load the current record from the enriched history list so the view gets
+    # URL changes calculated against the preceding immutable observation.
+    current = next((record for record in records if record["id"] == row["id"]), None)
+    if current:
+        snapshot["monitoring_inventory"] = current["snapshot"].get("monitoring_inventory") or {}
+    snapshot["comparison_runs"] = [
+        {"id": record["id"], "created_at": record["created_at"]}
+        for record in reversed(records)
+    ]
     return {"id":row["id"],"domain":row["domain"],"created_at":row["created_at"],"snapshot":snapshot}
 
 
@@ -395,7 +577,8 @@ def _seo_family(data,defn):
             "exact_cannibalization":cann,"rank_tracking":list(data.get("rank_tracking") or []),
             "competitor_keywords":list(data.get("competitor_keywords") or []),"backlinks":list(data.get("backlinks") or []),
             "ref_domains":list(data.get("ref_domains") or []),"backlink_summary":data.get("backlink_summary"),
-            "domain_metrics":data.get("domain_metrics"),"clarity":data.get("clarity")}
+            "domain_metrics":data.get("domain_metrics"),"clarity":data.get("clarity"),
+            "dataforseo_snapshots":list(data.get("dataforseo_snapshots") or [])}
 
 
 def _onsite_family(data,defn,signals):
@@ -630,6 +813,36 @@ def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
     data["manual_ai"] = manual_ai
     data["families"]=families
     data["family_by_id"]={f["id"]:f for f in families}
+    # The browser uses this compact index for interactive comparisons of any
+    # two immutable report runs. It contains observations only, never live DB
+    # data, so a historical report remains historically truthful.
+    check_history_index = {}
+    for family in families:
+        if family.get("kind") not in {"audit", "onsite"}:
+            continue
+        for category in family.get("categories_data") or []:
+            for check in category.get("checks") or []:
+                key = check.get("finding_key") or ""
+                if key:
+                    check_history_index[key] = list(check.get("history") or [])
+    data["check_history_index"] = check_history_index
+    monitoring = dict(data.get("monitoring_inventory") or {})
+    monitoring.setdefault("summary", {})
+    monitoring.setdefault("changes_since_previous", {})
+    crawl_run = monitoring.get("crawl_run") or {}
+    target = int(crawl_run.get("page_cap") or 0)
+    audited = int((data.get("audit_summary") or {}).get("pages_audited") or 0)
+    monitoring["coverage"] = {
+        "initial_target": target,
+        "audited_pages": audited,
+        "coverage_state": "partial" if target and audited < target else "complete",
+        "coverage_note": (
+            f"{audited} pages were successfully audited against an initial target of {target}. "
+            "The report remains usable, but conclusions apply only to the audited cohort."
+            if target and audited < target else ""
+        ),
+    }
+    data["monitoring_inventory"] = monitoring
     roots=group_root_causes(families)
     roots=_apply_recommendation_tracking(roots,data.get("recommendation_tracking") or {})
     data["root_causes"]=roots

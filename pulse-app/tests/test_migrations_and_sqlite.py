@@ -44,6 +44,7 @@ REQUIRED_TABLES = {
     "cross_model_provider_response",
     "cross_model_comparison",
     "domain_company_controlled_domain",
+    "domain_public_report_access",
 }
 
 

@@ -716,6 +716,7 @@ def crawl_worker(
     *,
     crawl_mode="initial",
     execution_run_id=None,
+    priority_urls=None,
 ):
     """Run one bounded crawl batch from the persistent classified frontier."""
 
@@ -737,7 +738,7 @@ def crawl_worker(
                     con,
                     domain,
                     base_url,
-                    selected_urls=selected_urls,
+                    selected_urls=list(selected_urls or []) + list(priority_urls or []),
                     max_depth=int(policy["max_crawl_depth"]),
                 )
             if crawl_mode == "background":

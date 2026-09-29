@@ -28,6 +28,7 @@ TABLE_OWNERS = {
     'domain_company_settings': 'app.sources',
     'domain_crawl_policy': 'services.crawl_frontier',
     'domain_report': 'reports.web_report',
+    'domain_public_report_access': 'services.public_report_access',
     'domain_source': 'services.source_inventory',
     'domain_suppression': 'services.domains',
     'extension_global': 'integrations.dataforseo',

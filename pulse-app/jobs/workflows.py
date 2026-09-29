@@ -11,7 +11,7 @@ from jobs.store import enqueue_job, set_job_stage, set_job_publication_status
 from services.crawl_frontier import get_policy
 from services.report_data import collect_report_data
 from reports.manual_ai_analysis import run_analysis as run_manual_ai_analysis
-from reports.web_report import create_report_session
+from reports.web_report import create_report_session, load_client_report_config
 from services.audit_execution import run_audit_pages
 from services.domain_registry import get_site
 from services.manual_ai_report import manual_ai_source_for_report
@@ -163,6 +163,7 @@ def run_crawl(job, worker_id):
         bool(p.get("follow_links", not bool(urls))),
         crawl_mode=p.get("crawl_mode") or "initial",
         execution_run_id=job["id"],
+        priority_urls=p.get("priority_urls") or [],
     )
     with connect_sqlite(RESEARCH_DB, readonly=True) as con:
         row = con.execute("SELECT status,error FROM crawl_run WHERE id=?", (run_id,)).fetchone()
@@ -454,6 +455,7 @@ def run_report_refresh(job, worker_id):
         con.commit()
 
     initial_target = max(1, min(100, int(p.get("initial_target") or policy["initial_target"])))
+    client_scope = load_client_report_config(RESEARCH_DB, domain)
     crawl = run_crawl(
         {
             **job,
@@ -465,6 +467,7 @@ def run_report_refresh(job, worker_id):
                 "obey_robots": True,
                 "report_scope": "report",
                 "selected_urls": [],
+                "priority_urls": client_scope.get("priority_pages") or [],
                 "follow_links": True,
                 "crawl_mode": "initial",
             },

@@ -7,6 +7,7 @@ import secrets
 from dataclasses import dataclass
 
 from flask import abort, request, session
+from services.public_report_access import access_state, password_valid
 
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
@@ -160,6 +161,47 @@ def _enforce_public_report_capability(config: SecurityConfig):
         abort(404)
 
 
+def _public_report_domain(report_id: str) -> str | None:
+    """Resolve report ownership without importing Flask route modules."""
+    import sqlite3
+
+    path = os.environ.get("RESEARCH_DB", "/data/audit/research.db")
+    try:
+        con = sqlite3.connect(path)
+        try:
+            row = con.execute(
+                "SELECT domain FROM report_session WHERE id=? LIMIT 1", (report_id,)
+            ).fetchone()
+            return str(row[0]) if row else None
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+
+
+def _require_public_report_password(report_id: str):
+    domain = _public_report_domain(report_id)
+    if not domain:
+        abort(404)
+    path = os.environ.get("RESEARCH_DB", "/data/audit/research.db")
+    try:
+        state = access_state(path, domain)
+    except Exception:
+        # Normal schema validation will make configuration errors explicit at
+        # startup. Do not turn a migration mismatch into an accidental bypass.
+        abort(503)
+    if not state["enabled"]:
+        return None
+    credentials = _basic_credentials()
+    if credentials and password_valid(path, domain, credentials[1]):
+        return None
+    return (
+        "Password required for this client report.",
+        401,
+        {"WWW-Authenticate": 'Basic realm="Pulse client report", charset="UTF-8"'},
+    )
+
+
 def configure_security(app):
     config = load_security_config()
     app.config["PULSE_SECURITY"] = config
@@ -185,6 +227,11 @@ def configure_security(app):
 
         if endpoint in PUBLIC_ENDPOINTS:
             _enforce_public_report_capability(config)
+            report_id = _public_report_id()
+            if report_id:
+                password_response = _require_public_report_password(report_id)
+                if password_response is not None:
+                    return password_response
             if request.method not in SAFE_METHODS:
                 _validate_csrf()
             return None

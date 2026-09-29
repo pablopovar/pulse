@@ -59,6 +59,7 @@
 .report-document .root-cause-card{border:1px solid var(--border,#d9dee7);border-radius:10px;padding:1rem;margin:.7rem 0}.report-document .root-cause-meta{display:flex;gap:.75rem;flex-wrap:wrap;font-size:.85rem;color:var(--muted,#64748b)}
 .report-document .quality-warning{border-left:4px solid #b45309;padding:.7rem 1rem;background:#fffbeb}.report-document .quality-error{border-left:4px solid #b91c1c;padding:.7rem 1rem;background:#fef2f2}.report-document .score-explain{font-size:.82rem;color:var(--muted,#64748b)}.report-document .export-blocked{opacity:.6;cursor:not-allowed}
 .report-document .finding-pulse{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:.55rem;margin:.7rem 0 1rem}.report-document .pulse-cell{border:1px solid var(--border,#d9dee7);border-radius:8px;padding:.65rem}.report-document .pulse-cell span{display:block;font-size:.76rem;color:var(--muted,#64748b);margin-bottom:.18rem}.report-document .pulse-cell strong{font-size:.94rem}.report-document .history-table td,.report-document .history-table th{white-space:nowrap}.report-document .history-current{font-weight:700}.report-document .history-note{font-size:.82rem;color:var(--muted,#64748b)}
+.report-document .monitoring-coverage{margin:1.3rem 0;padding:1rem 1.1rem;border:1px solid var(--brand-line);border-radius:14px;background:#fff}.report-document .monitoring-coverage summary{cursor:pointer;font-weight:750}.report-document .monitoring-summary{display:flex;flex-wrap:wrap;gap:.5rem;margin:.85rem 0}.report-document .monitoring-summary span{border:1px solid var(--brand-line);border-radius:999px;padding:.28rem .55rem;font-size:.78rem;background:#f8fafc}.report-document .coverage-warning{margin:.8rem 0;padding:.75rem .85rem;border-left:4px solid #d97706;background:#fffbeb;color:#78350f}.report-document .url-inventory-controls{display:flex;gap:.55rem;flex-wrap:wrap;margin:.8rem 0}.report-document .url-inventory-controls input{min-width:min(100%,360px)}
 
 .report-document{
   --brand-ink:#11131a;
@@ -844,8 +845,34 @@
   <div class="report-expand-controls"><button type="button" class="button" id="report-expand-all">Expand all</button><button type="button" class="button" id="report-collapse-all">Collapse all</button></div>
   <input id="report-check-search" type="search" placeholder="Search checks, pages or evidence">
   <select id="report-status-filter"><option value="">All statuses</option><option value="FAIL">Fail</option><option value="PARTIAL">Partial</option><option value="MANUAL_REVIEW">Manual review</option><option value="DATA_UNAVAILABLE">Data unavailable</option><option value="NOT_APPLICABLE">Not applicable</option><option value="PASS">Pass</option></select>
+  <select id="report-change-filter"><option value="">All movement</option><option value="changed">Changed</option><option value="new">New</option><option value="improved">Improved</option><option value="worsened">Worsened</option><option value="resolved">Resolved</option><option value="unchanged">Unchanged</option><option value="not_comparable">Not comparable</option></select>
   <select id="report-family-filter"><option value="">All sections</option>{% for f in report.families %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}</select><label><input id="report-show-pass" type="checkbox" checked> Show passes</label>
+  {% if report.comparison_runs and report.comparison_runs|length > 1 %}
+  <label>From <select id="report-compare-from">{% for run in report.comparison_runs|reverse %}{% if not loop.last %}<option value="{{ run.id }}">{{ run.created_at }}</option>{% endif %}{% endfor %}</select></label>
+  <label>To <select id="report-compare-to">{% for run in report.comparison_runs %}<option value="{{ run.id }}" {% if loop.first %}selected{% endif %}>{{ run.created_at }}</option>{% endfor %}</select></label>
+  <span id="report-comparison-note" class="history-note">Comparing the latest completed check with its predecessor.</span>
+  {% endif %}
 </section>
+
+{% set monitoring = report.monitoring_inventory or {} %}
+{% set monitoring_summary = monitoring.summary or {} %}
+{% set monitoring_coverage = monitoring.coverage or {} %}
+<details class="monitoring-coverage interactive-evidence">
+  <summary>Monitoring coverage & URL history · {{ monitoring_summary.get('known_urls', 0) }} known URLs</summary>
+  {% if monitoring_coverage.coverage_state == 'partial' %}<div class="coverage-warning"><strong>Partial coverage.</strong> {{ monitoring_coverage.coverage_note }}</div>{% endif %}
+  <div class="monitoring-summary">
+    <span>Eligible {{ monitoring_summary.get('eligible', 0) }}</span><span>Crawled {{ monitoring_summary.get('crawled', 0) }}</span><span>Unchanged {{ monitoring_summary.get('unchanged', 0) }}</span><span>Failed {{ monitoring_summary.get('failed', 0) }}</span><span>Deferred {{ monitoring_summary.get('deferred', 0) }}</span><span>Excluded {{ monitoring_summary.get('excluded', 0) }}</span><span>Duplicate {{ monitoring_summary.get('duplicate', 0) }}</span>
+  </div>
+  {% set scope = report.client_config or {} %}
+  {% if scope.priority_pages or scope.target_topics or scope.competitors or scope.monitored_ai_prompts %}<details><summary>Configured monitoring scope</summary><dl><dt>Priority pages</dt><dd>{{ (scope.priority_pages or [])|join(' · ') or '—' }}</dd><dt>Target topics</dt><dd>{{ (scope.target_topics or [])|join(' · ') or '—' }}</dd><dt>Comparison set</dt><dd>{{ (scope.competitors or [])|join(' · ') or '—' }}</dd><dt>Monitored AI questions</dt><dd>{{ (scope.monitored_ai_prompts or [])|join(' · ') or '—' }}</dd></dl></details>{% endif %}
+  <p class="history-note">This is the complete URL decision inventory captured with this report: including deferred, excluded and duplicate URLs, not only pages that were audited.</p>
+  <div class="url-inventory-controls"><input id="monitoring-url-search" type="search" placeholder="Filter URLs, source, type or reason"><select id="monitoring-change-filter"><option value="">All URL changes</option><option value="changed">Changed</option><option value="new">New</option><option value="unchanged">Unchanged</option><option value="failed">Failed</option><option value="excluded">Excluded</option><option value="duplicate">Duplicate</option></select></div>
+  <div class="table-wrap report-table"><table id="monitoring-url-table"><thead><tr><th>URL</th><th>Change</th><th>Classification</th><th>Decision</th><th>Source</th><th>Last checked</th><th>Outcome</th></tr></thead><tbody>
+  {% for row in monitoring.urls or [] %}<tr data-monitoring-change="{{ row.change or '' }}"><td class="report-url">{{ row.url }}{% if row.canonical_url and row.canonical_url != row.url %}<div class="history-note">Canonical: {{ row.canonical_url }}</div>{% endif %}{% if row.duplicate_of_url %}<div class="history-note">Representative: {{ row.duplicate_of_url }}</div>{% endif %}</td><td><span class="change-pill change-{{ row.change or 'unchanged' }}">{{ (row.change or '—')|replace('_',' ')|title }}</span></td><td>{{ row.classification|replace('_',' ')|title }}</td><td>{{ row.eligibility|title }}{% if row.decision_reason %}<div class="history-note">{{ row.decision_reason }}</div>{% endif %}</td><td>{{ row.source }}{% if row.source_sitemap %}<div class="history-note">{{ row.source_sitemap }}</div>{% endif %}</td><td>{{ row.last_crawled_at or 'Not yet crawled' }}</td><td>{{ row.outcome|replace('_',' ')|title }}{% if row.http_status %} · HTTP {{ row.http_status }}{% endif %}{% if row.failure_kind %}<div class="history-note">{{ row.failure_kind }}{% if row.last_error %}: {{ row.last_error }}{% endif %}</div>{% endif %}</td></tr>{% else %}<tr><td colspan="7">No crawl inventory was captured with this report.</td></tr>{% endfor %}
+  </tbody></table></div>
+</details>
+
+<script id="report-check-history" type="application/json">{{ report.check_history_index|tojson }}</script>
 
 {% for family in report.families %}
 <section id="{{ family.id }}" class="report-family family-{{ family.id }} {% if family.id in report.technical_family_ids %}family-collapsed{% endif %}" data-family="{{ family.id }}">
@@ -920,7 +947,7 @@
     <div class="table-wrap report-table">
       <table><thead><tr><th>Check</th><th>Status</th><th>Latest movement</th><th>Pages affected</th><th>Value to fix</th></tr></thead><tbody>
       {% for check in family.priority_findings %}
-      <tr><td><label class="report-include-label">
+      <tr data-finding-key="{{ check.finding_key }}" data-current-status="{{ check.status }}" data-current-change="{{ check.latest_change }}"><td><label class="report-include-label">
               <input class="report-include-toggle" type="checkbox" checked
                      data-ignore-scope="check"
                      data-ignore-key="{{ check.signal_key }}"
@@ -939,7 +966,7 @@
       <div class="table-wrap report-table"><table><thead><tr><th>Check</th><th>Status</th><th>Latest movement</th><th>Pages awaiting review</th></tr></thead><tbody>
       {% for check in family.review_findings %}
       {% set review_note_key = 'check:' ~ check.signal_key %}
-      <tr><td><label class="report-include-label"><input class="report-include-toggle" type="checkbox" checked data-ignore-scope="check" data-ignore-key="{{ check.signal_key }}" aria-label="Include {{ check.title }} in report"><span>{{ check.title }} {{ note_marker(review_note_key) }}</span></label><div class="history-note">{{ (check.category_memberships or [check.category])|join(' · ') }}</div></td><td><span class="status-pill status-pill-manual_review">MANUAL_REVIEW</span></td><td><span class="change-pill change-{{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span>{% if check.since_baseline_change and check.since_baseline_change != check.latest_change %}<div class="since-baseline">Since baseline: <strong>{{ check.since_baseline_change|replace('_',' ')|title }}</strong></div>{% endif %}</td><td>{{ check.pages_review_required }} of {{ check.pages_tested }}</td></tr>
+      <tr data-finding-key="{{ check.finding_key }}" data-current-status="MANUAL_REVIEW" data-current-change="{{ check.latest_change }}"><td><label class="report-include-label"><input class="report-include-toggle" type="checkbox" checked data-ignore-scope="check" data-ignore-key="{{ check.signal_key }}" aria-label="Include {{ check.title }} in report"><span>{{ check.title }} {{ note_marker(review_note_key) }}</span></label><div class="history-note">{{ (check.category_memberships or [check.category])|join(' · ') }}</div></td><td><span class="status-pill status-pill-manual_review">MANUAL_REVIEW</span></td><td><span class="change-pill change-{{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span>{% if check.since_baseline_change and check.since_baseline_change != check.latest_change %}<div class="since-baseline">Since baseline: <strong>{{ check.since_baseline_change|replace('_',' ')|title }}</strong></div>{% endif %}</td><td>{{ check.pages_review_required }} of {{ check.pages_tested }}</td></tr>
       <tr class="check-note-row"><td colspan="4">{{ note_panel(review_note_key, "Pablo's note", True) }}</td></tr>
       {% endfor %}
       </tbody></table></div>
@@ -952,7 +979,7 @@
       <div class="category-head"><h3>{{ category.name }}</h3><span class="status-pill status-pill-{{ category.status|lower }}">{{ category.status }}</span></div>
       <div class="table-wrap report-table"><table><thead><tr><th>Check</th><th>Current</th><th>Movement</th><th>Scope</th><th>Value to fix</th></tr></thead><tbody>
       {% for check in category.checks %}
-      <tr><td><label class="report-include-label">
+      <tr data-finding-key="{{ check.finding_key }}" data-current-status="{{ check.status }}" data-current-change="{{ check.latest_change }}"><td><label class="report-include-label">
               <input class="report-include-toggle" type="checkbox" checked
                      data-ignore-scope="check"
                      data-ignore-key="{{ check.signal_key }}"
@@ -1005,6 +1032,7 @@
 
   {% elif family.kind == 'seo' %}
     {% set seo = family.seo or {} %}
+    {% if family.dataforseo_snapshots %}<section class="panel"><h3>DataForSEO evidence captured</h3><p>This report includes {{ family.dataforseo_snapshots|length }} recent DataForSEO snapshot{{ '' if family.dataforseo_snapshots|length == 1 else 's' }}. The stored endpoints and capture dates are visible below; source data supports findings but is not represented as an invented score.</p><ul>{% for item in family.dataforseo_snapshots[:8] %}<li>{{ item.endpoint }} · {{ item.created_at }}</li>{% endfor %}</ul></section>{% endif %}
     <h3>6.1 Organic Search Performance</h3>
     {% if not seo or not seo.keywords %}<div class="panel source-required"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><strong> Google Search Console is not available for this report.</strong></div>{% endif %}
     <div class="family-snapshot"><div class="snapshot-card"><span>Observed queries</span><strong>{{ seo.keywords or 0 }}</strong></div><div class="snapshot-card"><span>Ranking pages</span><strong>{{ seo.pages or 0 }}</strong></div><div class="snapshot-card"><span>Impressions</span><strong>{{ seo.impressions or 0 }}</strong></div><div class="snapshot-card"><span>Clicks</span><strong>{{ seo.clicks or 0 }}</strong></div><div class="snapshot-card"><span>CTR</span><strong>{{ seo.ctr or 0 }}%</strong></div></div>
@@ -1767,9 +1795,48 @@
   families.forEach(section=>{const b=section.querySelector(':scope > .family-collapse-toggle');if(!b)return;b.addEventListener('click',()=>setFamilyCollapsed(section,!section.classList.contains('family-collapsed')));});
   document.getElementById('report-expand-all')?.addEventListener('click',()=>families.filter(section=>!section.hidden).forEach(section=>setFamilyCollapsed(section,false)));
   document.getElementById('report-collapse-all')?.addEventListener('click',()=>families.filter(section=>!section.hidden).forEach(section=>setFamilyCollapsed(section,true)));
-  const q=document.getElementById('report-check-search'),s=document.getElementById('report-status-filter'),f=document.getElementById('report-family-filter'),p=document.getElementById('report-show-pass');
-  function applyReportFilters(){const text=(q?.value||'').trim().toLowerCase(),st=s?.value||'',fam=f?.value||'',show=p?.checked??true;families.forEach(sec=>{const ok=!fam||sec.dataset.family===fam;sec.hidden=!ok;if(!ok)return;sec.querySelectorAll('tbody tr').forEach(row=>{if(row.classList.contains('check-detail-row'))return;const t=row.textContent||'',u=t.toUpperCase();row.hidden=!((!text||t.toLowerCase().includes(text))&&(!st||u.includes(st))&&(show||!u.includes('PASS')));});});}
-  [q,s,f,p].forEach(el=>el&&el.addEventListener(el.type==='search'?'input':'change',applyReportFilters));
+  const q=document.getElementById('report-check-search'),s=document.getElementById('report-status-filter'),c=document.getElementById('report-change-filter'),f=document.getElementById('report-family-filter'),p=document.getElementById('report-show-pass');
+  const history=JSON.parse(document.getElementById('report-check-history')?.textContent||'{}');
+  const from=document.getElementById('report-compare-from'),to=document.getElementById('report-compare-to'),comparisonNote=document.getElementById('report-comparison-note');
+  if(from&&from.options.length)from.value=from.options[from.options.length-1].value;
+  const rank={FAIL:0,PARTIAL:1,MANUAL_REVIEW:2,DATA_UNAVAILABLE:3,PASS:4,NOT_APPLICABLE:5};
+  function movementFor(key){
+    const rows=history[key]||[];
+    if(!from||!to)return {change:document.querySelector('[data-finding-key="'+CSS.escape(key)+'"]')?.dataset.currentChange||'new',status:''};
+    const earlier=rows.find(row=>row.report_id===from.value),later=rows.find(row=>row.report_id===to.value);
+    if(!later)return {change:'not_comparable',status:''};
+    if(!earlier)return {change:'new',status:later.status||''};
+    const a=new Set(earlier.tested_pages||[]),b=new Set(later.tested_pages||[]);
+    if(a.size&&b.size&&(a.size!==b.size||[...a].some(x=>!b.has(x))))return {change:'not_comparable',status:later.status||''};
+    if(earlier.status===later.status)return {change:'unchanged',status:later.status||''};
+    if(earlier.status==='FAIL'||earlier.status==='PARTIAL'){
+      if(later.status==='PASS')return {change:'resolved',status:later.status};
+    }
+    if(rank[later.status]>rank[earlier.status])return {change:'improved',status:later.status||''};
+    if(rank[later.status]<rank[earlier.status])return {change:'worsened',status:later.status||''};
+    return {change:'not_comparable',status:later.status||''};
+  }
+  function setRelatedRows(row,hidden){
+    row.hidden=hidden;
+    let next=row.nextElementSibling;
+    while(next&&(next.classList.contains('check-note-row')||next.classList.contains('check-detail-row'))){next.hidden=hidden;next=next.nextElementSibling;}
+  }
+  function applyReportFilters(){
+    const text=(q?.value||'').trim().toLowerCase(),st=s?.value||'',change=c?.value||'',fam=f?.value||'',show=p?.checked??true;
+    families.forEach(sec=>{
+      const familyOK=!fam||sec.dataset.family===fam;sec.hidden=!familyOK;if(!familyOK)return;
+      sec.querySelectorAll('tr[data-finding-key]').forEach(row=>{
+        const movement=movementFor(row.dataset.findingKey);const status=movement.status||row.dataset.currentStatus||'';
+        const match=(!text||(row.textContent||'').toLowerCase().includes(text))&&(!st||status===st)&&(!change||movement.change===change)&&(show||status!=='PASS');
+        setRelatedRows(row,!match);
+      });
+    });
+    if(comparisonNote&&from&&to){comparisonNote.textContent='Comparing '+from.selectedOptions[0]?.text+' with '+to.selectedOptions[0]?.text+'. Scope changes are marked not comparable.';}
+  }
+  [q,s,c,f,p,from,to].forEach(el=>el&&el.addEventListener(el.type==='search'?'input':'change',applyReportFilters));
+  const urlSearch=document.getElementById('monitoring-url-search'),urlChange=document.getElementById('monitoring-change-filter');
+  function filterInventory(){const text=(urlSearch?.value||'').toLowerCase(),change=urlChange?.value||'';document.querySelectorAll('#monitoring-url-table tbody tr[data-monitoring-change]').forEach(row=>{row.hidden=!!((text&&!row.textContent.toLowerCase().includes(text))||(change&&row.dataset.monitoringChange!==change));});}
+  [urlSearch,urlChange].forEach(el=>el&&el.addEventListener(el.type==='search'?'input':'change',filterInventory));
 })();
 </script>
 </div>
