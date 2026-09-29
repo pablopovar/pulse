@@ -25,6 +25,35 @@ def access_state(db_path: Path, domain: str) -> dict[str, object]:
     }
 
 
+def access_state_for_report(db_path: Path, report_id: str) -> dict[str, object] | None:
+    """Resolve a report's optional password policy through the DB subsystem.
+
+    Returning ``None`` means the report is not resolvable here. The report
+    route remains responsible for its 404 response; this preserves the generic
+    security boundary's ability to run in isolated tests.
+    """
+    try:
+        with connect_sqlite(db_path, readonly=True) as con:
+            row = con.execute(
+                """SELECT r.domain,a.enabled,a.password_hash,a.updated_at
+                   FROM report_session r
+                   LEFT JOIN domain_public_report_access a
+                     ON a.domain=r.domain COLLATE NOCASE
+                   WHERE r.id=? LIMIT 1""",
+                (report_id,),
+            ).fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    return {
+        "domain": str(row["domain"]),
+        "enabled": bool(row["enabled"] and row["password_hash"]),
+        "configured": bool(row["password_hash"]),
+        "updated_at": row["updated_at"] or "",
+    }
+
+
 def set_access_password(db_path: Path, domain: str, password: str, *, enabled: bool = True) -> dict[str, object]:
     if len(password) < 12:
         raise ValueError("Client report password must be at least 12 characters.")
