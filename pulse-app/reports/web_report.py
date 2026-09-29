@@ -418,6 +418,27 @@ def _session_with_history(con, row):
         {"id": record["id"], "created_at": record["created_at"]}
         for record in reversed(records)
     ]
+    # The report itself remains a point-in-time snapshot, but its navigation
+    # must expose the complete observation timeline. This lets a client open
+    # an older observation and then move in either direction without changing
+    # what that older report contains.
+    available_rows = con.execute(
+        "SELECT id,created_at FROM report_session WHERE domain=? COLLATE NOCASE "
+        "ORDER BY created_at DESC LIMIT 250",
+        (row["domain"],),
+    ).fetchall()
+    observations = []
+    for item in available_rows:
+        observation = dict(item)
+        try:
+            observed_at = datetime.fromisoformat(str(observation["created_at"]).replace("Z", "+00:00"))
+            if observed_at.tzinfo is not None:
+                observed_at = observed_at.astimezone(timezone.utc)
+            observation["display"] = observed_at.strftime("%B ") + str(observed_at.day) + observed_at.strftime(", %Y · %H:%M UTC")
+        except (TypeError, ValueError):
+            observation["display"] = str(observation["created_at"])
+        observations.append(observation)
+    snapshot["available_observations"] = observations
     return {"id":row["id"],"domain":row["domain"],"created_at":row["created_at"],"snapshot":snapshot}
 
 
