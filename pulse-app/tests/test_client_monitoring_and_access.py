@@ -50,3 +50,23 @@ def test_client_report_password_is_hashed_and_can_be_disabled(tmp_path):
     assert disable_access_password(db, "example.com")["enabled"] is False
     assert access_state(db, "example.com")["configured"] is True
     assert password_valid(db, "example.com", "a strong client password") is False
+
+
+def test_historical_report_can_navigate_to_all_domain_observations(tmp_path):
+    db = tmp_path / "pulse.db"
+    migrate_up(db)
+
+    first_id = create_report_session(db, "example.com", _snapshot())
+    second_id = create_report_session(db, "example.com", _snapshot())
+    with connect_sqlite(db) as con:
+        con.execute(
+            "UPDATE report_session SET created_at='2030-01-02T00:00:00+00:00' WHERE id=?",
+            (second_id,),
+        )
+        con.commit()
+
+    older = load_report_session(db, "example.com", first_id)
+    assert [row["id"] for row in older["snapshot"]["available_observations"]] == [
+        second_id,
+        first_id,
+    ]

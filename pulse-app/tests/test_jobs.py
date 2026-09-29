@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from db.migrate import migrate_up
+from db.sqlite import connect_sqlite
 from jobs.store import (
     cancel_job,
     cancel_queued_job,
@@ -148,6 +149,46 @@ def test_running_job_cancellation_is_persistent_and_not_reclaimed(tmp_path):
     assert cancelled["lease_expires_at"] is None
     assert recover_abandoned_jobs(db) == {"requeued": 0, "failed": 0}
     assert claim_next_job(db, worker_id="worker-b") is None
+
+
+def test_cancelling_a_job_closes_its_crawl_and_remaining_frontier(tmp_path):
+    db = migrated_db(tmp_path)
+    created = enqueue_job(db, "report_refresh", domain="example.com")
+    with connect_sqlite(db) as con:
+        crawl_run_id = con.execute(
+            """INSERT INTO crawl_run(
+                domain,base_url,status,page_cap,delay_ms,obey_robots,report_scope,execution_run_id
+            ) VALUES ('example.com','https://example.com','running',15,0,1,'report',?)""",
+            (created["id"],),
+        ).lastrowid
+        inventory_id = con.execute(
+            """INSERT INTO crawl_url_inventory(
+                domain,url,source,classification,eligibility,decision_reason,
+                priority_score,discovered_at,updated_at
+            ) VALUES ('example.com','https://example.com/','operator','core_page','eligible',
+                'operator_selected',100,'now','now')"""
+        ).lastrowid
+        con.execute(
+            """INSERT INTO crawl_frontier(
+                crawl_run_id,url_inventory_id,state,reason,priority_score,queued_at,updated_at
+            ) VALUES (?,?,'queued','initial',100,'now','now')""",
+            (crawl_run_id, inventory_id),
+        )
+        con.commit()
+
+    claim_next_job(db, worker_id="worker-a", lease_seconds=60)
+    assert cancel_job(db, created["id"])
+
+    with connect_sqlite(db, readonly=True) as con:
+        crawl = con.execute("SELECT status,cancelled_at FROM crawl_run WHERE id=?", (crawl_run_id,)).fetchone()
+        frontier = con.execute(
+            "SELECT state,reason FROM crawl_frontier WHERE crawl_run_id=? AND url_inventory_id=?",
+            (crawl_run_id, inventory_id),
+        ).fetchone()
+    assert dict(crawl)["status"] == "cancelled"
+    assert dict(crawl)["cancelled_at"]
+    assert dict(frontier)["state"] == "cancelled"
+    assert "Cancelled" in dict(frontier)["reason"]
 
 
 def test_pause_and_resume_survive_job_reopen(tmp_path):
