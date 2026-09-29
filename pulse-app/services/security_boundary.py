@@ -6,14 +6,15 @@ import os
 import secrets
 from dataclasses import dataclass
 
-from flask import abort, request, session
-from services.public_report_access import access_state, password_valid
+from flask import abort, redirect, request, session, url_for
+from services.public_report_access import access_state
 
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 PUBLIC_ENDPOINTS = frozenset(
     {
         "public_report",
+        "public_report_access",
         "public_report_static",
         "public_report_note_reply",
     }
@@ -146,7 +147,7 @@ def _validate_csrf():
 
 
 def _public_report_id() -> str | None:
-    if request.endpoint not in {"public_report", "public_report_note_reply"}:
+    if request.endpoint not in {"public_report", "public_report_access", "public_report_note_reply"}:
         return None
     value = request.view_args.get("report_id") if request.view_args else None
     return str(value) if value else None
@@ -192,14 +193,14 @@ def _require_public_report_password(report_id: str):
         abort(503)
     if not state["enabled"]:
         return None
-    credentials = _basic_credentials()
-    if credentials and password_valid(path, domain, credentials[1]):
+    authorised = session.get("_pulse_client_report_ids") or []
+    if report_id in authorised:
         return None
-    return (
-        "Password required for this client report.",
-        401,
-        {"WWW-Authenticate": 'Basic realm="Pulse client report", charset="UTF-8"'},
-    )
+    if request.endpoint == "public_report_access":
+        return None
+    if request.method in SAFE_METHODS:
+        return redirect(url_for("public_report_access", report_id=report_id))
+    return ("Password required for this client report.", 401)
 
 
 def configure_security(app):

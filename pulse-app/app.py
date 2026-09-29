@@ -26,7 +26,7 @@ from services.report_collaboration import (
 from db.sqlite import connect_sqlite
 from db.migrate import validate_schema_current
 
-from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, send_from_directory, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, send_from_directory, session, url_for
 import urllib.parse
 import re
 import json
@@ -47,7 +47,7 @@ from reports.web_report import (
 )
 from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, list_models as list_manual_ai_analysis_models
 from services.security_boundary import configure_security
-from services.public_report_access import access_state as public_report_access_state, disable_access_password, set_access_password
+from services.public_report_access import access_state as public_report_access_state, disable_access_password, password_valid, set_access_password
 from jobs.store import enqueue_job
 from jobs.store import cancel_job, get_job, list_jobs, pause_job, resume_job
 from integrations.opengsc_adapter import OpenGSCAdapter
@@ -1691,6 +1691,29 @@ def generate_full_web_report(domain):
 @app.get("/reports/_static/<path:filename>")
 def public_report_static(filename):
     return send_from_directory(APP_DIR / "static", filename)
+
+
+@app.route("/reports/<report_id>/access", methods=["GET", "POST"])
+def public_report_access(report_id):
+    domain = report_domain(RESEARCH_DB, report_id)
+    if not domain:
+        abort(404)
+    state = public_report_access_state(RESEARCH_DB, domain)
+    if not state["enabled"]:
+        return redirect(url_for("public_report", report_id=report_id))
+    error = ""
+    if request.method == "POST":
+        if password_valid(RESEARCH_DB, domain, request.form.get("password", "")):
+            authorised = list(session.get("_pulse_client_report_ids") or [])
+            if report_id not in authorised:
+                authorised.append(report_id)
+            session["_pulse_client_report_ids"] = authorised[-50:]
+            session.modified = True
+            return redirect(url_for("public_report", report_id=report_id))
+        error = "That password was not accepted."
+    return render_template(
+        "public_report_access.html", report_id=report_id, domain=domain, error=error
+    )
 
 
 
