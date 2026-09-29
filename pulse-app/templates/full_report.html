@@ -746,7 +746,7 @@
   <div class="heading-actions">
     {% if report.report_quality and report.report_quality.blocking %}<span class="button export-blocked" title="Resolve report-quality blockers before export">Export blocked</span>{% else %}<a class="button primary" href="{{ url_for('report_session_pdf', domain=site.domain, report_id=report_session.id) }}">Export PDF</a>{% endif %}
     <a class="button" href="{{ url_for('reports', domain=site.domain) }}">Observation history</a>
-    <a class="button" href="https://visible-to-ai.povarchik.com/reports/{{ report_session.id }}" target="_blank" rel="noopener">Client view</a>
+    <a class="button" href="https://pulse.povarchik.com/reports/{{ report_session.id }}" target="_blank" rel="noopener">Client view</a>
     <a class="button about-report-link" href="#about-this-report">About this report</a>
   </div>
   {% endif %}
