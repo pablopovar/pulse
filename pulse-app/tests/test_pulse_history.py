@@ -47,6 +47,38 @@ def test_same_status_with_more_affected_pages_is_worsened():
     assert classify_change(current, previous) == "worsened"
 
 
+def test_smaller_page_set_is_not_reported_as_improvement():
+    previous = {
+        "status": "FAIL",
+        "pages_affected": 6,
+        "pages_tested": 15,
+        "tested_pages": [f"/page-{n}" for n in range(15)],
+    }
+    current = {
+        "status": "FAIL",
+        "pages_affected": 4,
+        "pages_tested": 4,
+        "tested_pages": [f"/page-{n}" for n in range(4)],
+    }
+    assert classify_change(current, previous) == "not_comparable"
+
+
+def test_smaller_page_set_is_not_reported_as_resolved():
+    previous = {
+        "status": "PARTIAL",
+        "pages_affected": 1,
+        "pages_tested": 15,
+        "tested_pages": [f"/page-{n}" for n in range(15)],
+    }
+    current = {
+        "status": "PASS",
+        "pages_affected": 0,
+        "pages_tested": 4,
+        "tested_pages": [f"/page-{n}" for n in range(4)],
+    }
+    assert classify_change(current, previous) == "not_comparable"
+
+
 def test_manual_review_is_not_treated_as_failure_history():
     previous = {"status": "MANUAL_REVIEW", "pages_review_required": 4}
     current = {"status": "MANUAL_REVIEW", "pages_review_required": 2}
@@ -120,4 +152,3 @@ def test_family_summary_uses_baseline_current_semantics():
     summary = family_pulse_summary(history, families)
     assert summary["Identity & Authority"]["resolved"] == 2
     assert summary["Identity & Authority"]["unchanged"] == 0
-

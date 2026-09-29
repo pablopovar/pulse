@@ -2,7 +2,7 @@ import ast
 from pathlib import Path
 
 from db.migrate import migrate_up
-from reports.web_report import create_report_session, load_report_session
+from reports.web_report import create_report_session, list_report_sessions, load_report_session, prepare_report_view
 
 
 def _snapshot(label):
@@ -52,6 +52,29 @@ def test_old_report_remains_unchanged_when_later_observation_is_created(tmp_path
 
     assert after["manual_ai_snapshot"] == before["manual_ai_snapshot"]
     assert after["report_metadata"]["pulse_updated_at"] == before["report_metadata"]["pulse_updated_at"]
+
+
+def test_unchanged_refresh_is_still_a_new_observation(tmp_path):
+    db = tmp_path / "report.db"
+    migrate_up(db)
+    snapshot = _snapshot("UNCHANGED")
+
+    first = create_report_session(db, "example.com", snapshot, execution_run_id="run-1")
+    second = create_report_session(db, "example.com", snapshot, execution_run_id="run-2")
+
+    assert first != second
+    assert len(list_report_sessions(db, "example.com")) == 2
+
+
+def test_report_view_exposes_human_readable_last_checked_date():
+    report = prepare_report_view({
+        **_snapshot("DATED"),
+        "report_metadata": {"audit_date": "2026-09-29T00:38:50+00:00"},
+    })
+
+    assert report["report_metadata"]["last_checked_at"] == "2026-09-29T00:38:50+00:00"
+    assert report["report_metadata"]["last_checked_display"] == "September 29, 2026"
+    assert report["report_metadata"]["last_checked_time_display"] == "00:38 UTC"
 
 
 def _function_calls(source, function_name):

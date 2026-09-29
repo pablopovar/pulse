@@ -9,6 +9,7 @@
 
 {% if active_jobs %}
 <h2>Active work</h2>
+<p>A new monitoring run is in progress. The current Pulse continues to show the last completed observation until this run is successfully published.</p>
 <section class="panel">
   <table><thead><tr><th>Job</th><th>Type</th><th>Status</th><th>Stage</th><th>Queued</th><th>Controls</th></tr></thead><tbody>
   {% for job in active_jobs %}
@@ -32,7 +33,7 @@
 {% set current = report_sessions[0] %}
 <h2>Current pulse</h2>
 <div class="panel">
-  <p><strong>Latest observation:</strong> {{ current.created_at }}</p>
+  <p><strong>Last completed check:</strong> {{ current.created_at }}</p>
   <p>
     <a class="button primary" href="{{ url_for('report_session_view', domain=site.domain, report_id=current.id) }}">Open admin report</a>
     <a class="button" href="https://visible-to-ai.povarchik.com/reports/{{ current.id }}" target="_blank" rel="noopener">Open client report</a>

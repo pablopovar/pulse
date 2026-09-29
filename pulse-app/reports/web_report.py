@@ -590,6 +590,27 @@ def _normalize_manual_ai_snapshot(manual_ai: dict[str, Any]) -> dict[str, Any]:
 
 def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
     data=dict(snapshot)
+    meta = dict(data.get("report_metadata") or {})
+    checked_at = str(
+        meta.get("audit_date")
+        or meta.get("pulse_updated_at")
+        or (data.get("audit") or {}).get("completed_at")
+        or (data.get("audit") or {}).get("started_at")
+        or ""
+    )
+    checked_display = checked_at
+    if checked_at:
+        try:
+            parsed = datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(timezone.utc)
+            checked_display = f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+            meta["last_checked_time_display"] = parsed.strftime("%H:%M UTC")
+        except ValueError:
+            pass
+    meta["last_checked_at"] = checked_at
+    meta["last_checked_display"] = checked_display
+    data["report_metadata"] = meta
     signals=[]
     for raw in data.get("audit_signals") or []:
         signal=dict(raw)

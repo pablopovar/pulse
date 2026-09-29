@@ -56,6 +56,13 @@ def _snapshot_observations(snapshot: dict[str, Any], *, report_id: str, observed
             if normalize_status(r.get("observed_status")) == "DATA_UNAVAILABLE"
         }
         tested = {str(r.get("path") or r.get("url") or "/") for r in rows}
+        page_statuses: dict[str, str] = {}
+        for row in rows:
+            page = str(row.get("path") or row.get("url") or "/")
+            status = normalize_status(row.get("observed_status"))
+            existing = page_statuses.get(page)
+            if existing is None or STATUS_ORDER.get(status, 0) < STATUS_ORDER.get(existing, 0):
+                page_statuses[page] = status
         out[key] = {
             "finding_key": key,
             "title": title,
@@ -67,6 +74,9 @@ def _snapshot_observations(snapshot: dict[str, Any], *, report_id: str, observed
             "pages_review_required": len(reviews),
             "pages_data_unavailable": len(unavailable),
             "pages_tested": len(tested),
+            "tested_pages": sorted(tested),
+            "affected_pages": sorted(affected),
+            "page_statuses": page_statuses,
             "observed_at": observed_at,
             "report_id": report_id,
             "audit_run_id": (snapshot.get("audit") or {}).get("id"),
@@ -77,6 +87,13 @@ def _snapshot_observations(snapshot: dict[str, Any], *, report_id: str, observed
 def classify_change(current: dict[str, Any], previous: dict[str, Any] | None) -> str:
     if previous is None:
         return "new"
+    current_pages = set(current.get("tested_pages") or [])
+    previous_pages = set(previous.get("tested_pages") or [])
+    # A smaller or different audit cohort is not evidence of improvement. Keep
+    # the observation, but preserve the uncertainty until the same pages have
+    # been tested again. This prevents omitted pages from becoming false fixes.
+    if current_pages and previous_pages and current_pages != previous_pages:
+        return "not_comparable"
     cs = normalize_status(current.get("status"))
     ps = normalize_status(previous.get("status"))
     if cs == "NOT_APPLICABLE" and ps != "NOT_APPLICABLE":
@@ -189,6 +206,15 @@ def attach_history_to_check(check: dict[str, Any], history: dict[str, list[dict[
         check["observed_at"] = latest.get("observed_at") or ""
         check["state_since"] = latest.get("state_since") or latest.get("observed_at") or ""
         check["previous_observation"] = previous
+        current_pages = set(latest.get("tested_pages") or [])
+        previous_pages = set((previous or {}).get("tested_pages") or [])
+        check["comparison_scope_changed"] = bool(
+            previous and current_pages and previous_pages and current_pages != previous_pages
+        )
+        check["comparison_note"] = (
+            "The current and previous observations tested different page sets, so movement is not comparable."
+            if check["comparison_scope_changed"] else ""
+        )
     else:
         check["latest_change"] = "new"
         check["since_baseline_change"] = "new"
@@ -196,6 +222,8 @@ def attach_history_to_check(check: dict[str, Any], history: dict[str, list[dict[
         check["observed_at"] = ""
         check["state_since"] = ""
         check["previous_observation"] = None
+        check["comparison_scope_changed"] = False
+        check["comparison_note"] = ""
     return check
 
 
@@ -337,5 +365,4 @@ def family_pulse_summary(
             result[name] = _summary_result({})
 
     return result
-
 

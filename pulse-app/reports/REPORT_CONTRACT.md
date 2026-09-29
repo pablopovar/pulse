@@ -83,7 +83,9 @@ Movement is classified as:
 - `not_comparable`
 - `no_longer_applicable`
 
-When status is unchanged but the affected page count falls or rises, the movement may still be `improved` or `worsened`.
+When the tested page set is identical, an unchanged status with a lower or higher affected-page count may still be `improved` or `worsened`. When the tested page set changes, the observation is retained but aggregate movement is `not_comparable`; omitted pages must never be treated as resolved or improved.
+
+Every successfully completed monitoring run creates a new immutable observation, even when every comparable check is unchanged. A run still in progress does not replace the last completed observation.
 
 There is no monthly report mode. Month, week, day, baseline, and custom periods are filters over the same continuous observation history rather than separate report entities.
 

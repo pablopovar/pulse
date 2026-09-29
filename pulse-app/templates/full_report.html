@@ -79,6 +79,10 @@
 .report-document .report-header{
   position:relative;
   overflow:hidden;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:start;
+  gap:1rem 2rem;
   border:1px solid var(--brand-line);
   border-radius:18px;
   background:#fff;
@@ -91,12 +95,21 @@
   background:linear-gradient(180deg,var(--brand-blue) 0 52%,var(--brand-orange) 52% 100%);
 }
 .report-document .report-header h1{font-size:clamp(2.15rem,4.8vw,3.65rem);line-height:.98;margin:.45rem 0 .6rem}
+.report-document .last-checked{
+  min-width:210px;
+  text-align:right;
+  padding:.25rem 0;
+}
+.report-document .last-checked span{display:block;color:var(--brand-muted);font-size:.72rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+.report-document .last-checked strong{display:block;margin-top:.35rem;font-size:1.1rem}
+.report-document .last-checked time{display:block;margin-top:.2rem;color:var(--brand-muted);font-size:.78rem}
 .report-document .report-meta{display:flex;gap:.45rem;flex-wrap:wrap}
 .report-document .report-meta span{border:1px solid var(--brand-line);border-radius:7px;padding:.3rem .5rem;background:#fafafa;font-size:.76rem}
-.report-document .heading-actions{display:flex;gap:.5rem;flex-wrap:wrap}
+.report-document .heading-actions{grid-column:1/-1;display:flex;gap:.5rem;flex-wrap:wrap}
 .report-document .heading-actions .button{border-radius:9px}
 .report-document .heading-actions .button.primary{background:var(--brand-blue)!important;border-color:var(--brand-blue)!important}
 .report-document .about-report-link{border-color:var(--brand-navy)!important;color:var(--brand-navy)!important}
+@media(max-width:720px){.report-document .report-header{grid-template-columns:1fr}.report-document .last-checked{text-align:left;min-width:0}}
 
 .report-document .executive-lead{
   max-width:900px;
@@ -724,6 +737,11 @@
     <div class="report-kicker">LIVING DOMAIN PULSE</div>
     <h1>{{ site.domain }}</h1>
   </div>
+  <div class="last-checked">
+    <span>Last checked</span>
+    <strong>{{ meta.get('last_checked_display') or report_session.created_at }}</strong>
+    {% if meta.get('last_checked_time_display') %}<time datetime="{{ meta.get('last_checked_at') }}">{{ meta.get('last_checked_time_display') }}</time>{% endif %}
+  </div>
   {% if request.endpoint != 'public_report' %}
   <div class="heading-actions">
     {% if report.report_quality and report.report_quality.blocking %}<span class="button export-blocked" title="Resolve report-quality blockers before export">Export blocked</span>{% else %}<a class="button primary" href="{{ url_for('report_session_pdf', domain=site.domain, report_id=report_session.id) }}">Export PDF</a>{% endif %}
@@ -767,6 +785,7 @@
   <div class="movement-item worsened"><span>Worsened</span><strong>{{ pulse.get('worsened',0) }}</strong></div>
   <div class="movement-item new"><span>New</span><strong>{{ pulse.get('new',0) }}</strong></div>
   <div class="movement-item unchanged"><span>No movement</span><strong>{{ pulse.get('unchanged',0) }}</strong></div>
+  {% if pulse.get('not_comparable',0) %}<div class="movement-item unchanged"><span>Not comparable</span><strong>{{ pulse.get('not_comparable',0) }}</strong></div>{% endif %}
 </section>
 
 <section class="report-high-signal">
@@ -908,7 +927,7 @@
                      aria-label="Include {{ check.title }} in report">
               {% set check_note_key = 'check:' ~ check.signal_key %}
               <span>{{ check.title }} {{ note_marker(check_note_key) }}</span>
-            </label><div class="history-note">{{ (check.category_memberships or [check.category])|join(' · ') }}</div></td><td><span class="status-pill status-pill-{{ check.status|lower }}">{{ check.status }}</span></td><td><span class="change-pill change-{{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span>{% if check.since_baseline_change and check.since_baseline_change != check.latest_change %}<div class="since-baseline">Since baseline: <strong>{{ check.since_baseline_change|replace('_',' ')|title }}</strong></div>{% endif %}{% if check.observed_at %}<div class="history-note">Observed {{ check.observed_at }}</div>{% endif %}</td><td>{{ check.pages_affected }} of {{ check.pages_tested }}</td><td class="value-score" data-value="{{ check.value_score or 0 }}">{{ '%.2f'|format(check.value_score or 0) }}{% if check.value_score_explanation.partial_inputs %}<div class="score-explain">Traffic data unavailable; score uses severity + prevalence only.</div>{% endif %}</td></tr>
+            </label><div class="history-note">{{ (check.category_memberships or [check.category])|join(' · ') }}</div></td><td><span class="status-pill status-pill-{{ check.status|lower }}">{{ check.status }}</span></td><td><span class="change-pill change-{{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span>{% if check.comparison_scope_changed %}<div class="history-note">{{ check.comparison_note }}</div>{% endif %}{% if check.since_baseline_change and check.since_baseline_change != check.latest_change %}<div class="since-baseline">Since baseline: <strong>{{ check.since_baseline_change|replace('_',' ')|title }}</strong></div>{% endif %}{% if check.observed_at %}<div class="history-note">Observed {{ check.observed_at }}</div>{% endif %}</td><td>{{ check.pages_affected }} of {{ check.pages_tested }}</td><td class="value-score" data-value="{{ check.value_score or 0 }}">{{ '%.2f'|format(check.value_score or 0) }}{% if check.value_score_explanation.partial_inputs %}<div class="score-explain">Traffic data unavailable; score uses severity + prevalence only.</div>{% endif %}</td></tr>
       <tr class="check-note-row"><td colspan="5">{{ note_panel(check_note_key, "Pablo's note", True) }}</td></tr>
       {% else %}<tr><td colspan="5">No confirmed fail/partial findings currently require attention.</td></tr>{% endfor %}
       </tbody></table>
@@ -939,7 +958,7 @@
                      data-ignore-key="{{ check.signal_key }}"
                      aria-label="Include {{ check.title }} in report">
               <span>{{ check.title }} {{ note_marker('check:' ~ check.signal_key) }}</span>
-            </label></td><td><span class="status-pill status-pill-{{ check.status|lower }}">{{ check.status }}</span></td><td><span class="change-pill change-{{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span>{% if check.since_baseline_change and check.since_baseline_change != check.latest_change %}<div class="since-baseline">Since baseline: <strong>{{ check.since_baseline_change|replace('_',' ')|title }}</strong></div>{% endif %}</td><td>{% if check.status == 'MANUAL_REVIEW' %}{{ check.pages_review_required }} review{% elif check.status == 'DATA_UNAVAILABLE' %}{{ check.pages_data_unavailable }} unavailable{% elif check.status == 'NOT_APPLICABLE' %}—{% else %}{{ check.pages_affected }} of {{ check.pages_tested }}{% endif %}</td><td>{% if check.is_confirmed_issue %}{{ '%.2f'|format(check.value_score or 0) }}{% else %}—{% endif %}</td></tr>
+            </label></td><td><span class="status-pill status-pill-{{ check.status|lower }}">{{ check.status }}</span></td><td><span class="change-pill change-{{ check.latest_change }}">{{ check.latest_change|replace('_',' ')|title }}</span>{% if check.comparison_scope_changed %}<div class="history-note">{{ check.comparison_note }}</div>{% endif %}{% if check.since_baseline_change and check.since_baseline_change != check.latest_change %}<div class="since-baseline">Since baseline: <strong>{{ check.since_baseline_change|replace('_',' ')|title }}</strong></div>{% endif %}</td><td>{% if check.status == 'MANUAL_REVIEW' %}{{ check.pages_review_required }} review{% elif check.status == 'DATA_UNAVAILABLE' %}{{ check.pages_data_unavailable }} unavailable{% elif check.status == 'NOT_APPLICABLE' %}—{% else %}{{ check.pages_affected }} of {{ check.pages_tested }}{% endif %}</td><td>{% if check.is_confirmed_issue %}{{ '%.2f'|format(check.value_score or 0) }}{% else %}—{% endif %}</td></tr>
       <tr class="check-detail-row"><td colspan="5"><details><summary>Current evidence & history · {{ check.history_count }} observation{{ '' if check.history_count == 1 else 's' }}</summary>
         <div class="finding-pulse">
           <div class="pulse-cell"><span>Current state</span><strong><span class="status-pill status-pill-{{ check.status|lower }}">{{ check.status }}</span></strong></div>
