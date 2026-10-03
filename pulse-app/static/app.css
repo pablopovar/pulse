@@ -318,3 +318,73 @@ html{scroll-behavior:smooth}
 .analysis-table th:last-child,.analysis-table td:last-child{border-right:0}
 .analysis-table tbody tr:last-child td{border-bottom:0}
 .analysis-table td:first-child{width:48px;text-align:center;font-weight:700}
+
+
+/* Theme preference: follows system preference once, then uses the saved choice. */
+html[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0b111a;--panel:#121b27;--line:#2b3a4d;--text:#e7edf5;--muted:#a9b6c5;
+  --accent:#79a7ff;--soft:#172a49;--good:#133a2c;--warn:#493b15;--old:#263243;
+}
+html[data-theme="dark"] body{background:var(--bg);color:var(--text)}
+html[data-theme="dark"] a{color:#91b7ff}
+html[data-theme="dark"] .topbar{background:#08101c;border-bottom:1px solid var(--line)}
+html[data-theme="dark"] .domain-picker label{color:#b8c5d5}
+html[data-theme="dark"] .domain-picker select{background:#152237;color:var(--text);border-color:#40536b}
+html[data-theme="dark"] .nav,
+html[data-theme="dark"] .table-wrap,
+html[data-theme="dark"] .reports.large li,
+html[data-theme="dark"] .report-hero,
+html[data-theme="dark"] .report-header,
+html[data-theme="dark"] .report-score-card,
+html[data-theme="dark"] .family-nav-card,
+html[data-theme="dark"] .page-findings,
+html[data-theme="dark"] .action-card,
+html[data-theme="dark"] .root-cause-card,
+html[data-theme="dark"] .high-signal-item,
+html[data-theme="dark"] .finding-card,
+html[data-theme="dark"] .panel,
+html[data-theme="dark"] .card{background:var(--panel);border-color:var(--line);color:var(--text)}
+html[data-theme="dark"] .nav a{color:#b3c0cf}
+html[data-theme="dark"] .nav a.active{color:#fff}
+html[data-theme="dark"] th,
+html[data-theme="dark"] .page-findings>summary,
+html[data-theme="dark"] .report-meta span,
+html[data-theme="dark"] .report-table th,
+html[data-theme="dark"] .report-score-row,
+html[data-theme="dark"] .audit-score-row span{background:#172231;color:#dbe6f2;border-color:var(--line)}
+html[data-theme="dark"] td{border-color:#223145}
+html[data-theme="dark"] tbody tr:hover td{background:#172231}
+html[data-theme="dark"] button,
+html[data-theme="dark"] .button,
+html[data-theme="dark"] input,
+html[data-theme="dark"] select,
+html[data-theme="dark"] textarea,
+html[data-theme="dark"] .tag-filter summary,
+html[data-theme="dark"] .tag-filter-menu,
+html[data-theme="dark"] .nav-group-menu{background:#162232;color:var(--text);border-color:#40536b}
+html[data-theme="dark"] input::placeholder,
+html[data-theme="dark"] textarea::placeholder{color:#90a0b2}
+html[data-theme="dark"] button.primary,
+html[data-theme="dark"] .primary{background:#5e92f6;border-color:#5e92f6;color:#08111d}
+html[data-theme="dark"] code{background:#202d3e;color:#e8eef6}
+html[data-theme="dark"] .notice{background:#443717;border-color:#8a7225;color:#f3e3a0}
+html[data-theme="dark"] .family-nav-card:hover{background:#182a43;border-color:#7599d8}
+html[data-theme="dark"] .finding-fail td{background:#321c23}
+html[data-theme="dark"] .finding-partial td{background:#352d1d}
+html[data-theme="dark"] .status-pass,
+html[data-theme="dark"] .status-completed{background:#183f2e;color:#a8ecc1}
+html[data-theme="dark"] .status-fail,
+html[data-theme="dark"] .status-failed{background:#48242a;color:#ffb7b7}
+html[data-theme="dark"] .status-partial{background:#493817;color:#f5d888}
+html[data-theme="dark"] .status-manual_review,
+html[data-theme="dark"] .status-unknown{background:#292c55;color:#c6ccff}
+html[data-theme="dark"] .status-neutral,
+html[data-theme="dark"] .status{background:#293648;color:#c9d5e3}
+html[data-theme="dark"] .theme-toggle{margin-left:4px;background:#162232;border-color:#40536b;color:#e7edf5}
+.theme-toggle{display:inline-flex;align-items:center;gap:6px;margin-left:4px;padding:7px 10px;background:#1f2937;border:1px solid #4b5b70;border-radius:6px;color:#f3f6fa;font:inherit;font-size:12px;cursor:pointer}
+.theme-toggle:hover{background:#2c3b50}
+@media (prefers-reduced-motion:no-preference){
+  body,.nav,.panel,.card,.table-wrap,.report-hero,.report-header,.report-score-card,.family-nav-card,.page-findings,.action-card,button,input,select,textarea{transition:background-color .16s ease,color .16s ease,border-color .16s ease}
+}
+@media(max-width:650px){.theme-toggle [data-theme-label]{display:none}.theme-toggle{padding:8px}}
