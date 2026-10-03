@@ -412,6 +412,20 @@ def _content_fingerprints(parsed):
     return exact, f"{simhash:016x}"
 
 
+def _content_is_substantial(parsed, *, minimum_words=100, minimum_distinct_words=40):
+    """Return whether body text is strong enough to prove content identity.
+
+    Thin responses and shared template chrome can have identical fingerprints on
+    otherwise distinct URLs.  Fingerprints remain useful for change detection,
+    but they must not remove a URL from the crawl frontier unless the fetched
+    document contains a meaningful amount of varied text.
+    """
+
+    text = re.sub(r"\s+", " ", str(parsed.get("visible_text") or "")).strip().lower()
+    words = re.findall(r"[a-z0-9]+", text)
+    return len(words) >= minimum_words and len(set(words)) >= minimum_distinct_words
+
+
 def _hamming(left: str, right: str) -> int:
     try:
         return (int(left, 16) ^ int(right, 16)).bit_count()
@@ -475,6 +489,43 @@ def _sync_url_inventory(con, domain, base_url, selected_urls=None, max_depth=5):
         upsert_inventory_url(
             con, domain, url, source="operator", operator_selected=True
         )
+
+    # Releases before the duplicate-classifier hardening used one ambiguous
+    # reason for canonical, exact-content and near-content matches. Reopen the
+    # content-only decisions so the next bounded crawl can evaluate the pages
+    # with the stricter rules. Genuine cross-URL canonicals remain duplicates.
+    legacy_duplicates = con.execute(
+        """
+        SELECT id,url,final_url,canonical_url
+        FROM crawl_url_inventory
+        WHERE domain=? COLLATE NOCASE
+          AND eligibility='duplicate'
+          AND decision_reason='canonical_or_content_duplicate'
+        """,
+        (domain,),
+    ).fetchall()
+    for row in legacy_duplicates:
+        own_url = normalize_candidate_url(row["final_url"] or row["url"], domain)
+        canonical_url = normalize_candidate_url(row["canonical_url"], domain)
+        if canonical_url and own_url and canonical_url != own_url:
+            con.execute(
+                """
+                UPDATE crawl_url_inventory
+                SET duplicate_of_url=?,decision_reason='canonical_duplicate',updated_at=?
+                WHERE id=?
+                """,
+                (canonical_url, utcnow(), row["id"]),
+            )
+        else:
+            con.execute(
+                """
+                UPDATE crawl_url_inventory
+                SET eligibility='eligible',decision_reason='legacy_duplicate_revalidation',
+                    duplicate_of_url='',content_fingerprint='',content_simhash='',updated_at=?
+                WHERE id=?
+                """,
+                (utcnow(), row["id"]),
+            )
     con.commit()
     return len(entries), sitemap_source, warnings
 
@@ -534,31 +585,33 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
         except Exception:
             canonical_url = ""
     duplicate_of = ""
+    duplicate_reason = ""
     if canonical_url and canonical_url != normalize_candidate_url(final_url, domain):
         duplicate_of = canonical_url
-    elif fingerprint:
+        duplicate_reason = "canonical_duplicate"
+    elif fingerprint and _content_is_substantial(parsed):
         exact = con.execute(
             """
-            SELECT url FROM crawl_url_inventory
-            WHERE domain=? COLLATE NOCASE AND id<>? AND content_fingerprint=?
-            ORDER BY priority_score DESC,id LIMIT 1
+            SELECT u.url FROM crawl_url_inventory u
+            WHERE u.domain=? COLLATE NOCASE
+              AND u.id<>?
+              AND u.content_fingerprint=?
+              AND EXISTS (
+                  SELECT 1
+                  FROM crawl_page cp
+                  JOIN crawl_run cr ON cr.id=cp.crawl_run_id
+                  WHERE cr.domain=u.domain COLLATE NOCASE
+                    AND (cp.final_url=u.url OR cp.url=u.url)
+                    AND cp.content_fingerprint=u.content_fingerprint
+                    AND cp.word_count>=100
+              )
+            ORDER BY u.priority_score DESC,u.id LIMIT 1
             """,
             (domain, int(inventory_id or 0), fingerprint),
         ).fetchone()
         if exact:
             duplicate_of = exact["url"]
-        elif simhash:
-            candidates = con.execute(
-                """
-                SELECT url,content_simhash FROM crawl_url_inventory
-                WHERE domain=? COLLATE NOCASE AND id<>? AND content_simhash<>''
-                ORDER BY priority_score DESC LIMIT 250
-                """,
-                (domain, int(inventory_id or 0)),
-            ).fetchall()
-            near = next((row for row in candidates if _hamming(simhash, row["content_simhash"]) <= 3), None)
-            if near:
-                duplicate_of = near["url"]
+            duplicate_reason = "exact_content_duplicate"
     indexable = int(
         bool((status == 304 and prior and not prior["noindex"]) or (status and 200 <= status < 300))
         and robots_allowed
@@ -675,7 +728,7 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
             )
         else:
             eligibility = "duplicate" if duplicate_of else ("excluded" if "noindex" in robots_meta else "eligible")
-            reason = "canonical_or_content_duplicate" if duplicate_of else ("noindex" if "noindex" in robots_meta else "crawled")
+            reason = duplicate_reason if duplicate_of else ("noindex" if "noindex" in robots_meta else "crawled")
             con.execute(
                 """
                 UPDATE crawl_url_inventory

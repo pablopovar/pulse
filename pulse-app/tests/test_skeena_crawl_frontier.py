@@ -38,6 +38,141 @@ def test_crawled_url_is_added_to_auditable_site_page_inventory(tmp_path):
     assert row["updated_at"]
 
 
+def _parsed_page(text, *, canonical=""):
+    words = text.split()
+    return {
+        "title": "Distinct evidence page",
+        "description": "",
+        "canonical": canonical,
+        "robots_meta": "",
+        "lang": "en",
+        "viewport": "width=device-width",
+        "h1": ["Distinct evidence"],
+        "h2": [],
+        "word_count": len(words),
+        "links": [],
+        "images": [],
+        "schema_types": [],
+        "hreflang": [],
+        "visible_text": text,
+    }
+
+
+def _fetch_result(url):
+    return {
+        "ok": True,
+        "status": 200,
+        "final_url": url,
+        "content_type": "text/html",
+        "content_length": 1000,
+        "elapsed_ms": 1,
+        "headers": {},
+        "body": b"",
+        "error": None,
+    }
+
+
+def test_near_similar_template_pages_remain_distinct_crawl_candidates(tmp_path):
+    from crawlers import seo
+
+    db = tmp_path / "research.db"
+    migrate_up(db)
+    domain = "example.com"
+    urls = [f"https://{domain}/about", f"https://{domain}/services"]
+    shared = " ".join(f"navigation{index}" for index in range(120))
+    texts = [f"{shared} about company history", f"{shared} professional dog walking services"]
+    fingerprints = [seo._content_fingerprints(_parsed_page(text)) for text in texts]
+    assert seo._hamming(fingerprints[0][1], fingerprints[1][1]) <= 3
+
+    with connect_sqlite(db) as con:
+        run_id = con.execute(
+            """
+            INSERT INTO crawl_run(domain,base_url,status,page_cap,delay_ms,obey_robots,crawl_mode)
+            VALUES (?,?, 'running',2,0,1,'initial')
+            """,
+            (domain, f"https://{domain}"),
+        ).lastrowid
+        inventory_ids = [
+            upsert_inventory_url(con, domain, url, source="sitemap") for url in urls
+        ]
+        con.commit()
+        for url, inventory_id, text in zip(urls, inventory_ids, texts):
+            seo.persist_page(
+                con,
+                run_id,
+                domain,
+                url,
+                True,
+                _fetch_result(url),
+                _parsed_page(text),
+                inventory_id,
+            )
+        rows = con.execute(
+            """
+            SELECT url,eligibility,duplicate_of_url,decision_reason
+            FROM crawl_url_inventory WHERE domain=? ORDER BY url
+            """,
+            (domain,),
+        ).fetchall()
+
+    assert len(rows) == 2
+    assert all(row["eligibility"] == "eligible" for row in rows)
+    assert all(not row["duplicate_of_url"] for row in rows)
+    assert all(row["decision_reason"] == "crawled" for row in rows)
+
+
+def test_legacy_content_duplicates_are_reopened_but_canonicals_are_preserved(tmp_path, monkeypatch):
+    from crawlers import seo
+
+    db = tmp_path / "research.db"
+    migrate_up(db)
+    domain = "example.com"
+    content_url = f"https://{domain}/services"
+    canonical_url = f"https://{domain}/about-old"
+    with connect_sqlite(db) as con:
+        content_id = upsert_inventory_url(con, domain, content_url, source="sitemap")
+        canonical_id = upsert_inventory_url(con, domain, canonical_url, source="sitemap")
+        con.execute(
+            """
+            UPDATE crawl_url_inventory
+            SET eligibility='duplicate',decision_reason='canonical_or_content_duplicate',
+                duplicate_of_url=?,content_fingerprint='old',content_simhash='old'
+            WHERE id=?
+            """,
+            (f"https://{domain}/", content_id),
+        )
+        con.execute(
+            """
+            UPDATE crawl_url_inventory
+            SET eligibility='duplicate',decision_reason='canonical_or_content_duplicate',
+                final_url=?,canonical_url=?,duplicate_of_url=?
+            WHERE id=?
+            """,
+            (canonical_url, f"https://{domain}/about", f"https://{domain}/about", canonical_id),
+        )
+        con.commit()
+        monkeypatch.setattr(
+            seo,
+            "discover_domain_sitemap_inventory",
+            lambda *_args, **_kwargs: ([], f"https://{domain}/sitemap.xml", []),
+        )
+        seo._sync_url_inventory(con, domain, f"https://{domain}")
+        content = con.execute(
+            "SELECT * FROM crawl_url_inventory WHERE id=?", (content_id,)
+        ).fetchone()
+        canonical = con.execute(
+            "SELECT * FROM crawl_url_inventory WHERE id=?", (canonical_id,)
+        ).fetchone()
+
+    assert content["eligibility"] == "eligible"
+    assert content["decision_reason"] == "legacy_duplicate_revalidation"
+    assert not content["duplicate_of_url"]
+    assert not content["content_fingerprint"]
+    assert canonical["eligibility"] == "duplicate"
+    assert canonical["decision_reason"] == "canonical_duplicate"
+    assert canonical["duplicate_of_url"] == f"https://{domain}/about"
+
+
 @dataclass
 class Response:
     content: bytes
