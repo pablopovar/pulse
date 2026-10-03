@@ -5,6 +5,15 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>{% block title %}SEO / GEO / AEO Dashboard{% endblock %}</title>
+  <script data-pulse-theme-init="1">
+  (() => {
+    try {
+      const saved = localStorage.getItem('pulse-theme');
+      const dark = saved ? saved === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    } catch (_err) {}
+  })();
+  </script>
   {% set public_report_view = request.endpoint == 'public_report' %}
   {% set asset_endpoint = 'public_report_static' if public_report_view else 'static' %}
   <link rel="stylesheet" href="{{ url_for(asset_endpoint, filename='app.css') }}">
@@ -55,6 +64,9 @@
 {% if not public_report_view %}
 <header class="topbar">
   <div class="brand">SEO / GEO / AEO</div>
+  <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch color theme" title="Switch color theme">
+    <span aria-hidden="true">◐</span><span data-theme-label>Theme</span>
+  </button>
   {% if sites %}
   <form class="domain-picker" onsubmit="return false">
     <label for="siteSelect">Domain</label>
@@ -89,5 +101,26 @@
   <script src="{{ url_for(asset_endpoint, filename='nav-keyword-links.js') }}"></script>
   <script src="{{ url_for(asset_endpoint, filename='page-geo-aeo.js') }}"></script>
   <script src="{{ url_for(asset_endpoint, filename='analysis-markdown.js') }}"></script>
+
+  <script data-pulse-theme-toggle="1">
+  (() => {
+    const button = document.querySelector('[data-theme-toggle]');
+    if (!button) return;
+    const sync = () => {
+      const dark = document.documentElement.dataset.theme === 'dark';
+      button.setAttribute('aria-pressed', String(dark));
+      button.title = dark ? 'Use light theme' : 'Use dark theme';
+      const label = button.querySelector('[data-theme-label]');
+      if (label) label.textContent = dark ? 'Light' : 'Dark';
+    };
+    sync();
+    button.addEventListener('click', () => {
+      const dark = document.documentElement.dataset.theme !== 'dark';
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      try { localStorage.setItem('pulse-theme', dark ? 'dark' : 'light'); } catch (_err) {}
+      sync();
+    });
+  })();
+  </script>
 </body>
 </html>
