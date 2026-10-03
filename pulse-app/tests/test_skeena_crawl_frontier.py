@@ -7,6 +7,7 @@ from xml.sax.saxutils import escape
 
 from db.migrate import migrate_up
 from db.sqlite import connect_sqlite
+from crawlers.seo import best_effort_site_page
 from services.crawl_frontier import (
     normalize_candidate_url,
     select_initial_inventory,
@@ -18,6 +19,23 @@ from services.page_discovery import SitemapEntry
 
 FIXTURE = Path(__file__).parent / "fixtures" / "skeena"
 DOMAIN = "skeenagoldsilver.com"
+
+
+def test_crawled_url_is_added_to_auditable_site_page_inventory(tmp_path):
+    db = tmp_path / "research.db"
+    migrate_up(db)
+    with connect_sqlite(db) as con:
+        best_effort_site_page(con, "example.com", "https://example.com/about")
+        con.commit()
+        row = con.execute(
+            "SELECT domain,path,url,source,discovered_at,updated_at FROM site_page WHERE domain=? AND url=?",
+            ("example.com", "https://example.com/about"),
+        ).fetchone()
+    assert row is not None
+    assert row["path"] == "/about"
+    assert row["source"] == "crawl"
+    assert row["discovered_at"]
+    assert row["updated_at"]
 
 
 @dataclass

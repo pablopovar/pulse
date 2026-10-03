@@ -501,13 +501,14 @@ def best_effort_site_page(con, domain, url):
         (domain, url),
     ).fetchone()
     if not exists:
-        try:
-            con.execute(
-                "INSERT INTO site_page(domain,path,url) VALUES (?,?,?)",
-                (domain, path_for_url(url), url),
-            )
-        except Exception:
-            pass
+        timestamp = utcnow()
+        con.execute(
+            """
+            INSERT INTO site_page(domain,path,url,source,discovered_at,updated_at)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (domain, path_for_url(url), url, "crawl", timestamp, timestamp),
+        )
 
 
 def persist_page(con, run_id, domain, requested_url, robots_allowed, result, parsed, inventory_id=None):
