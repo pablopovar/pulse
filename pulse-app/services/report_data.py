@@ -70,12 +70,29 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
                     (domain,),
                 )
 
-            if _exists(con, "crawl_run"):
-                data["crawl"] = _row(
+            # An audit is the report's anchor.  Never quietly join it to an
+            # arbitrary newer crawl: use the same durable execution when it is
+            # known, otherwise record that the legacy inputs are unlinked.
+            if _exists(con, "audit_run"):
+                data["audit"] = _row(
                     con,
-                    "SELECT * FROM crawl_run WHERE domain=? ORDER BY id DESC LIMIT 1",
+                    "SELECT * FROM audit_run WHERE domain=? AND status IN ('completed','partial') ORDER BY id DESC LIMIT 1",
                     (domain,),
                 )
+            if _exists(con, "crawl_run"):
+                audit_execution = (data.get("audit") or {}).get("execution_run_id")
+                if audit_execution:
+                    data["crawl"] = _row(
+                        con,
+                        "SELECT * FROM crawl_run WHERE domain=? AND execution_run_id=? AND status IN ('completed','partial') ORDER BY id DESC LIMIT 1",
+                        (domain, audit_execution),
+                    )
+                if not data["crawl"] and not audit_execution:
+                    data["crawl"] = _row(
+                        con,
+                        "SELECT * FROM crawl_run WHERE domain=? AND status IN ('completed','partial') ORDER BY id DESC LIMIT 1",
+                        (domain,),
+                    )
                 if data["crawl"]:
                     run_id = data["crawl"]["id"]
                     data["crawl_issues"] = _rows(
@@ -101,21 +118,15 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
                         (run_id,),
                     )
 
-            if _exists(con, "audit_run"):
-                data["audit"] = _row(
-                    con,
-                    "SELECT * FROM audit_run WHERE domain=? ORDER BY id DESC LIMIT 1",
-                    (domain,),
-                )
-                if data["audit"]:
-                    audit_run_id = data["audit"]["id"]
-                    if _exists(con, "audit_domain_summary"):
-                        data["audit_summary"] = _row(
+            if data["audit"]:
+                audit_run_id = data["audit"]["id"]
+                if _exists(con, "audit_domain_summary"):
+                    data["audit_summary"] = _row(
                             con,
                             "SELECT * FROM audit_domain_summary WHERE audit_run_id=?",
                             (audit_run_id,),
-                        )
-                        data["domain_score_history"] = _rows(
+                    )
+                    data["domain_score_history"] = _rows(
                             con,
                             """
                             SELECT ar.id AS audit_run_id,ar.completed_at,ar.started_at,
@@ -126,9 +137,9 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
                             WHERE ads.domain=? ORDER BY ar.id DESC LIMIT 50
                             """,
                             (domain,),
-                        )
-                    if _exists(con, "audit_page"):
-                        data["audit_pages"] = _rows(
+                    )
+                if _exists(con, "audit_page"):
+                    data["audit_pages"] = _rows(
                             con,
                             """
                             SELECT ap.*,p.path FROM audit_page ap
@@ -136,8 +147,8 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
                             WHERE ap.audit_run_id=? ORDER BY p.path
                             """,
                             (audit_run_id,),
-                        )
-                        data["page_score_history"] = _rows(
+                    )
+                    data["page_score_history"] = _rows(
                             con,
                             """
                             SELECT ap.page_id,p.path,ap.audit_run_id,ar.completed_at,ar.started_at,
@@ -148,9 +159,9 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
                             WHERE ar.domain=? ORDER BY ap.page_id,ap.audit_run_id DESC
                             """,
                             (domain,),
-                        )
-                    if _exists(con, "audit_signal"):
-                        data["audit_signals"] = _rows(
+                    )
+                if _exists(con, "audit_signal"):
+                    data["audit_signals"] = _rows(
                             con,
                             """
                             SELECT ap.page_id,ap.url,p.path,s.family,s.signal_key,s.category,s.title,
@@ -170,6 +181,19 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
                             ORDER BY p.path,s.family,s.category,s.signal_key
                             """,
                             (domain, audit_run_id),
-                        )
+                    )
+
+            audit = data.get("audit") or {}
+            crawl = data.get("crawl") or {}
+            linked = bool(audit and crawl and audit.get("execution_run_id") and audit.get("execution_run_id") == crawl.get("execution_run_id"))
+            data["observation_provenance"] = {
+                "audit_run_id": audit.get("id"),
+                "crawl_run_id": crawl.get("id"),
+                "execution_run_id": audit.get("execution_run_id") or None,
+                "inputs_linked": linked,
+                "legacy_unlinked": bool(audit and crawl and not linked),
+                "gsc_period_start": (data.get("seo") or {}).get("period_start"),
+                "gsc_period_end": (data.get("seo") or {}).get("period_end"),
+            }
 
     return adapter.enrich_report(data, site_id, domain)

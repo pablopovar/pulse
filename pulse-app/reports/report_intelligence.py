@@ -345,33 +345,49 @@ def group_root_causes(families: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def data_coverage(data: dict[str, Any]) -> list[dict[str, Any]]:
     inventory = {str(x.get("key") or ""): x for x in data.get("source_inventory") or []}
 
-    def source_state(key: str, label: str, present: bool, detail: str = "") -> dict[str, Any]:
+    def source_state(key: str, label: str, present: bool, detail: str = "", observed_at: str = "") -> dict[str, Any]:
         stored = inventory.get(key) or {}
         status_text = str(stored.get("status") or "").lower()
-        if present or "connected" in status_text:
-            state = "connected"
-        elif "failed" in status_text or "error" in status_text:
+        selected = bool(stored.get("selected"))
+        if "failed" in status_text or "error" in status_text:
             state = "failed"
+        elif "stale" in status_text:
+            state = "stale"
+        elif present:
+            state = "connected"
+        elif not selected and ("not selected" in status_text or not stored):
+            state = "not_selected"
         else:
             state = "missing"
-        return {"key": key, "label": label, "state": state, "detail": detail or stored.get("detail") or ""}
+        return {
+            "key": key,
+            "label": label,
+            "state": state,
+            "detail": detail or stored.get("detail") or "",
+            "observed_at": observed_at or "",
+        }
+
+    def latest(rows: list[dict[str, Any]], *keys: str) -> str:
+        values = [str(row.get(key) or "") for row in rows for key in keys if row.get(key)]
+        return max(values) if values else ""
 
     seo = data.get("seo") or {}
     manual_ai = data.get("manual_ai_source") or data.get("manual_ai") or {}
     rows = [
-        source_state("gsc", "Google Search Console", bool(seo.get("keywords") or seo.get("impressions") or data.get("keywords"))),
-        source_state("ga4", "GA4 / audience context", bool(data.get("clarity"))),
-        source_state("backlinks", "Backlink authority data", bool(data.get("backlinks") or data.get("ref_domains") or data.get("domain_metrics"))),
-        source_state("rank_tracking", "Rank tracking", bool(data.get("rank_tracking"))),
-        source_state("sitemap", "Sitemap inventory", bool(data.get("sitemap_urls"))),
-        source_state("manual_ai", "Manual AI Responses", bool(manual_ai.get("available"))),
+        source_state("gsc", "Google Search Console", bool(seo.get("period_start") and seo.get("period_end")), observed_at=seo.get("period_end") or ""),
+        source_state("ga4", "Google Analytics 4", bool(data.get("ga4")), observed_at=str((data.get("ga4") or {}).get("observed_at") or "")),
+        source_state("clarity", "Microsoft Clarity", bool(data.get("clarity")), observed_at=str((data.get("clarity") or {}).get("createdAt") or (data.get("clarity") or {}).get("date") or "")),
+        source_state("backlinks", "Backlink authority data", bool(data.get("backlinks") or data.get("ref_domains") or data.get("domain_metrics")), observed_at=(data.get("backlink_summary") or {}).get("createdAt") or (data.get("backlink_summary") or {}).get("date") or (data.get("domain_metrics") or {}).get("checkedAt") or latest(data.get("ref_domains") or [], "fetchedAt")),
+        source_state("rank_tracking", "Rank tracking", bool(data.get("rank_tracking")), observed_at=latest(data.get("rank_tracking") or [], "lastCheckedAt")),
+        source_state("sitemap", "Sitemap inventory", bool(data.get("sitemap_urls")), observed_at=latest(data.get("sitemap_urls") or [], "lastSeenAt", "fetchedAt")),
+        source_state("manual_ai", "Manual AI Responses", bool(manual_ai.get("available")), observed_at=str(manual_ai.get("run_at_utc") or manual_ai.get("updated_at") or manual_ai.get("created_at") or "")),
     ]
     return rows
 
 
 def monitoring_coverage_summary(rows: list[dict[str, Any]]) -> dict[str, int]:
     counts = Counter(r.get("state") for r in rows)
-    return {"connected": counts["connected"], "missing": counts["missing"], "stale": counts["stale"], "failed": counts["failed"]}
+    return {"connected": counts["connected"], "missing": counts["missing"], "stale": counts["stale"], "failed": counts["failed"], "not_selected": counts["not_selected"]}
 
 
 def _signal_index(snapshot: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -396,26 +412,30 @@ def compare_snapshots(current: dict[str, Any], previous: dict[str, Any] | None) 
         c = cur.get(key)
         p = old.get(key)
         if c is None or p is None:
-            change = "new" if c is not None else "not_comparable"
-            if c is None and p is not None and is_issue(p.get("observed_status")):
-                change = "not_comparable"
+            change = ("new_issue" if is_issue(c.get("observed_status")) else "new_page") if c is not None else "no_longer_assessed"
             row = c or p
             changes.append({"check": key[0], "page": key[1], "change": change, "current": normalize_status(c.get("observed_status")) if c else None, "previous": normalize_status(p.get("observed_status")) if p else None, "row": row})
             continue
         cs = normalize_status(c.get("observed_status"))
         ps = normalize_status(p.get("observed_status"))
-        if cs == "NOT_APPLICABLE" and ps != "NOT_APPLICABLE":
+        if "MANUAL_REVIEW" in {cs, ps}:
+            change = "requires_review"
+        elif cs == "NOT_APPLICABLE" and ps != "NOT_APPLICABLE":
             change = "no_longer_applicable"
         elif "DATA_UNAVAILABLE" in {cs, ps}:
-            change = "not_comparable"
+            change = "evidence_unavailable"
         elif cs == ps:
             change = "unchanged"
         elif ps in ISSUE_STATUSES and cs == "PASS":
             change = "resolved"
-        elif STATUS_ORDER[cs] > STATUS_ORDER[ps]:
+        elif ps == "FAIL" and cs == "PARTIAL":
             change = "improved"
-        else:
+        elif ps == "PARTIAL" and cs == "FAIL":
             change = "worsened"
+        elif ps == "PASS" and is_issue(cs):
+            change = "worsened"
+        else:
+            change = "requires_review"
         changes.append({"check": key[0], "page": key[1], "change": change, "current": cs, "previous": ps, "row": c})
 
     counts = Counter(x["change"] for x in changes)
@@ -428,9 +448,11 @@ def compare_snapshots(current: dict[str, Any], previous: dict[str, Any] | None) 
         "findings_resolved": counts["resolved"],
         "findings_improved": counts["improved"],
         "findings_worsened": counts["worsened"],
-        "new_findings": counts["new"],
+        "new_findings": counts["new_issue"],
         "unchanged_findings": counts["unchanged"],
-        "not_comparable": counts["not_comparable"],
+        "requires_review": counts["requires_review"],
+        "evidence_unavailable": counts["evidence_unavailable"],
+        "no_longer_assessed": counts["no_longer_assessed"],
         "no_longer_applicable": counts["no_longer_applicable"],
         "pages_improved": pages_improved,
         "pages_regressed": pages_regressed,
@@ -503,8 +525,26 @@ def validate_report(data: dict[str, Any], families: list[dict[str, Any]], root_c
                     errors.append(f"{check.get('title')}: affected page count exceeds tested page count.")
                 if is_issue(check.get("status")) and str(check.get("severity") or "").upper() in {"CRITICAL", "HIGH"} and not check.get("evidence_refs"):
                     warnings.append(f"{check.get('title')}: high-priority finding has no inspectable evidence reference.")
+                if normalize_status(check.get("status")) == "MANUAL_REVIEW" and check.get("latest_change") in {"improved", "worsened", "resolved", "new_issue"}:
+                    errors.append(f"{check.get('title')}: manual review was incorrectly classified as material movement.")
     coverage = data.get("data_coverage") or []
     missing = [x.get("label") for x in coverage if x.get("state") == "missing"]
     if missing:
         warnings.append("Missing monitoring sources: " + ", ".join(missing))
+    seo = data.get("seo") or {}
+    if (seo.get("impressions") or seo.get("clicks") or seo.get("keywords")) and not (seo.get("period_start") and seo.get("period_end")):
+        errors.append("Google Search Console totals do not identify a bounded reporting period.")
+    ga4 = next((x for x in coverage if x.get("key") == "ga4"), {})
+    clarity = next((x for x in coverage if x.get("key") == "clarity"), {})
+    if data.get("clarity") and ga4.get("state") == "connected" and not data.get("ga4"):
+        errors.append("Microsoft Clarity data was incorrectly represented as Google Analytics 4 data.")
+    for source in coverage:
+        if source.get("state") == "connected" and not source.get("observed_at"):
+            warnings.append(f"{source.get('label')}: connected source has no observation timestamp.")
+    provenance = data.get("observation_provenance") or (data.get("report_metadata") or {}).get("observation_provenance") or {}
+    if provenance.get("audit_run_id") and provenance.get("crawl_run_id"):
+        if provenance.get("legacy_unlinked"):
+            warnings.append("Legacy report: audit and crawl inputs were not linked to one durable execution; cross-source conclusions are limited.")
+        elif not provenance.get("inputs_linked"):
+            errors.append("Audit and crawl inputs do not belong to one coherent observation execution.")
     return {"errors": errors, "warnings": warnings, "blocking": bool(errors), "root_cause_count": len(root_causes)}

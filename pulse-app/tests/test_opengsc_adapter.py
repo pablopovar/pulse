@@ -57,7 +57,8 @@ def test_source_state_mapping(tmp_path):
         con.close()
 
     state = OpenGSCAdapter(db).detected_source_state("site-1")
-    assert state["ga4"]["connected"] is True
+    assert state["clarity"]["connected"] is True
+    assert "ga4" not in state
     assert state["chatgpt"]["connected"] is True
     assert state["gemini"]["connected"] is True
     assert "claude" not in state
@@ -88,4 +89,24 @@ def test_report_core_maps_gsc_observations(tmp_path):
     data = OpenGSCAdapter(db).report_core("site-1")
     assert data["seo"]["keywords"] == 1
     assert data["seo"]["impressions"] == 20
+    assert data["seo"]["period_start"] == "2026-08-05"
+    assert data["seo"]["period_end"] == "2026-09-01"
+    assert data["seo"]["window_days"] == 28
     assert data["keywords"][0]["query"] == "q"
+
+
+def test_report_core_excludes_rows_outside_28_day_window(tmp_path):
+    db = tmp_path / "opengsc.db"
+    con = sqlite3.connect(db)
+    try:
+        con.execute("CREATE TABLE gsc_keyword_observation (site_id TEXT,query TEXT,page TEXT,impressions INTEGER,clicks INTEGER,position REAL,date TEXT)")
+        con.executemany("INSERT INTO gsc_keyword_observation VALUES (?,?,?,?,?,?,?)", [
+            ("site-1", "old", "/old", 999, 99, 1.0, "2026-08-01"),
+            ("site-1", "current", "/", 20, 2, 3.0, "2026-09-01"),
+        ])
+        con.commit()
+    finally:
+        con.close()
+    data = OpenGSCAdapter(db).report_core("site-1")
+    assert data["seo"]["impressions"] == 20
+    assert [row["query"] for row in data["keywords"]] == ["current"]

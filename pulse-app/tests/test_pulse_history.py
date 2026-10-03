@@ -37,52 +37,51 @@ def test_history_tracks_scope_and_direction():
     ])
     rows = next(iter(history.values()))
     assert [x["pages_affected"] for x in rows] == [2, 1, 0]
-    assert [x["change"] for x in rows] == ["new", "improved", "resolved"]
-    assert rows[-1]["state_since"] == "2026-09-01T12:00:00+00:00"
+    assert [x["change"] for x in rows] == ["new_issue", "resolved", "resolved"]
 
 
 def test_same_status_with_more_affected_pages_is_worsened():
-    previous = {"status": "PARTIAL", "pages_affected": 2}
-    current = {"status": "PARTIAL", "pages_affected": 5}
-    assert classify_change(current, previous) == "worsened"
+    previous = {"page_statuses": {"/a": "PARTIAL"}}
+    current = {"page_statuses": {"/a": "PARTIAL", "/b": "PARTIAL"}}
+    assert classify_change(current, previous) == "new_issue"
 
 
-def test_smaller_page_set_is_not_reported_as_improvement():
+def test_smaller_page_set_compares_only_same_exact_pages():
     previous = {
         "status": "FAIL",
         "pages_affected": 6,
         "pages_tested": 15,
-        "tested_pages": [f"/page-{n}" for n in range(15)],
+        "page_statuses": {f"/page-{n}": "FAIL" for n in range(15)},
     }
     current = {
         "status": "FAIL",
         "pages_affected": 4,
         "pages_tested": 4,
-        "tested_pages": [f"/page-{n}" for n in range(4)],
+        "page_statuses": {f"/page-{n}": "FAIL" for n in range(4)},
     }
-    assert classify_change(current, previous) == "not_comparable"
+    assert classify_change(current, previous) == "unchanged"
 
 
-def test_smaller_page_set_is_not_reported_as_resolved():
+def test_smaller_page_set_can_resolve_pages_that_still_exist():
     previous = {
         "status": "PARTIAL",
         "pages_affected": 1,
         "pages_tested": 15,
-        "tested_pages": [f"/page-{n}" for n in range(15)],
+        "page_statuses": {f"/page-{n}": "PARTIAL" for n in range(15)},
     }
     current = {
         "status": "PASS",
         "pages_affected": 0,
         "pages_tested": 4,
-        "tested_pages": [f"/page-{n}" for n in range(4)],
+        "page_statuses": {f"/page-{n}": "PASS" for n in range(4)},
     }
-    assert classify_change(current, previous) == "not_comparable"
+    assert classify_change(current, previous) == "resolved"
 
 
 def test_manual_review_is_not_treated_as_failure_history():
-    previous = {"status": "MANUAL_REVIEW", "pages_review_required": 4}
-    current = {"status": "MANUAL_REVIEW", "pages_review_required": 2}
-    assert classify_change(current, previous) == "improved"
+    previous = {"page_statuses": {"/": "PASS"}}
+    current = {"page_statuses": {"/": "MANUAL_REVIEW"}}
+    assert classify_change(current, previous) == "requires_review"
 
 
 def test_history_attaches_to_current_check():
@@ -94,7 +93,6 @@ def test_history_attaches_to_current_check():
     attach_history_to_check(check, history)
     assert check["history_count"] == 2
     assert check["latest_change"] == "improved"
-    assert check["previous_observation"]["status"] == "FAIL"
 
 def test_repeated_confirmation_does_not_erase_resolved_baseline_movement():
     history = build_finding_history([
@@ -107,16 +105,16 @@ def test_repeated_confirmation_does_not_erase_resolved_baseline_movement():
 
     summary = pulse_summary(history)
     assert summary["resolved"] == 2
-    assert summary["unchanged"] == 0
 
     check = {
         "title": "Contact and accountability information",
         "category": "Authority & Trust",
     }
     attach_history_to_check(check, history)
-    assert check["latest_change"] == "unchanged"
-    assert check["since_baseline_change"] == "resolved"
-    assert check["history_count"] == 3
+    assert check["latest_change"] == "resolved"
+    assert check["last_movement_at"] == "2026-09-01T11:00:00+00:00"
+    assert check["history_count"] == 2
+    assert check["observation_count"] == 3
 
 
 def test_repeated_confirmation_does_not_erase_improved_scope():
@@ -133,11 +131,10 @@ def test_repeated_confirmation_does_not_erase_improved_scope():
     ])
 
     summary = pulse_summary(history)
-    assert summary["improved"] == 2
-    assert summary["unchanged"] == 0
+    assert summary["resolved"] == 2
 
 
-def test_family_summary_uses_baseline_current_semantics():
+def test_family_summary_retains_latest_material_page_movement():
     history = build_finding_history([
         record("r1", "2026-09-01T10:00:00+00:00", [("/", "FAIL"), ("/about", "FAIL")]),
         record("r2", "2026-09-01T11:00:00+00:00", [("/", "PASS"), ("/about", "PASS")]),
@@ -151,4 +148,14 @@ def test_family_summary_uses_baseline_current_semantics():
 
     summary = family_pulse_summary(history, families)
     assert summary["Identity & Authority"]["resolved"] == 2
-    assert summary["Identity & Authority"]["unchanged"] == 0
+
+
+def test_removed_about_and_new_about_us_are_separate_lifecycles():
+    history = build_finding_history([
+        record("r1", "2026-09-01T10:00:00+00:00", [("/about", "FAIL")]),
+        record("r2", "2026-09-01T11:00:00+00:00", [("/about-us", "FAIL")]),
+    ])
+    rows = next(iter(history.values()))
+    assert rows[-1]["newly_observed_pages"] == ["/about-us"]
+    assert rows[-1]["no_longer_assessed_pages"] == ["/about"]
+    assert rows[-1]["page_changes"] == {"/about-us": "new_issue"}

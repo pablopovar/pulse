@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -273,7 +274,7 @@ class OpenGSCAdapter:
             if self._exists(con, "ClaritySnapshot") and con.execute(
                 'SELECT 1 FROM "ClaritySnapshot" WHERE siteId=? LIMIT 1', (site_id,)
             ).fetchone():
-                out["ga4"] = {"connected": True, "detail": "Analytics/Clarity snapshot available"}
+                out["clarity"] = {"connected": True, "detail": "Microsoft Clarity snapshot available"}
             if self._exists(con, "AeoCheck") and self._exists(con, "TrackedQuestion"):
                 engines = con.execute(
                     'SELECT DISTINCT c.engine FROM "AeoCheck" c JOIN "TrackedQuestion" q ON q.id=c.questionId WHERE q.siteId=?',
@@ -285,12 +286,30 @@ class OpenGSCAdapter:
                         out[key] = {"connected": True, "detail": f"Stored {key.title()} observations available"}
         return out
 
-    def report_core(self, site_id: str | None) -> dict[str, Any]:
+    def report_core(self, site_id: str | None, *, window_days: int = 28) -> dict[str, Any]:
+        """Return one bounded, reproducible GSC reporting window.
+
+        The last available GSC date is the endpoint because GSC is delayed. A
+        report never adds every historical daily row together and calls it
+        current performance.
+        """
         data: dict[str, Any] = {"seo": None, "keywords": []}
         if not site_id or not self.available():
             return data
         with self._connect() as con:
             if self._exists(con, "gsc_keyword_observation"):
+                available = self._row(
+                    con,
+                    "SELECT MAX(date) AS last_date FROM gsc_keyword_observation WHERE site_id=?",
+                    (site_id,),
+                ) or {}
+                last_date = str(available.get("last_date") or "")
+                try:
+                    period_end = date.fromisoformat(last_date)
+                except ValueError:
+                    return data
+                period_start = period_end - timedelta(days=max(1, int(window_days)) - 1)
+                params = (site_id, period_start.isoformat(), period_end.isoformat())
                 data["seo"] = self._row(
                     con,
                     """
@@ -301,11 +320,34 @@ class OpenGSCAdapter:
                            ROUND(MIN(position),1) AS best_position,
                            ROUND(MAX(position),1) AS worst_position,
                            MIN(date) AS first_date,MAX(date) AS last_date
-                    FROM gsc_keyword_observation WHERE site_id=?
+                    FROM gsc_keyword_observation
+                    WHERE site_id=? AND date>=? AND date<=?
                     """,
-                    (site_id,),
+                    params,
                 )
-            if self._exists(con, "gsc_keyword_inventory"):
+                if data["seo"]:
+                    data["seo"].update({
+                        "period_start": period_start.isoformat(),
+                        "period_end": period_end.isoformat(),
+                        "window_days": max(1, int(window_days)),
+                        "last_available_date": period_end.isoformat(),
+                    })
+                    data["keywords"] = self._rows(
+                        con,
+                        """
+                        SELECT query,page,COALESCE(SUM(impressions),0) impressions,
+                               COALESCE(SUM(clicks),0) clicks,ROUND(MIN(position),1) best_position,
+                               ROUND(AVG(position),1) latest_position
+                        FROM gsc_keyword_observation
+                        WHERE site_id=? AND date>=? AND date<=?
+                        GROUP BY query,page
+                        ORDER BY impressions DESC,best_position ASC,query LIMIT 100
+                        """,
+                        params,
+                    )
+            elif self._exists(con, "gsc_keyword_inventory"):
+                # A legacy schema without daily observations cannot establish a
+                # bounded period, so do not manufacture a current SEO verdict.
                 data["keywords"] = self._rows(
                     con,
                     """

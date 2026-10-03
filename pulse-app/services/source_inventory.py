@@ -12,6 +12,7 @@ from integrations.opengsc_adapter import OpenGSCAdapter
 SOURCE_CATALOG = [
     ("gsc", "Google Search Console", "Observed Google search queries, landing pages, impressions, clicks, CTR and positions."),
     ("ga4", "Google Analytics 4", "Audience, session, engagement, event, conversion and revenue context."),
+    ("clarity", "Microsoft Clarity", "Behavioral evidence such as sessions, recordings and interaction summaries."),
     ("dataforseo", "DataForSEO", "Keyword demand, SERP, competitive and supplemental search visibility data."),
     ("chatgpt", "ChatGPT API", "AI answer, mention and citation observations from configured OpenAI models."),
     ("claude", "Claude API", "AI answer, mention and citation observations from configured Anthropic models."),
@@ -106,6 +107,7 @@ def domain_sources_for_site(
             "status": "Connected" if connected else ("Selected" if selected else "Not selected"),
             "status_class": "connected" if connected else ("selected" if selected else "off"),
             "detail": state.get("detail") or stored.get("detail") or "",
+            "updated_at": stored.get("updated_at") or "",
         })
     catalog = {row[0] for row in SOURCE_CATALOG}
     for key, stored in rows.items():
@@ -119,6 +121,7 @@ def domain_sources_for_site(
             "status": "Selected" if stored["selected"] else "Not selected",
             "status_class": "selected" if stored["selected"] else "off",
             "detail": stored["detail"] or "",
+            "updated_at": stored.get("updated_at") or "",
         })
     return out
 

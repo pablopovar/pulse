@@ -1,4 +1,4 @@
-# Report contract v3
+# Report contract v4
 
 The client-facing product is one living domain pulse. SEO, onsite, AI, and future monitoring systems continuously contribute observations to that domain. Immutable observation snapshots are retained as evidence, but they are not separate client reports.
 
@@ -28,9 +28,8 @@ A material finding must expose:
 
 - current status
 - latest movement
-- last observed time
-- time the current state began
-- observation history
+- date of the latest material movement
+- material-event history
 - current affected scope
 - problem
 - why_it_matters
@@ -56,11 +55,15 @@ Recommendation workflow states:
 
 ## Per-finding pulse history
 
-Every observation of a check is retained under the same finding identity. A current finding can therefore show, for example:
+Every exact page/check identity retains its own lifecycle. `/about` and `/about-us` are different pages. If a page stops being assessed, its history stops; its absence is not a resolution and does not invalidate comparisons for pages that remain.
+
+A current finding can therefore show, for example:
 
 `FAIL 46/46 -> PARTIAL 31/46 -> PARTIAL 18/46 -> PASS 0/46`
 
-Each history row records, where available:
+Every completed run remains an immutable report observation. Inside a check, however, the client-visible history adds a row only for a material event. Repeated unchanged confirmations do not overwrite the last movement or its date.
+
+Each material history row records, where available:
 
 - observation timestamp
 - immutable snapshot ID
@@ -71,19 +74,22 @@ Each history row records, where available:
 - pages awaiting manual review
 - pages with unavailable data
 - pages tested
-- movement relative to the preceding observation
+- movement relative to the preceding observation of the same exact page/check
 
 Movement is classified as:
 
-- `new`
+- `new_issue`
 - `improved`
 - `worsened`
-- `unchanged`
 - `resolved`
-- `not_comparable`
+- `mixed`
+- `requires_review`
+- `evidence_unavailable`
 - `no_longer_applicable`
 
-When the tested page set is identical, an unchanged status with a lower or higher affected-page count may still be `improved` or `worsened`. When the tested page set changes, the observation is retained but aggregate movement is `not_comparable`; omitted pages must never be treated as resolved or improved.
+Changed page sets are lifecycle/coverage facts, never a global comparison failure. Only the same exact page and check are compared. Manual review is not ordered between pass and fail: any transition into or out of it requires human determination.
+
+The top movement strip counts unique currently assessed pages by their retained latest material movement. A page with both positive and negative movements is counted once as `mixed`. It does not display or accumulate unchanged confirmations.
 
 Every successfully completed monitoring run creates a new immutable observation, even when every comparable check is unchanged. A run still in progress does not replace the last completed observation.
 
@@ -115,9 +121,15 @@ Examples:
 
 ## Data coverage
 
-Missing integrations are reported under Monitoring Coverage, not as failed checks. Current monitored source classes include GSC, GA4/audience context, backlink data, rank tracking, sitemap inventory, and Manual AI Responses.
+Missing integrations are reported under Monitoring Coverage, not as failed checks. GA4 and Microsoft Clarity are separate sources and one may never imply the other. Current monitored source classes include GSC, GA4, Microsoft Clarity, backlink data, rank tracking, sitemap inventory, and Manual AI Responses.
 
-Coverage states are `connected`, `missing`, `stale`, or `failed`.
+Coverage states are `connected`, `missing`, `stale`, `failed`, or `not_selected`. Connected observations carry a source timestamp when one is available.
+
+Google Search Console performance uses the last 28 fully available GSC days. The start and end dates are stored in the immutable report. GSC clicks are called search clicks, never visits.
+
+## Observation provenance
+
+Every newly generated report identifies its audit run, crawl run, durable execution, source timestamps, and GSC period. Audit and crawl inputs must come from the same execution. Cancelled or unrelated later crawls may not be attached because they happen to be the latest row. Legacy snapshots without this linkage are labelled incomplete and cross-source conclusions are limited.
 
 ## Value to fix
 
@@ -159,5 +171,10 @@ Before export, the report checks for:
 - duplicate executive findings
 - high-priority findings without inspectable evidence
 - missing monitoring sources
+- unbounded GSC totals
+- incoherent audit/crawl executions
+- manual-review movement classified as improvement or worsening
+- Clarity inferred as GA4
+- connected sources without observation timestamps
 
 Errors are export blockers in the report UI; warnings remain visible for review.

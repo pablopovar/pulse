@@ -84,46 +84,71 @@ def _snapshot_observations(snapshot: dict[str, Any], *, report_id: str, observed
     return out
 
 
-def classify_change(current: dict[str, Any], previous: dict[str, Any] | None) -> str:
-    if previous is None:
-        return "new"
-    current_pages = set(current.get("tested_pages") or [])
-    previous_pages = set(previous.get("tested_pages") or [])
-    # A smaller or different audit cohort is not evidence of improvement. Keep
-    # the observation, but preserve the uncertainty until the same pages have
-    # been tested again. This prevents omitted pages from becoming false fixes.
-    if current_pages and previous_pages and current_pages != previous_pages:
-        return "not_comparable"
-    cs = normalize_status(current.get("status"))
-    ps = normalize_status(previous.get("status"))
-    if cs == "NOT_APPLICABLE" and ps != "NOT_APPLICABLE":
-        return "no_longer_applicable"
-    if "DATA_UNAVAILABLE" in {cs, ps}:
-        return "unchanged" if cs == ps else "not_comparable"
-    if cs == ps:
-        if is_issue(cs):
-            ca = int(current.get("pages_affected") or 0)
-            pa = int(previous.get("pages_affected") or 0)
-            if ca < pa:
-                return "improved"
-            if ca > pa:
-                return "worsened"
-        if cs == "MANUAL_REVIEW":
-            cr = int(current.get("pages_review_required") or 0)
-            pr = int(previous.get("pages_review_required") or 0)
-            if cr < pr:
-                return "improved"
-            if cr > pr:
-                return "worsened"
+MATERIAL_CHANGES = {"resolved", "improved", "worsened", "new_issue", "mixed"}
+
+
+def _page_change(current_status: str, previous_status: str | None) -> str:
+    """Compare one check on one exact page identity.
+
+    A changed crawl cohort is lifecycle information, not a comparison result.
+    /about and /about-us therefore remain separate histories.
+    """
+    if previous_status is None:
+        return "new_issue" if is_issue(current_status) else "new_page"
+    current_status = normalize_status(current_status)
+    previous_status = normalize_status(previous_status)
+    if current_status == previous_status:
         return "unchanged"
-    if ps in {"FAIL", "PARTIAL"} and cs == "PASS":
+    if "MANUAL_REVIEW" in {current_status, previous_status}:
+        return "requires_review"
+    if "DATA_UNAVAILABLE" in {current_status, previous_status}:
+        return "evidence_unavailable"
+    if current_status == "NOT_APPLICABLE" or previous_status == "NOT_APPLICABLE":
+        return "no_longer_applicable"
+    if previous_status in {"FAIL", "PARTIAL"} and current_status == "PASS":
         return "resolved"
-    if cs in STATUS_ORDER and ps in STATUS_ORDER:
-        if STATUS_ORDER[cs] > STATUS_ORDER[ps]:
-            return "improved"
-        if STATUS_ORDER[cs] < STATUS_ORDER[ps]:
-            return "worsened"
-    return "not_comparable"
+    if previous_status == "FAIL" and current_status == "PARTIAL":
+        return "improved"
+    if previous_status == "PARTIAL" and current_status == "FAIL":
+        return "worsened"
+    if previous_status == "PASS" and is_issue(current_status):
+        return "worsened"
+    return "requires_review"
+
+
+def _rollup_page_changes(changes: list[str]) -> str:
+    material = {change for change in changes if change in MATERIAL_CHANGES}
+    negative = material & {"worsened", "new_issue"}
+    positive = material & {"resolved", "improved"}
+    if negative and positive:
+        return "mixed"
+    if "worsened" in material:
+        return "worsened"
+    if "new_issue" in material:
+        return "new_issue"
+    if "resolved" in material:
+        return "resolved"
+    if "improved" in material:
+        return "improved"
+    if "requires_review" in changes:
+        return "requires_review"
+    if "evidence_unavailable" in changes:
+        return "evidence_unavailable"
+    if "no_longer_applicable" in changes:
+        return "no_longer_applicable"
+    if "new_page" in changes:
+        return "new_page"
+    return "unchanged"
+
+
+def classify_change(current: dict[str, Any], previous: dict[str, Any] | None) -> str:
+    """Compatibility wrapper: compare only pages assessed in the current run."""
+    current_pages = dict(current.get("page_statuses") or {})
+    previous_pages = dict((previous or {}).get("page_statuses") or {})
+    return _rollup_page_changes([
+        _page_change(status, previous_pages.get(page))
+        for page, status in current_pages.items()
+    ])
 
 
 def _dedupe_audit_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -164,95 +189,48 @@ def build_finding_history(records: list[dict[str, Any]]) -> dict[str, list[dict[
         )
         for key, observation in observations.items():
             previous = history[key][-1] if history[key] else None
-            observation["change"] = classify_change(observation, previous)
+            prior_pages = dict((previous or {}).get("page_statuses") or {})
+            current_pages = dict(observation.get("page_statuses") or {})
+            observation["page_changes"] = {
+                page: _page_change(status, prior_pages.get(page))
+                for page, status in current_pages.items()
+            }
+            observation["newly_observed_pages"] = sorted(set(current_pages) - set(prior_pages))
+            observation["no_longer_assessed_pages"] = sorted(set(prior_pages) - set(current_pages))
+            observation["change"] = _rollup_page_changes(list(observation["page_changes"].values()))
             history[key].append(observation)
 
     for rows in history.values():
-        if not rows:
-            continue
-        current = rows[-1]
-        current_status = current.get("status")
-        state_since = current.get("observed_at")
-        for row in reversed(rows[:-1]):
-            if row.get("status") != current_status:
-                break
-            state_since = row.get("observed_at") or state_since
-        current["state_since"] = state_since
+        last_material = None
+        for row in rows:
+            if row.get("change") in MATERIAL_CHANGES:
+                last_material = row
+            row["last_material_change"] = (last_material or {}).get("change") or ""
+            row["last_material_changed_at"] = (last_material or {}).get("observed_at") or ""
     return dict(history)
-
-
-def baseline_change(rows: list[dict[str, Any]]) -> str:
-    '''Classify current state against the first observed state for this finding.'''
-    if not rows:
-        return "new"
-    if len(rows) == 1:
-        return "new"
-    return classify_change(rows[-1], rows[0])
 
 
 def attach_history_to_check(check: dict[str, Any], history: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     key = finding_key(str(check.get("category") or ""), str(check.get("title") or ""))
     rows = list(history.get(key) or [])
     check["finding_key"] = key
-    check["history"] = rows
-    check["history_count"] = len(rows)
+    material_rows = [row for row in rows if row.get("change") in MATERIAL_CHANGES]
+    check["history"] = material_rows
+    check["history_count"] = len(material_rows)
+    check["observation_count"] = len(rows)
     if rows:
         latest = rows[-1]
-        previous = rows[-2] if len(rows) > 1 else None
-        baseline = rows[0]
-        check["latest_change"] = latest.get("change") or "new"
-        check["since_baseline_change"] = baseline_change(rows)
-        check["baseline_observation"] = baseline
-        check["observed_at"] = latest.get("observed_at") or ""
-        check["state_since"] = latest.get("state_since") or latest.get("observed_at") or ""
-        check["previous_observation"] = previous
-        current_pages = set(latest.get("tested_pages") or [])
-        previous_pages = set((previous or {}).get("tested_pages") or [])
-        check["comparison_scope_changed"] = bool(
-            previous and current_pages and previous_pages and current_pages != previous_pages
-        )
-        check["comparison_note"] = (
-            "The current and previous observations tested different page sets, so movement is not comparable."
-            if check["comparison_scope_changed"] else ""
-        )
+        check["latest_change"] = latest.get("last_material_change") or latest.get("change") or "new_page"
+        check["last_movement_at"] = latest.get("last_material_changed_at") or latest.get("observed_at") or ""
+        check["newly_observed_pages"] = latest.get("newly_observed_pages") or []
+        check["no_longer_assessed_pages"] = latest.get("no_longer_assessed_pages") or []
     else:
-        check["latest_change"] = "new"
-        check["since_baseline_change"] = "new"
-        check["baseline_observation"] = None
-        check["observed_at"] = ""
-        check["state_since"] = ""
-        check["previous_observation"] = None
-        check["comparison_scope_changed"] = False
-        check["comparison_note"] = ""
+        check["latest_change"] = "new_page"
+        check["last_movement_at"] = ""
+        check["newly_observed_pages"] = []
+        check["no_longer_assessed_pages"] = []
     return check
 
-
-
-def _movement_weight(
-    latest: dict[str, Any],
-    previous: dict[str, Any] | None,
-    change: str,
-) -> int:
-    current_affected = int(latest.get("pages_affected") or 0)
-    current_tested = int(latest.get("pages_tested") or 0)
-    previous_affected = int((previous or {}).get("pages_affected") or 0)
-    previous_tested = int((previous or {}).get("pages_tested") or 0)
-
-    if change == "resolved":
-        return previous_affected or previous_tested or current_tested or 1
-    if change == "improved":
-        reduction = max(previous_affected - current_affected, 0)
-        return reduction or current_affected or previous_affected or current_tested or previous_tested or 1
-    if change == "worsened":
-        increase = max(current_affected - previous_affected, 0)
-        return increase or current_affected or previous_affected or current_tested or previous_tested or 1
-    if change == "new":
-        return current_affected or current_tested or 1
-    if change == "unchanged":
-        return current_tested or current_affected or 1
-    if change in {"not_comparable", "no_longer_applicable"}:
-        return current_tested or previous_tested or current_affected or previous_affected or 1
-    return 1
 
 
 def _summary_result(counts: dict[str, int]) -> dict[str, int]:
@@ -260,34 +238,46 @@ def _summary_result(counts: dict[str, int]) -> dict[str, int]:
         "improved": int(counts.get("improved") or 0),
         "worsened": int(counts.get("worsened") or 0),
         "resolved": int(counts.get("resolved") or 0),
-        "new": int(counts.get("new") or 0),
-        "unchanged": int(counts.get("unchanged") or 0),
-        "not_comparable": int(counts.get("not_comparable") or 0),
-        "no_longer_applicable": int(counts.get("no_longer_applicable") or 0),
+        "new": int(counts.get("new_issue") or 0),
+        "mixed": int(counts.get("mixed") or 0),
     }
 
 
 def pulse_summary(history: dict[str, list[dict[str, Any]]]) -> dict[str, int]:
-    '''
-    Executive Pulse is baseline -> current, not latest -> previous.
-    Repeated confirmation of a post-fix state must not erase a previously
-    resolved or improved finding.
-    '''
-    counts = defaultdict(int)
-    seen_logical = set()
+    """Count unique pages by their retained last material movement.
 
+    This intentionally avoids weighted check-page totals and does not include
+    unchanged confirmations.
+    """
+    by_page: dict[str, set[str]] = defaultdict(set)
     for rows in history.values():
         if not rows:
             continue
-        latest = rows[-1]
-        baseline = rows[0]
-        title_key = canonical_check_title(latest.get("title") or "").strip().lower()
-        if not title_key or title_key in seen_logical:
-            continue
-        seen_logical.add(title_key)
-        change = baseline_change(rows)
-        counts[change] += _movement_weight(latest, baseline, change)
+        currently_assessed = set((rows[-1].get("page_statuses") or {}).keys())
+        retained: dict[str, str] = {}
+        for observation in rows:
+            for page, change in (observation.get("page_changes") or {}).items():
+                if change in MATERIAL_CHANGES:
+                    retained[page] = change
+        for page, change in retained.items():
+            if page not in currently_assessed:
+                continue
+            by_page[page].add(change)
 
+    counts: dict[str, int] = defaultdict(int)
+    for changes in by_page.values():
+        negative = changes & {"worsened", "new_issue"}
+        positive = changes & {"resolved", "improved"}
+        if negative and positive:
+            counts["mixed"] += 1
+        elif "worsened" in changes:
+            counts["worsened"] += 1
+        elif "new_issue" in changes:
+            counts["new_issue"] += 1
+        elif "resolved" in changes:
+            counts["resolved"] += 1
+        elif "improved" in changes:
+            counts["improved"] += 1
     return _summary_result(counts)
 
 
@@ -296,12 +286,8 @@ def family_pulse_summary(
     history: dict[str, list[dict[str, Any]]],
     family_definitions: list[dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, int]]:
-    '''
-    Family Pulse uses baseline -> current semantics. Latest-transition
-    history remains available on individual checks.
-    '''
-    counts_by_family: dict[str, defaultdict[str, int]] = {}
-    seen_by_family: dict[str, set[str]] = defaultdict(set)
+    """Apply the same retained unique-page semantics inside each family."""
+    changes_by_family_page: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
 
     definitions = list(family_definitions or [])
     category_to_family: dict[str, str] = {}
@@ -336,28 +322,37 @@ def family_pulse_summary(
             continue
 
         latest = rows[-1]
-        baseline = rows[0]
         family = resolve_family(latest)
-        title_key = canonical_check_title(latest.get("title") or "").strip().lower()
-
-        if not family or not title_key:
+        if not family:
             continue
-        if title_key in seen_by_family[family]:
-            continue
-        seen_by_family[family].add(title_key)
+        retained: dict[str, str] = {}
+        currently_assessed = set((latest.get("page_statuses") or {}).keys())
+        for observation in rows:
+            for page, change in (observation.get("page_changes") or {}).items():
+                if change in MATERIAL_CHANGES:
+                    retained[page] = change
+        for page, change in retained.items():
+            if page not in currently_assessed:
+                continue
+            changes_by_family_page[family][page].add(change)
 
-        if family not in counts_by_family:
-            counts_by_family[family] = defaultdict(int)
-
-        change = baseline_change(rows)
-        counts_by_family[family][change] += _movement_weight(
-            latest, baseline, change
-        )
-
-    result = {
-        family: _summary_result(counts)
-        for family, counts in counts_by_family.items()
-    }
+    result = {}
+    for family, pages in changes_by_family_page.items():
+        counts: dict[str, int] = defaultdict(int)
+        for changes in pages.values():
+            negative = changes & {"worsened", "new_issue"}
+            positive = changes & {"resolved", "improved"}
+            if negative and positive:
+                counts["mixed"] += 1
+            elif "worsened" in changes:
+                counts["worsened"] += 1
+            elif "new_issue" in changes:
+                counts["new_issue"] += 1
+            elif "resolved" in changes:
+                counts["resolved"] += 1
+            elif "improved" in changes:
+                counts["improved"] += 1
+        result[family] = _summary_result(counts)
 
     for family in definitions:
         name = str(family.get("name") or "").strip()
@@ -365,4 +360,3 @@ def family_pulse_summary(
             result[name] = _summary_result({})
 
     return result
-

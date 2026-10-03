@@ -50,7 +50,7 @@ FAMILIES = [
 STATUS_RANK = {"FAIL":0,"PARTIAL":1,"MANUAL_REVIEW":2,"DATA_UNAVAILABLE":3,"PASS":4,"NOT_APPLICABLE":5}
 SEVERITY_RANK = {"CRITICAL":0,"HIGH":1,"MEDIUM":2,"LOW":3}
 METHODOLOGY_VERSION = "report-methodology-pulse-v1"
-SNAPSHOT_VERSION = "report-snapshot-v3"
+SNAPSHOT_VERSION = "report-snapshot-v4"
 
 # Lower = greater expected return from fixing. This is deliberately independent of severity.
 IMPACT_ORDER = {
@@ -148,7 +148,8 @@ def _build_monitoring_inventory_snapshot(con, domain: str, snapshot: dict[str, A
 
     crawl = dict(snapshot.get("crawl") or {})
     crawl_run_id = crawl.get("id")
-    if not crawl_run_id:
+    provenance = snapshot.get("observation_provenance") or {}
+    if not crawl_run_id and not provenance:
         row = con.execute(
             "SELECT * FROM crawl_run WHERE domain=? COLLATE NOCASE ORDER BY id DESC LIMIT 1",
             (domain,),
@@ -380,6 +381,14 @@ def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any],*,execu
             "question_set_version":manual_ai.get("question_set_version") or 1,
             "analysis_prompt_version":manual_ai.get("analysis_system_prompt_version") or 1,
             "snapshot_version":SNAPSHOT_VERSION,
+            "observation_provenance":dict(immutable.get("observation_provenance") or {}),
+            "gsc_period_start":(immutable.get("seo") or {}).get("period_start"),
+            "gsc_period_end":(immutable.get("seo") or {}).get("period_end"),
+            "source_observations":[{
+                "key":row.get("key"),
+                "state":row.get("state"),
+                "observed_at":row.get("observed_at") or None,
+            } for row in coverage],
         }
         _auto_update_recommendations(con,domain,immutable)
         immutable["recommendation_tracking"]=_load_recommendation_tracking(con,domain)

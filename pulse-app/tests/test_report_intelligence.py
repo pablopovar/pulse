@@ -3,6 +3,7 @@ import unittest
 from reports.prioritization import value_to_fix_components
 from reports.report_intelligence import (
     compare_snapshots,
+    data_coverage,
     is_issue,
     normalize_status,
     rollup_status,
@@ -85,13 +86,31 @@ class ComparisonTests(unittest.TestCase):
         result = compare_snapshots(self._snapshot("FAIL"), self._snapshot("PASS"))
         self.assertEqual(result["page_changes"][0]["change"], "worsened")
 
-    def test_unavailable_is_not_comparable(self):
+    def test_unavailable_is_evidence_unavailable(self):
         result = compare_snapshots(self._snapshot("DATA_UNAVAILABLE"), self._snapshot("FAIL"))
-        self.assertEqual(result["page_changes"][0]["change"], "not_comparable")
+        self.assertEqual(result["page_changes"][0]["change"], "evidence_unavailable")
+
+    def test_manual_review_requires_human_determination(self):
+        result = compare_snapshots(self._snapshot("MANUAL_REVIEW"), self._snapshot("PASS"))
+        self.assertEqual(result["page_changes"][0]["change"], "requires_review")
 
     def test_no_longer_applicable(self):
         result = compare_snapshots(self._snapshot("NOT_APPLICABLE"), self._snapshot("FAIL"))
         self.assertEqual(result["page_changes"][0]["change"], "no_longer_applicable")
+
+
+class SourceCoverageTests(unittest.TestCase):
+    def test_clarity_does_not_make_ga4_connected(self):
+        rows = data_coverage({
+            "clarity": {"createdAt": "2026-10-01T10:00:00Z"},
+            "source_inventory": [
+                {"key": "ga4", "selected": True, "status": "Selected"},
+                {"key": "clarity", "selected": True, "status": "Connected"},
+            ],
+        })
+        states = {row["key"]: row["state"] for row in rows}
+        self.assertEqual(states["ga4"], "missing")
+        self.assertEqual(states["clarity"], "connected")
 
 
 if __name__ == "__main__":

@@ -208,10 +208,10 @@ def build_high_signal_findings(data: dict[str, Any], families: list[dict[str, An
         ctr = clicks / impressions if impressions else 0.0
     except Exception:
         impressions = clicks = ctr = 0.0
-    if impressions >= 100 and ctr < 0.01:
+    if impressions >= 100 and ctr < 0.01 and seo.get("period_start") and seo.get("period_end"):
         candidates.append({
-            "title": "Search visibility is not turning into visits",
-            "message": f"The site generated {int(impressions):,} search impressions but only {int(clicks):,} clicks. People are seeing the site in search far more often than they are choosing it.",
+            "title": "Search visibility is not turning into search clicks",
+            "message": f"During {seo['period_start']}–{seo['period_end']}, the site generated {int(impressions):,} Google search impressions but only {int(clicks):,} search clicks. This is search-console evidence, not a measure of visits.",
             "value_score": 20.0 + math.log1p(impressions),
             "source": "Google Search Console",
         })
