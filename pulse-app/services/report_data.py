@@ -141,6 +141,10 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
                             "SELECT requested_url,source_type,discovery_origin,parent_sitemap,http_status,content_type,response_size,response_sha256,observed_at,parse_status,parse_error,child_sitemaps_json FROM sitemap_source_evidence WHERE crawl_run_id=? ORDER BY requested_url",
                             (run_id,),
                         )
+                        # data_coverage consumes sitemap_urls for legacy
+                        # snapshots.  Feed it the same concrete evidence used
+                        # for this crawler-backed observation.
+                        data["sitemap_urls"] = list(data["sitemap"])
                     if _exists(con, "llm_source_evidence"):
                         data["llm_sources"] = _rows(
                             con,

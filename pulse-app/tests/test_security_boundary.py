@@ -39,6 +39,14 @@ def _make_app(monkeypatch, mode="application"):
     def public_report(report_id):
         return f"report:{report_id}"
 
+    @app.get("/reports/<report_id>/export.<fmt>")
+    def public_report_export(report_id, fmt):
+        return f"export:{report_id}:{fmt}"
+
+    @app.get("/reports/<report_id>/pdf")
+    def public_report_pdf(report_id):
+        return f"pdf:{report_id}"
+
     @app.post("/reports/<report_id>/reply")
     def public_report_note_reply(report_id):
         return jsonify(ok=True)
@@ -108,7 +116,10 @@ def test_internal_mode_allows_management_without_auth(monkeypatch):
 
 def test_public_report_bypasses_management_auth(monkeypatch):
     app = _make_app(monkeypatch)
-    assert app.test_client().get("/reports/capability123").status_code == 200
+    client = app.test_client()
+    assert client.get("/reports/capability123").status_code == 200
+    assert client.get("/reports/capability123/export.json").status_code == 200
+    assert client.get("/reports/capability123/pdf").status_code == 200
 
 
 def test_public_skin_is_readable_but_editor_requires_management_auth(monkeypatch):

@@ -379,7 +379,7 @@ def data_coverage(data: dict[str, Any]) -> list[dict[str, Any]]:
         source_state("clarity", "Microsoft Clarity", bool(data.get("clarity")), observed_at=str((data.get("clarity") or {}).get("createdAt") or (data.get("clarity") or {}).get("date") or "")),
         source_state("backlinks", "Backlink authority data", bool(data.get("backlinks") or data.get("ref_domains") or data.get("domain_metrics")), observed_at=(data.get("backlink_summary") or {}).get("createdAt") or (data.get("backlink_summary") or {}).get("date") or (data.get("domain_metrics") or {}).get("checkedAt") or latest(data.get("ref_domains") or [], "fetchedAt")),
         source_state("rank_tracking", "Rank tracking", bool(data.get("rank_tracking")), observed_at=latest(data.get("rank_tracking") or [], "lastCheckedAt")),
-        source_state("sitemap", "Sitemap inventory", bool(data.get("sitemap_urls")), observed_at=latest(data.get("sitemap_urls") or [], "lastSeenAt", "fetchedAt")),
+        source_state("sitemap", "Sitemap inventory", bool(data.get("sitemap_urls") or data.get("sitemap")), observed_at=latest(data.get("sitemap_urls") or data.get("sitemap") or [], "lastSeenAt", "fetchedAt", "observed_at")),
         source_state("manual_ai", "Manual AI Responses", bool(manual_ai.get("available")), observed_at=str(manual_ai.get("run_at_utc") or manual_ai.get("updated_at") or manual_ai.get("created_at") or "")),
     ]
     return rows

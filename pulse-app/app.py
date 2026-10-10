@@ -1819,6 +1819,27 @@ def public_report(report_id):
     return report_session_view(domain, report_id)
 
 
+@app.get("/reports/<report_id>/export.<fmt>")
+def public_report_export(report_id, fmt):
+    """Client-safe download of the immutable observation dataset.
+
+    Security middleware gives this route exactly the same public-report
+    capability and optional password handling as the HTML report.
+    """
+    domain = report_domain(RESEARCH_DB, report_id)
+    if not domain:
+        abort(404)
+    return _send_observation_export(domain, report_id, fmt)
+
+
+@app.get("/reports/<report_id>/pdf")
+def public_report_pdf(report_id):
+    domain = report_domain(RESEARCH_DB, report_id)
+    if not domain:
+        abort(404)
+    return report_session_pdf(domain, report_id)
+
+
 @app.post("/d/<domain>/report-workflow/exclusion")
 def report_workflow_exclusion(domain):
     get_site(domain)
@@ -1930,15 +1951,19 @@ def report_session_view(domain, report_id):
 @app.get("/d/<domain>/reports/<report_id>/export.<fmt>")
 def report_session_export(domain, report_id, fmt):
     site = get_site(domain)
+    return _send_observation_export(site["domain"], report_id, fmt)
+
+
+def _send_observation_export(domain, report_id, fmt):
     session = load_report_session(RESEARCH_DB, domain, report_id)
     if not session:
         abort(404)
-    dataset = canonical_dataset(json.loads(json.dumps(session["snapshot"])), domain=site["domain"], observation_id=report_id)
+    dataset = canonical_dataset(json.loads(json.dumps(session["snapshot"])), domain=domain, observation_id=report_id)
     exporters = {"json": (json_bytes, "application/json"), "csv": (csv_bytes, "text/csv"), "xml": (xml_bytes, "application/xml"), "md": (markdown_text, "text/markdown"), "markdown": (markdown_text, "text/markdown")}
     if fmt not in exporters:
         abort(404)
     body, mimetype = exporters[fmt]
-    return send_file(io.BytesIO(body(dataset)), mimetype=mimetype, as_attachment=True, download_name=f"{site['domain']}-observation-{report_id}.{ 'md' if fmt == 'markdown' else fmt }")
+    return send_file(io.BytesIO(body(dataset)), mimetype=mimetype, as_attachment=True, download_name=f"{domain}-observation-{report_id}.{ 'md' if fmt == 'markdown' else fmt }")
 
 
 

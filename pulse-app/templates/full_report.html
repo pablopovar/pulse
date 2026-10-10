@@ -75,6 +75,7 @@
 {% set meta = report.get('report_metadata') or {} %}
 {% set mai_snapshot = report.get('manual_ai_snapshot') or report.get('manual_ai') or report.get('manual_ai_source') or {} %}
 {% set llm_sources = report.get('llm_sources') or report.get('agent_readiness_sources') or [] %}
+{% set links = (report.client_config or {}).get('quick_links') or [] %}
 <div class="report-document report-mode-living">
 <style>
 .report-document .status-pill{display:inline-flex;align-items:center;padding:.18rem .5rem;border-radius:999px;font-size:.76rem;font-weight:700;letter-spacing:.02em}
@@ -122,6 +123,13 @@
   background:linear-gradient(180deg,var(--brand-blue) 0 52%,var(--brand-orange) 52% 100%);
 }
 .report-document .report-header h1{font-size:clamp(2.15rem,4.8vw,3.65rem);line-height:.98;margin:.45rem 0 .6rem}
+.report-document .client-report-name{margin:.3rem 0 0;font-size:1rem;color:var(--brand-muted)}
+.report-document .client-report-intro{max-width:680px;margin:.65rem 0 0;font-size:1.05rem;color:var(--brand-muted)}
+.report-document .report-reference-controls{display:flex;align-items:end;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin:1rem 0;padding:.85rem 0;border-top:1px solid var(--brand-line);border-bottom:1px solid var(--brand-line)}
+.report-document .report-reference-controls label span{display:block;font-size:.72rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--brand-muted)}
+.report-document .report-reference-controls select{margin-top:.25rem;padding:.42rem .55rem;border:1px solid var(--brand-line);border-radius:7px;background:var(--skin-card,#fff);color:var(--brand-ink);font:inherit}
+.report-document .client-downloads{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap}.report-document .client-downloads strong{font-size:.9rem;margin-right:.15rem}
+.report-document .about-observation-controls{display:flex;align-items:start;gap:1rem;flex-wrap:wrap;margin:.75rem 0}.report-document .about-observation-controls .last-checked{text-align:left;min-width:0}
 .report-document .last-checked{
   min-width:210px;
   text-align:right;
@@ -875,49 +883,13 @@ html[data-theme="dark"] .report-document .root-cause-card.compact-action-card .a
 @media print{.report-document details:not([open])>*:not(summary){display:none}.report-document .report-controls,.report-document .family-collapse-toggle,.report-document .interactive-evidence,.report-document .report-quality-ui{display:none!important}}
 </style>
 
-<header class="report-header">
+<header class="report-header report-header-client">
   <div>
     <div class="report-kicker">LIVING DOMAIN PULSE</div>
-    <h1>{{ site.domain }}</h1>
+    <p class="client-report-name">{{ site.domain }}'s Living Pulse</p>
+    <h1>Your visibility and website report</h1>
+    <p class="client-report-intro">What is working, what needs attention, and the most useful next actions.</p>
   </div>
-  <div class="last-checked">
-    <span>Last checked</span>
-    <strong>{{ meta.get('last_checked_display') or report_session.created_at }}</strong>
-    {% if meta.get('last_checked_time_display') %}<time datetime="{{ meta.get('last_checked_at') }}">{{ meta.get('last_checked_time_display') }}</time>{% endif %}
-    {% if report.available_observations and report.available_observations|length > 1 %}
-    <label class="observation-selector">
-      <span>Viewing observation</span>
-      <select onchange="if(this.value) window.location.href=this.value">
-        {% for observation in report.available_observations %}
-        {% if request.endpoint == 'public_report' %}
-          {% set observation_url = url_for('public_report', report_id=observation.id) %}
-        {% else %}
-          {% set observation_url = url_for('report_session_view', domain=site.domain, report_id=observation.id) %}
-        {% endif %}
-        <option value="{{ observation_url }}" {% if observation.id == report_session.id %}selected{% endif %}>{{ observation.display }}{% if observation.id == report_session.id %} · this report{% endif %}</option>
-        {% endfor %}
-      </select>
-    </label>
-    {% endif %}
-    {% if request.endpoint == 'public_report' %}
-    <label class="client-display-mode">
-      <span>Display</span>
-      <select data-theme-preference aria-label="Display mode">
-        <option value="system">System</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
-      </select>
-    </label>
-    {% endif %}
-  </div>
-  {% set obs = meta.get('observation_dates') or {} %}
-  <div class="observation-dates" aria-label="Observation dates">
-    {% for key, label in [('pulse','Pulse last check'),('dataforseo','DataForSEO last observed'),('gsc','GSC last observed'),('ai','AI chats last queried'),('human','Human last reviewed')] %}
-    <div class="observation-date"><span>{{ label }}</span><strong>{{ obs.get(key) or '—' }}</strong></div>
-    {% endfor %}
-  </div>
-  {% set links = (report.client_config or {}).get('quick_links') or [] %}
-  {% if links %}<nav class="quick-links" aria-label="Quick links"><strong>Quick links</strong>{% for link in links %}<a href="{{ link.href }}">{{ link.label }}</a>{% endfor %}</nav>{% endif %}
   {% if request.endpoint != 'public_report' %}<details class="quick-links-admin"><summary>Manage quick links</summary><form method="post" action="{{ url_for('save_report_quick_links', domain=site.domain) }}"><input type="hidden" name="report_id" value="{{ report_session.id }}"><p class="history-note">One link per line: <code>Label|#section-id</code>.</p><textarea name="quick_links">{% for link in links %}{{ link.label }}|{{ link.href }}{% if not loop.last %}&#10;{% endif %}{% endfor %}</textarea><br><button class="button" type="submit">Save links</button></form></details>{% endif %}
   {% if request.endpoint != 'public_report' %}
   <div class="heading-actions">
@@ -938,7 +910,6 @@ html[data-theme="dark"] .report-document .root-cause-card.compact-action-card .a
 {% set executive_finding = report.high_signal_findings[0] if report.high_signal_findings else {} %}
 {% set executive_action = report.top_actions[0] if report.top_actions else {} %}
 {% set pulse = report.pulse_summary or {} %}
-{% if report.get('sitemap_reconciliation') %}<section class="llm-evidence-section" aria-label="Sitemap reconciliation"><div class="report-kicker">SITEMAP RECONCILIATION</div><h2>Sitemap URL evidence</h2><details><summary>{{ report.get('sitemap_reconciliation')|length }} sitemap URL records</summary><div class="table-wrap report-table"><table><thead><tr><th>URL</th><th>Source</th><th>Status</th><th>Findings</th></tr></thead><tbody>{% for row in report.get('sitemap_reconciliation') %}<tr><td class="report-url">{{ row.url }}</td><td>{{ row.source_sitemap or '—' }}</td><td>{{ row.status_code or 'Not crawled' }}</td><td>{{ row.findings|join(', ') or 'No discrepancy recorded' }}</td></tr>{% endfor %}</tbody></table></div></details></section>{% endif %}
 <section class="executive-fold" aria-label="Executive summary">
   <div class="headline-number-card">
     <strong>{{ executive_action.pages_affected or (report.audit_summary.pages_audited if report.audit_summary else 0) or 0 }}</strong>
@@ -960,16 +931,6 @@ html[data-theme="dark"] .report-document .root-cause-card.compact-action-card .a
     {% endif %}
   </div>
 </section>
-
-<section class="movement-strip" aria-label="Latest material movement by unique page">
-  <div class="movement-item resolved"><span>Resolved pages</span><strong>{{ pulse.get('resolved',0) }}</strong></div>
-  <div class="movement-item improved"><span>Improved pages</span><strong>{{ pulse.get('improved',0) }}</strong></div>
-  <div class="movement-item worsened"><span>Worsened pages</span><strong>{{ pulse.get('worsened',0) }}</strong></div>
-  <div class="movement-item new"><span>Discovered pages</span><strong>{{ pulse.get('new',0) }}</strong></div>
-  {% if pulse.get('mixed',0) %}<div class="movement-item unchanged"><span>Mixed change pages</span><strong>{{ pulse.get('mixed',0) }}</strong></div>{% endif %}
-</section>
-
-<section class="benefit-to-fix" aria-label="Benefit-to-fix explanation"><h2>What does Benefit-to-fix mean?</h2><p>A qualitative explanation of the likely practical value of resolving a finding, based on scope, severity, confidence, exposure, and whether one change can improve multiple pages. It is not a forecast of traffic or revenue.</p></section>
 
 <section class="report-high-signal">
   <div class="report-kicker">WHAT MATTERS MOST NOW</div>
@@ -1016,6 +977,16 @@ html[data-theme="dark"] .report-document .root-cause-card.compact-action-card .a
   </div>
 </section>
 {% endif %}
+
+<section class="movement-strip" aria-label="Latest material movement by unique page">
+  <div class="movement-item resolved"><span>Resolved pages</span><strong>{{ pulse.get('resolved',0) }}</strong></div>
+  <div class="movement-item improved"><span>Improved pages</span><strong>{{ pulse.get('improved',0) }}</strong></div>
+  <div class="movement-item worsened"><span>Worsened pages</span><strong>{{ pulse.get('worsened',0) }}</strong></div>
+  <div class="movement-item new"><span>Discovered pages</span><strong>{{ pulse.get('new',0) }}</strong></div>
+  {% if pulse.get('mixed',0) %}<div class="movement-item unchanged"><span>Mixed change pages</span><strong>{{ pulse.get('mixed',0) }}</strong></div>{% endif %}
+</section>
+
+<section class="benefit-to-fix" aria-label="Benefit-to-fix explanation"><h2>What does Benefit-to-fix mean?</h2><p>A qualitative explanation of the likely practical value of resolving a finding, based on scope, severity, confidence, exposure, and whether one change can improve multiple pages. It is not a forecast of traffic or revenue.</p></section>
 
 <nav class="family-nav" aria-label="Report families">
   {% for family in report.families %}
@@ -1079,6 +1050,16 @@ html[data-theme="dark"] .report-document .root-cause-card.compact-action-card .a
   <button type="button" class="family-collapse-toggle interactive-evidence" aria-expanded="{% if family.id in report.technical_family_ids %}false{% else %}true{% endif %}">{% if family.id in report.technical_family_ids %}Expand section{% else %}Collapse section{% endif %}</button>
 
   {% if family.id == 'machine-readability-eligibility' %}{{ llm_guidance_evidence(llm_sources) }}{% endif %}
+  {% if family.id == 'onsite-audit' and report.get('sitemap_reconciliation') %}
+  <section class="llm-evidence-section" aria-label="Sitemap reconciliation">
+    <div class="report-kicker">SITEMAP RECONCILIATION</div><h3>Sitemap URL evidence</h3>
+    <details><summary>{{ report.get('sitemap_reconciliation')|length }} sitemap URL records</summary>
+      <div class="table-wrap report-table"><table><thead><tr><th>URL</th><th>Source</th><th>Status</th><th>Findings</th></tr></thead><tbody>
+      {% for row in report.get('sitemap_reconciliation') %}<tr><td class="report-url">{{ row.url }}</td><td>{{ row.source_sitemap or '—' }}</td><td>{{ row.status_code or 'Not crawled' }}</td><td>{{ row.findings|join(', ') or 'No discrepancy recorded' }}</td></tr>{% endfor %}
+      </tbody></table></div>
+    </details>
+  </section>
+  {% endif %}
 
   {% if family.kind == 'ai' %}
     <div class="ai-visibility-report-content">
@@ -1244,6 +1225,30 @@ html[data-theme="dark"] .report-document .root-cause-card.compact-action-card .a
     <a href="#" class="button">Back to top ↑</a>
   </div>
   <p>Methodology, terminology, monitoring coverage, and report-quality notes are kept here so they remain available without competing with the executive findings.</p>
+  <section class="report-reference-controls" aria-label="Report options">
+    <label><span>Language</span><select id="report-language" aria-label="Report language"><option value="en">English</option><option value="es">Español</option></select></label>
+    {% if request.endpoint == 'public_report' %}
+    <div class="client-downloads"><strong>Download this report</strong>
+      <a class="button" href="{{ url_for('public_report_pdf', report_id=report_session.id) }}">PDF</a>
+      <a class="button" href="{{ url_for('public_report_export', report_id=report_session.id, fmt='json') }}">JSON</a>
+      <a class="button" href="{{ url_for('public_report_export', report_id=report_session.id, fmt='csv') }}">CSV</a>
+      <a class="button" href="{{ url_for('public_report_export', report_id=report_session.id, fmt='xml') }}">XML</a>
+      <a class="button" href="{{ url_for('public_report_export', report_id=report_session.id, fmt='md') }}">Markdown</a>
+    </div>
+    {% endif %}
+  </section>
+
+  <details>
+    <summary>Observation, display &amp; source dates</summary>
+    <div class="about-observation-controls">
+      <div class="last-checked"><span>Last checked</span><strong>{{ meta.get('last_checked_display') or report_session.created_at }}</strong>{% if meta.get('last_checked_time_display') %}<time datetime="{{ meta.get('last_checked_at') }}">{{ meta.get('last_checked_time_display') }}</time>{% endif %}</div>
+      {% if report.available_observations and report.available_observations|length > 1 %}<label class="observation-selector"><span>Viewing observation</span><select onchange="if(this.value) window.location.href=this.value">{% for observation in report.available_observations %}{% if request.endpoint == 'public_report' %}{% set observation_url = url_for('public_report', report_id=observation.id) %}{% else %}{% set observation_url = url_for('report_session_view', domain=site.domain, report_id=observation.id) %}{% endif %}<option value="{{ observation_url }}" {% if observation.id == report_session.id %}selected{% endif %}>{{ observation.display }}{% if observation.id == report_session.id %} · this report{% endif %}</option>{% endfor %}</select></label>{% endif %}
+      {% if request.endpoint == 'public_report' %}<label class="client-display-mode"><span>Display</span><select data-theme-preference aria-label="Display mode"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>{% endif %}
+    </div>
+    {% set obs = meta.get('observation_dates') or {} %}
+    <div class="observation-dates" aria-label="Observation dates">{% for key, label in [('pulse','Pulse last check'),('dataforseo','DataForSEO last observed'),('gsc','GSC last observed'),('ai','AI chats last queried'),('human','Human last reviewed')] %}<div class="observation-date"><span>{{ label }}</span><strong>{{ obs.get(key) or '—' }}</strong></div>{% endfor %}</div>
+    {% if links %}<nav class="quick-links" aria-label="Quick links"><strong>Quick links</strong>{% for link in links %}<a href="{{ link.href }}">{{ link.label }}</a>{% endfor %}</nav>{% endif %}
+  </details>
   <details>
     <summary>Observation metadata</summary>
     <dl>
@@ -2026,6 +2031,47 @@ html[data-theme="dark"] .report-document .root-cause-card.compact-action-card .a
   const urlSearch=document.getElementById('monitoring-url-search'),urlChange=document.getElementById('monitoring-change-filter');
   function filterInventory(){const text=(urlSearch?.value||'').toLowerCase(),change=urlChange?.value||'';document.querySelectorAll('#monitoring-url-table tbody tr[data-monitoring-change]').forEach(row=>{row.hidden=!!((text&&!row.textContent.toLowerCase().includes(text))||(change&&row.dataset.monitoringChange!==change));});}
   [urlSearch,urlChange].forEach(el=>el&&el.addEventListener(el.type==='search'?'input':'change',filterInventory));
+
+  // The report data and quoted source evidence remain immutable.  This small
+  // presentation dictionary changes client-facing labels only; it never
+  // rewrites a source response, URL, or technical evidence field.
+  const language=document.getElementById('report-language');
+  const languageCode=new URL(window.location.href).searchParams.get('lang')==='es'?'es':'en';
+  if(language){
+    language.value=languageCode;
+    language.addEventListener('change',()=>{const u=new URL(window.location.href);if(language.value==='en')u.searchParams.delete('lang');else u.searchParams.set('lang','es');window.location.href=u.toString();});
+  }
+  if(languageCode==='es'){
+    document.documentElement.lang='es';
+    const es={
+      'Your visibility and website report':'Tu informe de visibilidad y sitio web',
+      'What is working, what needs attention, and the most useful next actions.':'Qué está funcionando, qué necesita atención y las acciones más útiles.',
+      'Current verdict':'Conclusión actual','What matters most now':'Lo más importante ahora','High-signal findings':'Hallazgos principales','Highest-value actions':'Acciones prioritarias',
+      'Search visibility is not turning into search clicks':'La visibilidad en búsquedas no se está convirtiendo en clics',
+      'TOP ACTIONS':'ACCIONES PRIORITARIAS','LIVING DOMAIN PULSE':'PULSO DEL DOMINIO',
+      'What does Benefit-to-fix mean?':'¿Qué significa beneficio de resolverlo?','Resolved pages':'Páginas resueltas','Improved pages':'Páginas mejoradas','Worsened pages':'Páginas empeoradas','Discovered pages':'Páginas descubiertas',
+      'About this report':'Acerca de este informe','REPORT REFERENCE':'REFERENCIA DEL INFORME','Language':'Idioma','Download this report':'Descargar este informe','Observation, display & source dates':'Observación, visualización y fechas de fuentes',
+      'Last checked':'Última comprobación','Viewing observation':'Observación visualizada','Display':'Visualización','System':'Sistema','Light':'Claro','Dark':'Oscuro','Quick links':'Enlaces rápidos',
+      'Observation metadata':'Metadatos de la observación','Methodology & scope':'Metodología y alcance','Monitoring coverage':'Cobertura de seguimiento','SITEMAP RECONCILIATION':'CONCILIACIÓN DEL MAPA DEL SITIO','Sitemap URL evidence':'Evidencia de URL del mapa del sitio',
+      'Confirmed findings':'Hallazgos confirmados','Review required':'Revisión necesaria','Pages affected':'Páginas afectadas','Value to fix':'Beneficio de resolverlo','Checks':'Comprobaciones','Confirmed issues':'Problemas confirmados','Pages tested':'Páginas analizadas',
+      'AI Visibility':'Visibilidad en IA','Identity & Authority':'Identidad y autoridad','Evidence & Trust':'Evidencia y confianza','Content & Answer Readiness':'Preparación de contenido y respuestas','Machine Readability & Eligibility':'Legibilidad para máquinas y elegibilidad','SEO Audit':'Auditoría SEO','Onsite Audit':'Auditoría del sitio',
+      'Official profiles connected':'Perfiles oficiales conectados','Comparisons are structured':'Las comparaciones están estructuradas','Claims and evidence are not consistently substantiated':'Las afirmaciones y la evidencia no están justificadas de forma coherente','Content is not consistently structured for answer retrieval':'El contenido no está estructurado de forma coherente para recuperar respuestas','Lists expose grouped facts or steps':'Las listas muestran hechos o pasos agrupados',
+      'Several related answer-readiness checks fail broadly across the site. Rather than a single FAQ or heading problem, the pattern indicates that much of the content is not consistently organized around clear questions, direct answers, and reusable answer blocks.':'Varios controles de preparación para respuestas fallan en gran parte del sitio. No se trata de un único problema de preguntas frecuentes o encabezados: gran parte del contenido no está organizada de forma coherente en torno a preguntas claras, respuestas directas y bloques reutilizables.',
+      'Official profiles connected is a repeated site-wide pattern: 11 of 11 tested pages are affected.':'Los perfiles oficiales conectados son un patrón repetido en todo el sitio: 11 de 11 páginas analizadas están afectadas.',
+      'No confirmed fail/partial findings currently require attention.':'No hay fallos o hallazgos parciales confirmados que requieran atención ahora.','No human interpretation has been added.':'No se ha añadido una interpretación humana.'
+    };
+    const blocked='pre,code,script,style,.report-url,.llm-verbatim,.llm-headers,.data-block,[data-analysis-markdown]';
+    const walker=document.createTreeWalker(document.querySelector('.report-document'),NodeFilter.SHOW_TEXT,{acceptNode(node){return node.parentElement?.closest(blocked)?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT;}});
+    const nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);
+    nodes.forEach(node=>{const key=node.nodeValue.trim();if(es[key])node.nodeValue=node.nodeValue.replace(key,es[key]);else node.nodeValue=node.nodeValue
+      .replace(/(\d+) affected pages/g,'$1 páginas afectadas')
+      .replace(/(\d+) supporting checks/g,'$1 comprobaciones relacionadas')
+      .replace(/Recommendation: open/g,'Recomendación: pendiente')
+      .replace(/high confidence/g,'confianza alta')
+      .replace(/medium confidence/g,'confianza media')
+      .replace(/Details/g,'Detalles')
+      .replace(/pages affected by the highest-priority observed pattern/g,'páginas afectadas por el patrón observado de mayor prioridad');});
+  }
 })();
 </script>
 </div>

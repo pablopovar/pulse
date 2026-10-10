@@ -15,6 +15,8 @@ PUBLIC_ENDPOINTS = frozenset(
     {
         "public_report",
         "public_report_access",
+        "public_report_export",
+        "public_report_pdf",
         "public_report_static",
         "public_report_note_reply",
         "domain_skin",
@@ -148,7 +150,7 @@ def _validate_csrf():
 
 
 def _public_report_id() -> str | None:
-    if request.endpoint not in {"public_report", "public_report_access", "public_report_note_reply"}:
+    if request.endpoint not in {"public_report", "public_report_access", "public_report_export", "public_report_pdf", "public_report_note_reply"}:
         return None
     value = request.view_args.get("report_id") if request.view_args else None
     return str(value) if value else None

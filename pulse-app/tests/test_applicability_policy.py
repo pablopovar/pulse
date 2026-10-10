@@ -45,6 +45,9 @@ def test_optional_checks_are_not_applicable_until_enabled():
     enabled = apply_policy([_signal("Comparison intent supported")], policy={"enabled_checks": ["comparison"]}, overrides={})
     assert enabled[0]["observed_status"] == "FAIL"
 
+    structured = apply_policy([_signal("Comparisons are structured")], policy={"enabled_checks": []}, overrides={})
+    assert structured[0]["observed_status"] == "NOT_APPLICABLE"
+
 
 def test_special_page_override_makes_optional_check_not_applicable():
     url = "https://example.test/thank-you/"

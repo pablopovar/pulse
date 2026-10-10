@@ -15,7 +15,7 @@ OPTIONAL_CHECKS = {
 }
 
 CHECK_GROUPS = {
-    "comparison": {"comparison intent supported", "tables expose comparable data"},
+    "comparison": {"comparison intent supported", "comparisons are structured", "tables expose comparable data"},
     "faq": {"faq content is visible", "faq markup matches visible faq", "question-led headings", "multiple relevant question forms", "common follow-up questions addressed"},
     "procedural": {"procedural intent supported"},
     "external_evidence": {"external supporting sources", "quantified claims supported", "references or methodology section", "source attribution language", "claims retain attribution context"},
