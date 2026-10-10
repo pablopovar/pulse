@@ -47,6 +47,7 @@ from reports.web_report import (
 )
 from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, list_models as list_manual_ai_analysis_models
 from services.security_boundary import configure_security
+from services.domain_skin import load_skin, rendered_css, save_skin
 from services.public_report_access import access_state as public_report_access_state, disable_access_password, password_valid, set_access_password
 from jobs.store import enqueue_job
 from jobs.store import cancel_job, get_job, list_jobs, pause_job, resume_job
@@ -702,6 +703,7 @@ def domain_sources(domain):
         company_name=infer_company_name(domain),
         client_config=load_client_report_config(RESEARCH_DB, domain),
         public_report_access=public_report_access_state(RESEARCH_DB, domain),
+        domain_skin=load_skin(RESEARCH_DB, site["domain"]),
     )
 
 
@@ -711,6 +713,23 @@ def save_source_company_name(domain):
     get_site(domain)
     save_company_name(RESEARCH_DB, domain, request.form.get("company_name", ""))
     return redirect(url_for("domain_sources", domain=domain, message="Domain settings saved."))
+
+
+@app.post("/d/<domain>/sources/skin")
+def save_domain_skin(domain):
+    site = get_site(domain)
+    try:
+        save_skin(
+            RESEARCH_DB,
+            site["domain"],
+            request.form.get("skin_mode", "basic"),
+            request.form.get("skin_css", ""),
+        )
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        message = "Report skin saved. Open a report to see the new styling."
+    return redirect(url_for("domain_sources", domain=site["domain"], message=message) + "#report-appearance")
 
 
 @app.post("/d/<domain>/sources/report-scope")
@@ -1693,6 +1712,18 @@ def public_report_static(filename):
     return send_from_directory(APP_DIR / "static", filename)
 
 
+@app.get("/d/<domain>/skin.css")
+def domain_skin(domain):
+    site = get_site(domain)
+    default_css = (APP_DIR / "static" / "skins" / "default.css").read_text(encoding="utf-8")
+    response = app.response_class(
+        rendered_css(RESEARCH_DB, site["domain"], default_css), mimetype="text/css"
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
 @app.route("/reports/<report_id>/access", methods=["GET", "POST"])
 def public_report_access(report_id):
     domain = report_domain(RESEARCH_DB, report_id)
@@ -1903,7 +1934,7 @@ register_crawler(app, research_db, get_site)
 
 # PB delete-domain feature
 from services.domains import register_delete_domain
-register_delete_domain(app, research_db, get_site, get_sites)
+register_delete_domain(app, research_db, get_site, get_sites, RESEARCH_DB)
 
 
 # PB extension: DataForSEO

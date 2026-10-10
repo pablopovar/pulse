@@ -17,6 +17,7 @@ PUBLIC_ENDPOINTS = frozenset(
         "public_report_access",
         "public_report_static",
         "public_report_note_reply",
+        "domain_skin",
     }
 )
 VALID_SECURITY_MODES = frozenset({"application", "reverse_proxy", "internal"})

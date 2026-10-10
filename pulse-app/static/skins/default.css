@@ -1,0 +1,137 @@
+/* Pulse's basic client-report skin.
+   Domain-specific files in this directory are loaded in the same place and
+   may override these semantic tokens without changing report templates. */
+:root {
+  --skin-brand: #b5313f;
+  --skin-brand-strong: #922633;
+  --skin-brand-soft: #f8e8ea;
+  --skin-ink: #13161c;
+  --skin-muted: #6c727b;
+  --skin-workspace: #f2f3f3;
+  --skin-card: #ffffff;
+  --skin-radius: 14px;
+  --skin-shadow: 0 2px 10px rgba(18, 24, 32, .06);
+  --skin-sidebar-width: 185px;
+}
+
+body {
+  background: var(--skin-workspace);
+  color: var(--skin-ink);
+}
+
+body:not(.public-report-view) .topbar {
+  height: 72px;
+  background: var(--skin-card);
+  color: var(--skin-ink);
+  border-bottom: 1px solid #e5e7e9;
+  padding: 0 30px 0 calc(var(--skin-sidebar-width) + 24px);
+}
+body:not(.public-report-view) .brand {
+  position: fixed;
+  z-index: 20;
+  top: 0;
+  left: 0;
+  width: var(--skin-sidebar-width);
+  height: 72px;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  background: var(--skin-brand);
+  color: #fff;
+  letter-spacing: .03em;
+}
+.domain-picker label { color: var(--skin-muted); }
+.domain-picker select { background: var(--skin-card); color: var(--skin-ink); border-color: #d9dde1; }
+.theme-toggle { background: var(--skin-card); color: var(--skin-ink); border-color: #d9dde1; }
+
+body:not(.public-report-view) .nav {
+  position: fixed;
+  z-index: 10;
+  top: 72px;
+  bottom: 0;
+  left: 0;
+  width: var(--skin-sidebar-width);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  background: var(--skin-brand);
+  border-bottom: 0;
+  padding: 18px 12px;
+  overflow-y: auto;
+}
+body:not(.public-report-view) .nav a { padding: 11px 12px; color: rgba(255,255,255,.85); border: 0; border-radius: 8px; }
+body:not(.public-report-view) .nav a:hover,
+body:not(.public-report-view) .nav a.active { color: #fff; background: rgba(255,255,255,.16); text-decoration: none; }
+body:not(.public-report-view) .shell { max-width: none; margin-left: var(--skin-sidebar-width); }
+
+.card, .panel, .report-hero, .report-header, .report-score-card,
+.action-card, .page-findings { border-radius: var(--skin-radius); box-shadow: var(--skin-shadow); }
+.card, .panel, .report-hero, .report-header, .report-score-card,
+.action-card { background: var(--skin-card); }
+.report-kicker, .report-section-number { color: var(--skin-brand); }
+.report-document.report-mode-living { --brand-blue: var(--skin-brand); }
+.button.primary, button.primary, .primary { background: var(--skin-brand); border-color: var(--skin-brand); }
+.button.primary:hover, button.primary:hover, .primary:hover { background: var(--skin-brand-strong); border-color: var(--skin-brand-strong); }
+a { color: var(--skin-brand-strong); }
+
+html[data-theme="dark"] {
+  --skin-ink: #edf0f5;
+  --skin-muted: #b2bac5;
+  --skin-workspace: #11171f;
+  --skin-card: #1a2430;
+  --skin-shadow: none;
+}
+html[data-theme="dark"] body { background: var(--skin-workspace); color: var(--skin-ink); }
+html[data-theme="dark"] .topbar,
+html[data-theme="dark"] .card,
+html[data-theme="dark"] .panel,
+html[data-theme="dark"] .report-hero,
+html[data-theme="dark"] .report-header,
+html[data-theme="dark"] .report-score-card,
+html[data-theme="dark"] .action-card { background: var(--skin-card); color: var(--skin-ink); }
+html[data-theme="dark"] body:not(.public-report-view) .nav,
+html[data-theme="dark"] body:not(.public-report-view) .brand { background: var(--skin-brand); }
+html[data-theme="dark"] body:not(.public-report-view) .nav a { color: rgba(255,255,255,.84); }
+html[data-theme="dark"] body:not(.public-report-view) .nav a.active { color: #fff; }
+html[data-theme="dark"] .domain-picker label { color: var(--skin-muted); }
+html[data-theme="dark"] .domain-picker select { background: var(--skin-card); color: var(--skin-ink); }
+html[data-theme="dark"] button.primary,
+html[data-theme="dark"] .primary { background: var(--skin-brand); border-color: var(--skin-brand); color: #fff; }
+html[data-theme="dark"] .workflow-step { background: var(--skin-card); border-color: #344354; color: var(--skin-ink); }
+html[data-theme="dark"] .workflow-step.current { background: #263544; border-color: var(--skin-brand); }
+html[data-theme="dark"] .workflow-step strong { color: var(--skin-ink); }
+html[data-theme="dark"] .workflow-step small { color: var(--skin-muted); }
+html[data-theme="dark"] .domain-state-card,
+html[data-theme="dark"] .source-mini-list,
+html[data-theme="dark"] .source-card,
+html[data-theme="dark"] .tool-card { background: var(--skin-card); border-color: #344354; color: var(--skin-ink); }
+html[data-theme="dark"] .domain-state-card>span,
+html[data-theme="dark"] .domain-state-card small,
+html[data-theme="dark"] .source-card p,
+html[data-theme="dark"] .tool-card span { color: var(--skin-muted); }
+html[data-theme="dark"] .ready-state { color: #8fdfad; }
+
+@media (max-width: 800px) {
+  body:not(.public-report-view) .topbar { padding: 0 16px; }
+  body:not(.public-report-view) .brand { position: static; width: auto; height: auto; padding: 0; background: none; color: var(--skin-brand); }
+  html[data-theme="dark"] body:not(.public-report-view) .brand { background: none; color: #fff; }
+  body:not(.public-report-view) .nav { position: static; width: auto; flex-direction: row; padding: 0 12px; overflow-x: auto; }
+  body:not(.public-report-view) .nav a { white-space: nowrap; }
+  body:not(.public-report-view) .shell { margin-left: 0; }
+}
+@media (max-width: 650px) {
+  body:not(.public-report-view) .topbar {
+    height: auto;
+    min-height: 88px;
+    display: grid;
+    grid-template-areas: "brand domain" "display display";
+    grid-template-columns: auto minmax(0,1fr);
+    gap: 5px 10px;
+    padding: 8px 12px;
+  }
+  body:not(.public-report-view) .brand { grid-area: brand; font-size: 13px; }
+  body:not(.public-report-view) .domain-picker { grid-area: domain; min-width: 0; }
+  body:not(.public-report-view) .domain-picker select { width: 100%; min-width: 0; }
+  body:not(.public-report-view) .display-mode { grid-area: display; }
+}

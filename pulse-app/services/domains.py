@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import json
 from flask import redirect, render_template, request, url_for
+from services.domain_skin import delete_skin
 
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -93,7 +94,7 @@ def active_domain_jobs(con, domain):
         (domain,),
     ).fetchall()
 
-def register_delete_domain(app, research_db, get_site, get_sites):
+def register_delete_domain(app, research_db, get_site, get_sites, skin_db_path=None):
     @app.get("/d/<domain>/delete")
     def domain_delete_confirm(domain):
         site = get_site(domain)
@@ -137,6 +138,9 @@ def register_delete_domain(app, research_db, get_site, get_sites):
                 ),
             )
             con.commit()
+
+        if skin_db_path is not None:
+            delete_skin(skin_db_path, deleted)
 
         sites = get_sites()
         if sites:

@@ -47,6 +47,14 @@ def _make_app(monkeypatch, mode="application"):
     def public_report_static(filename):
         return filename
 
+    @app.get("/d/<domain>/skin.css")
+    def domain_skin(domain):
+        return "body {}", 200, {"Content-Type": "text/css"}
+
+    @app.post("/d/<domain>/sources/skin")
+    def save_domain_skin(domain):
+        return "saved"
+
     return app
 
 
@@ -101,6 +109,13 @@ def test_internal_mode_allows_management_without_auth(monkeypatch):
 def test_public_report_bypasses_management_auth(monkeypatch):
     app = _make_app(monkeypatch)
     assert app.test_client().get("/reports/capability123").status_code == 200
+
+
+def test_public_skin_is_readable_but_editor_requires_management_auth(monkeypatch):
+    app = _make_app(monkeypatch)
+    client = app.test_client()
+    assert client.get("/d/example.com/skin.css").status_code == 200
+    assert client.post("/d/example.com/sources/skin").status_code == 401
 
 
 def test_public_reports_can_be_disabled(monkeypatch):

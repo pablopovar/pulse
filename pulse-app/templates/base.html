@@ -7,16 +7,28 @@
   <title>{% block title %}SEO / GEO / AEO Dashboard{% endblock %}</title>
   <script data-pulse-theme-init="1">
   (() => {
-    try {
-      const saved = localStorage.getItem('pulse-theme');
-      const dark = saved ? saved === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
-      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-    } catch (_err) {}
+    const reportPage = {{ 'true' if request.endpoint in ['public_report', 'report_session_view'] else 'false' }};
+    const system = window.matchMedia('(prefers-color-scheme: dark)');
+    const apply = () => {
+      if (reportPage) {
+        document.documentElement.dataset.theme = 'light';
+        return;
+      }
+      let preference = 'system';
+      try { preference = localStorage.getItem('pulse-theme') || 'system'; } catch (_err) {}
+      document.documentElement.dataset.theme = preference === 'system'
+        ? (system.matches ? 'dark' : 'light') : preference;
+    };
+    apply();
+    if (!reportPage) system.addEventListener('change', apply);
   })();
   </script>
   {% set public_report_view = request.endpoint == 'public_report' %}
   {% set asset_endpoint = 'public_report_static' if public_report_view else 'static' %}
   <link rel="stylesheet" href="{{ url_for(asset_endpoint, filename='app.css') }}">
+  {% if site %}
+  <link rel="stylesheet" href="{{ url_for('domain_skin', domain=site.domain) }}">
+  {% endif %}
   <script data-pulse-csrf-adapter="1">
   (() => {
     const csrfToken = () =>
@@ -60,13 +72,17 @@
   })();
   </script>
 </head>
-<body class="{% if public_report_view %}public-report-view{% endif %}">
+<body class="{% if public_report_view %}public-report-view{% endif %}" data-pulse-domain="{{ site.domain if site else '' }}">
 {% if not public_report_view %}
 <header class="topbar">
   <div class="brand">SEO / GEO / AEO</div>
-  <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch color theme" title="Switch color theme">
-    <span aria-hidden="true">◐</span><span data-theme-label>Theme</span>
-  </button>
+  <label class="display-mode">Display
+    <select data-theme-preference aria-label="Display mode">
+      <option value="system">System</option>
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
+  </label>
   {% if sites %}
   <form class="domain-picker" onsubmit="return false">
     <label for="siteSelect">Domain</label>
@@ -102,23 +118,16 @@
   <script src="{{ url_for(asset_endpoint, filename='page-geo-aeo.js') }}"></script>
   <script src="{{ url_for(asset_endpoint, filename='analysis-markdown.js') }}"></script>
 
-  <script data-pulse-theme-toggle="1">
+  <script data-pulse-theme-preference="1">
   (() => {
-    const button = document.querySelector('[data-theme-toggle]');
-    if (!button) return;
-    const sync = () => {
-      const dark = document.documentElement.dataset.theme === 'dark';
-      button.setAttribute('aria-pressed', String(dark));
-      button.title = dark ? 'Use light theme' : 'Use dark theme';
-      const label = button.querySelector('[data-theme-label]');
-      if (label) label.textContent = dark ? 'Light' : 'Dark';
-    };
-    sync();
-    button.addEventListener('click', () => {
-      const dark = document.documentElement.dataset.theme !== 'dark';
-      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-      try { localStorage.setItem('pulse-theme', dark ? 'dark' : 'light'); } catch (_err) {}
-      sync();
+    const select = document.querySelector('[data-theme-preference]');
+    if (!select) return;
+    try { select.value = localStorage.getItem('pulse-theme') || 'system'; } catch (_err) {}
+    select.addEventListener('change', () => {
+      try { localStorage.setItem('pulse-theme', select.value); } catch (_err) {}
+      document.documentElement.dataset.theme = select.value === 'system'
+        ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        : select.value;
     });
   })();
   </script>
