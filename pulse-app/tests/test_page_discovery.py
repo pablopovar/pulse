@@ -8,8 +8,10 @@ from db.migrate import migrate_up
 from db.sqlite import connect_sqlite
 from jobs.store import claim_next_job, enqueue_job
 from services.page_discovery import (
+    discover_domain_sitemap_inventory,
     discover_sitemap_urls,
     get_discovery_state,
+    inspect_agent_readiness_sources,
     set_discovery_state,
     sync_site_pages,
 )
@@ -75,6 +77,57 @@ def test_duplicate_urls_are_deduplicated():
         "https://example.com/sitemap.xml", "example.com", fetcher=fetcher
     )
     assert urls == {"https://example.com/a"}
+
+
+def test_domain_discovery_aggregates_both_nonempty_root_sitemaps():
+    fetcher = FakeFetcher({
+        "https://example.com/sitemap.xml": sitemap("https://example.com/partial"),
+        "https://example.com/sitemap_index.xml": sitemap(
+            "https://example.com/partial", "https://example.com/complete"
+        ),
+    })
+    entries, source, errors = discover_domain_sitemap_inventory(
+        "example.com", fetcher=fetcher
+    )
+    assert {entry.url for entry in entries} == {
+        "https://example.com/partial", "https://example.com/complete"
+    }
+    assert source == "https://example.com/sitemap.xml + https://example.com/sitemap_index.xml"
+    assert errors == []
+
+
+def test_domain_discovery_supports_text_feed_json_and_compressed_root_inventories():
+    import gzip
+    fetcher = FakeFetcher({
+        "https://example.com/sitemap.xml": RuntimeError("missing"),
+        "https://example.com/sitemap_index.xml": RuntimeError("missing"),
+        "https://example.com/sitemap.xml.gz": gzip.compress(sitemap("https://example.com/compressed").encode()),
+        "https://example.com/sitemap.txt": "https://example.com/text\n",
+        "https://example.com/urllist.txt": "https://example.com/list\n",
+        "https://example.com/urls.txt": "https://example.com/urls\n",
+        "https://example.com/atom.xml": '<feed xmlns="http://www.w3.org/2005/Atom"><entry><link href="https://example.com/atom" /></entry></feed>',
+        "https://example.com/rss.xml": '<rss><channel><item><link>https://example.com/rss</link></item></channel></rss>',
+        "https://example.com/feed.xml": '<rss><channel><item><link>https://example.com/feed</link></item></channel></rss>',
+        "https://example.com/mrss.xml": '<rss><channel><item><link>https://example.com/mrss</link></item></channel></rss>',
+        "https://example.com/sitemap.json": '{"urls":["https://example.com/json"]}',
+    })
+    entries, _source, _errors = discover_domain_sitemap_inventory("example.com", fetcher=fetcher)
+    assert {entry.url for entry in entries} == {
+        "https://example.com/compressed", "https://example.com/text", "https://example.com/list",
+        "https://example.com/urls", "https://example.com/atom", "https://example.com/rss",
+        "https://example.com/feed", "https://example.com/mrss", "https://example.com/json",
+    }
+
+
+def test_agent_readiness_sources_are_observations_not_crawl_inventory():
+    fetcher = FakeFetcher({
+        "https://example.com/llms.txt": "# Example\n- [About](https://example.com/about)",
+        "https://example.com/llms-full.txt": RuntimeError("404"),
+    })
+    rows = inspect_agent_readiness_sources("example.com", fetcher=fetcher)
+    assert rows[0]["status"] == "available"
+    assert rows[0]["links"] == ["https://example.com/about"]
+    assert rows[1]["status"] == "absent"
 
 
 def test_malformed_root_xml_fails():

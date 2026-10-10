@@ -7,6 +7,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+ENTRYPOINT ["sh", "/app/entrypoint.sh"]
+
 ENV PORT=4018
 ENV SEO_DB=/data/opengsc/prod.db
 ENV RESEARCH_DB=/data/audit/research.db

@@ -45,6 +45,7 @@ from reports.web_report import (
     prepare_report_view,
     save_client_report_config,
 )
+from reports.observation_export import canonical_dataset, csv_bytes, json_bytes, markdown_text, xml_bytes
 from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, list_models as list_manual_ai_analysis_models
 from services.security_boundary import configure_security
 from services.domain_skin import load_skin, rendered_css, save_skin
@@ -756,6 +757,21 @@ def save_report_scope(domain):
                  f"{len(config['priority_pages'])} priority page(s), "
                  f"{len(config['target_topics'])} topic(s)."),
     ))
+
+@app.post("/d/<domain>/report-quick-links")
+def save_report_quick_links(domain):
+    get_site(domain)
+    links = []
+    for raw in request.form.get("quick_links", "").splitlines():
+        if "|" not in raw:
+            continue
+        label, href = (part.strip() for part in raw.split("|", 1))
+        if label and href.startswith("#") and len(label) <= 80:
+            links.append({"label": label, "href": href})
+    current = load_client_report_config(RESEARCH_DB, domain)
+    current["quick_links"] = links
+    save_client_report_config(RESEARCH_DB, domain, current)
+    return redirect(url_for("report_session_view", domain=domain, report_id=request.form.get("report_id")))
 
 
 @app.post("/d/<domain>/sources/client-report-access")
@@ -1882,6 +1898,20 @@ def report_session_view(domain, report_id):
         human_interpretation=human_interpretation,
         report_notes=report_notes,
     )
+
+
+@app.get("/d/<domain>/reports/<report_id>/export.<fmt>")
+def report_session_export(domain, report_id, fmt):
+    site = get_site(domain)
+    session = load_report_session(RESEARCH_DB, domain, report_id)
+    if not session:
+        abort(404)
+    dataset = canonical_dataset(json.loads(json.dumps(session["snapshot"])), domain=site["domain"], observation_id=report_id)
+    exporters = {"json": (json_bytes, "application/json"), "csv": (csv_bytes, "text/csv"), "xml": (xml_bytes, "application/xml"), "md": (markdown_text, "text/markdown"), "markdown": (markdown_text, "text/markdown")}
+    if fmt not in exporters:
+        abort(404)
+    body, mimetype = exporters[fmt]
+    return send_file(io.BytesIO(body(dataset)), mimetype=mimetype, as_attachment=True, download_name=f"{site['domain']}-observation-{report_id}.{ 'md' if fmt == 'markdown' else fmt }")
 
 
 

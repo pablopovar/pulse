@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import io
 import json
+import hashlib
 import os
 import re
 import time
@@ -17,8 +18,10 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable, Iterable
 from services.safe_fetcher import SafeFetchError, safe_fetcher
-from services.page_discovery import discover_domain_sitemap, discover_sitemap_urls
+from services.page_discovery import discover_domain_sitemap, discover_sitemap_urls, inspect_agent_readiness_sources
 from services.page_discovery import discover_domain_sitemap_inventory
+from services.page_types import classify_page_type
+from services.resource_outcome import normalize_resource_type, persist_resource_outcome, response_evidence
 from services.crawl_frontier import (
     frontier_counts,
     get_policy,
@@ -77,10 +80,19 @@ class PageParser(HTMLParser):
         self.schema_types = set()
         self.jsonld_parts = []
         self.in_jsonld = False
+        self._suppressed_depth = 0
+        self._suppression_tags = []
 
     def handle_starttag(self, tag, attrs):
         attrs = {str(k).lower(): (v or "") for k, v in attrs}
         tag = tag.lower()
+
+        suppresses_text = tag in {"head", "nav", "footer", "aside", "form", "template", "noscript"} or (
+            "hidden" in attrs or attrs.get("aria-hidden", "").lower() == "true"
+        )
+        if suppresses_text:
+            self._suppressed_depth += 1
+            self._suppression_tags.append(tag)
 
         if tag == "html":
             self.lang = attrs.get("lang") or self.lang
@@ -139,6 +151,9 @@ class PageParser(HTMLParser):
                 (self.h1 if tag == "h1" else self.h2).append(text)
             self._heading = None
             self._heading_parts = []
+        if self._suppression_tags and self._suppression_tags[-1] == tag:
+            self._suppression_tags.pop()
+            self._suppressed_depth = max(0, self._suppressed_depth - 1)
 
     def handle_data(self, data):
         if self.in_title:
@@ -147,7 +162,7 @@ class PageParser(HTMLParser):
             self.jsonld_parts.append(data)
         if self._heading:
             self._heading_parts.append(data)
-        if not self.in_script and not self.in_style:
+        if not self.in_script and not self.in_style and not self._suppressed_depth:
             self.text_parts.append(data)
 
     def _extract_schema(self, raw):
@@ -451,7 +466,111 @@ def _failure_kind(result) -> str:
     return "fetch_failure" if error else ""
 
 
-def _sync_url_inventory(con, domain, base_url, selected_urls=None, max_depth=5):
+def _revalidate_legacy_duplicates(con, domain):
+    """Reopen only legacy ambiguous content duplicates; preserve true canonicals."""
+    legacy_duplicates = con.execute(
+        """
+        SELECT id,url,final_url,canonical_url
+        FROM crawl_url_inventory
+        WHERE domain=? COLLATE NOCASE
+          AND eligibility='duplicate'
+          AND decision_reason='canonical_or_content_duplicate'
+        """,
+        (domain,),
+    ).fetchall()
+    for row in legacy_duplicates:
+        own_url = normalize_candidate_url(row["final_url"] or row["url"], domain)
+        canonical_url = normalize_candidate_url(row["canonical_url"], domain)
+        if canonical_url and own_url and canonical_url != own_url:
+            con.execute(
+                "UPDATE crawl_url_inventory SET duplicate_of_url=?,decision_reason='canonical_duplicate',updated_at=? WHERE id=?",
+                (canonical_url, utcnow(), row["id"]),
+            )
+        else:
+            con.execute(
+                """
+                UPDATE crawl_url_inventory
+                SET eligibility='eligible',decision_reason='legacy_duplicate_revalidation',
+                    duplicate_of_url='',content_fingerprint='',content_simhash='',updated_at=?
+                WHERE id=?
+                """,
+                (utcnow(), row["id"]),
+            )
+    return len(legacy_duplicates)
+
+
+def _reclassify_redirect_aliases(con, domain):
+    """Repair old false content duplicates caused by following a redirect.
+
+    A fetched redirect alias has the destination HTML as its response body. It
+    is therefore an alias of that resource, never independent duplicate
+    content. Keeping this distinction also prevents reciprocal A -> B / B -> A
+    duplicate records when both slash variants were discovered.
+    """
+    rows = con.execute(
+        """
+        SELECT id,url,final_url,decision_reason FROM crawl_url_inventory
+        WHERE domain=? COLLATE NOCASE AND final_url<>''
+        """,
+        (domain,),
+    ).fetchall()
+    changed = 0
+    for row in rows:
+        requested = normalize_candidate_url(row["url"], domain)
+        final = normalize_candidate_url(row["final_url"], domain)
+        if not requested or not final or requested == final:
+            continue
+        if row["decision_reason"] in {"exact_content_duplicate", "canonical_or_content_duplicate", "redirect_alias"}:
+            con.execute(
+                """
+                UPDATE crawl_url_inventory
+                SET eligibility='duplicate',decision_reason='redirect_alias',
+                    duplicate_of_url=?,content_fingerprint='',content_simhash='',updated_at=?
+                WHERE id=?
+                """,
+                (final, utcnow(), row["id"]),
+            )
+            changed += 1
+    # Older runs could process the alias first and then mark the final URL as
+    # the duplicate. Reverse that pair: the redirecting request is the alias,
+    # while the final resource remains eligible for ordinary crawling.
+    rows = con.execute(
+        """
+        SELECT id,url,final_url,eligibility,decision_reason,duplicate_of_url,noindex
+        FROM crawl_url_inventory WHERE domain=? COLLATE NOCASE
+        """,
+        (domain,),
+    ).fetchall()
+    by_url = {normalize_candidate_url(row["url"], domain): row for row in rows}
+    for row in rows:
+        if row["decision_reason"] != "exact_content_duplicate" or not row["duplicate_of_url"]:
+            continue
+        representative = by_url.get(normalize_candidate_url(row["duplicate_of_url"], domain))
+        current = normalize_candidate_url(row["url"], domain)
+        rep_final = normalize_candidate_url(representative["final_url"], domain) if representative else None
+        if not representative or not current or rep_final != current:
+            continue
+        con.execute(
+            """
+            UPDATE crawl_url_inventory
+            SET eligibility='duplicate',decision_reason='redirect_alias',duplicate_of_url=?,
+                content_fingerprint='',content_simhash='',updated_at=? WHERE id=?
+            """,
+            (current, utcnow(), representative["id"]),
+        )
+        con.execute(
+            """
+            UPDATE crawl_url_inventory
+            SET eligibility=?,decision_reason=?,duplicate_of_url='',updated_at=?
+            WHERE id=?
+            """,
+            ("excluded" if row["noindex"] else "eligible", "noindex" if row["noindex"] else "redirect_final_resource", utcnow(), row["id"]),
+        )
+        changed += 2
+    return changed
+
+
+def _sync_url_inventory(con, domain, base_url, selected_urls=None, max_depth=5, crawl_run_id=None):
     warnings = []
     sitemap_source = ""
     try:
@@ -490,42 +609,29 @@ def _sync_url_inventory(con, domain, base_url, selected_urls=None, max_depth=5):
             con, domain, url, source="operator", operator_selected=True
         )
 
-    # Releases before the duplicate-classifier hardening used one ambiguous
-    # reason for canonical, exact-content and near-content matches. Reopen the
-    # content-only decisions so the next bounded crawl can evaluate the pages
-    # with the stricter rules. Genuine cross-URL canonicals remain duplicates.
-    legacy_duplicates = con.execute(
-        """
-        SELECT id,url,final_url,canonical_url
-        FROM crawl_url_inventory
-        WHERE domain=? COLLATE NOCASE
-          AND eligibility='duplicate'
-          AND decision_reason='canonical_or_content_duplicate'
-        """,
-        (domain,),
-    ).fetchall()
-    for row in legacy_duplicates:
-        own_url = normalize_candidate_url(row["final_url"] or row["url"], domain)
-        canonical_url = normalize_candidate_url(row["canonical_url"], domain)
-        if canonical_url and own_url and canonical_url != own_url:
+    _revalidate_legacy_duplicates(con, domain)
+    _reclassify_redirect_aliases(con, domain)
+    # Discovery has already fetched these sources.  Persist their provenance so
+    # a successful sibling and a failed optional filename are never conflated.
+    if crawl_run_id is not None:
+        for source in filter(None, sitemap_source.split(" + ")):
+            lower = source.lower()
+            source_type = "compressed_sitemap" if lower.endswith(".gz") else ("json_url_list" if lower.endswith(".json") else ("text_url_list" if lower.endswith(".txt") else ("feed" if lower.endswith(("rss.xml", "atom.xml", "feed.xml", "mrss.xml")) else "xml_sitemap")))
             con.execute(
-                """
-                UPDATE crawl_url_inventory
-                SET duplicate_of_url=?,decision_reason='canonical_duplicate',updated_at=?
-                WHERE id=?
-                """,
-                (canonical_url, utcnow(), row["id"]),
+                """INSERT INTO sitemap_source_evidence(crawl_run_id,domain,requested_url,source_type,discovery_origin,observed_at,parse_status,parse_error)
+                   VALUES (?,?,?,?,?,?,?,?)
+                   ON CONFLICT(crawl_run_id,requested_url) DO UPDATE SET parse_status=excluded.parse_status,parse_error=excluded.parse_error,observed_at=excluded.observed_at""",
+                (crawl_run_id, domain, source, source_type, "conventional_filename", utcnow(), "parsed", ""),
             )
-        else:
-            con.execute(
-                """
-                UPDATE crawl_url_inventory
-                SET eligibility='eligible',decision_reason='legacy_duplicate_revalidation',
-                    duplicate_of_url='',content_fingerprint='',content_simhash='',updated_at=?
-                WHERE id=?
-                """,
-                (utcnow(), row["id"]),
-            )
+        for warning in warnings:
+            source = warning.split(":", 1)[0] if warning.startswith("http") else ""
+            if source:
+                con.execute(
+                    """INSERT INTO sitemap_source_evidence(crawl_run_id,domain,requested_url,source_type,discovery_origin,observed_at,parse_status,parse_error)
+                       VALUES (?,?,?,?,?,?,?,?)
+                       ON CONFLICT(crawl_run_id,requested_url) DO UPDATE SET parse_status=excluded.parse_status,parse_error=excluded.parse_error,observed_at=excluded.observed_at""",
+                    (crawl_run_id, domain, source, "unknown", "conventional_filename", utcnow(), "failed", warning),
+                )
     con.commit()
     return len(entries), sitemap_source, warnings
 
@@ -566,6 +672,10 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
     status = result["status"]
     final_url = result["final_url"] or requested_url
     robots_meta = (parsed.get("robots_meta") or "").lower()
+    content_type = (result.get("content_type") or "").split(";", 1)[0].strip().lower()
+    resource_type = normalize_resource_type(content_type, url=final_url)
+    response_sha256 = hashlib.sha256(result.get("body") or b"").hexdigest() if result.get("body") else ""
+    page_type, page_type_confidence = classify_page_type(final_url)
     fingerprint, simhash = _content_fingerprints(parsed)
     prior = None
     if inventory_id is not None:
@@ -586,7 +696,16 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
             canonical_url = ""
     duplicate_of = ""
     duplicate_reason = ""
-    if canonical_url and canonical_url != normalize_candidate_url(final_url, domain):
+    requested_identity = normalize_candidate_url(requested_url, domain)
+    final_identity = normalize_candidate_url(final_url, domain) or requested_identity
+    if requested_identity and final_identity and requested_identity != final_identity and result.get("redirect_chain"):
+        # Preserve the request observation in crawl_page, but model its
+        # inventory entry as a redirect alias. Ensure the final resource is
+        # eligible for a future (or already queued) crawl.
+        upsert_inventory_url(con, domain, final_identity, source="redirect")
+        duplicate_of = final_identity
+        duplicate_reason = "redirect_alias"
+    elif canonical_url and canonical_url != final_identity:
         duplicate_of = canonical_url
         duplicate_reason = "canonical_duplicate"
     elif fingerprint and _content_is_substantial(parsed):
@@ -596,6 +715,7 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
             WHERE u.domain=? COLLATE NOCASE
               AND u.id<>?
               AND u.content_fingerprint=?
+              AND COALESCE(NULLIF(u.final_url,''),u.url)<>?
               AND EXISTS (
                   SELECT 1
                   FROM crawl_page cp
@@ -607,7 +727,7 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
               )
             ORDER BY u.priority_score DESC,u.id LIMIT 1
             """,
-            (domain, int(inventory_id or 0), fingerprint),
+            (domain, int(inventory_id or 0), fingerprint, final_identity or ""),
         ).fetchone()
         if exact:
             duplicate_of = exact["url"]
@@ -644,8 +764,8 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
             internal_links,external_links,image_count,images_missing_alt,schema_types_json,
             hreflang_json,og_title,og_description,og_image,indexable,robots_allowed,error,created_at,
             response_etag,response_last_modified,content_fingerprint,content_simhash,unchanged,
-            duplicate_of_url,failure_kind,redirect_chain_json
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            duplicate_of_url,failure_kind,redirect_chain_json,resource_type,response_sha256,audit_status,observed_at,page_type,page_type_confidence
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             run_id, requested_url, final_url, path_for_url(final_url), status,
             result["content_type"], result["content_length"], result["elapsed_ms"],
@@ -663,6 +783,9 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
             result.get("headers", {}).get("last-modified", ""),
             fingerprint, simhash, int(unchanged), duplicate_of, _failure_kind(result),
             json.dumps(result.get("redirect_chain") or [], separators=(",", ":")),
+            resource_type, response_sha256,
+            "audited" if resource_type == "html" and not _failure_kind(result) else ("collected_not_audited" if not _failure_kind(result) else "failed"),
+            utcnow(), page_type, page_type_confidence,
         ),
     )
 
@@ -685,7 +808,7 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
         add_issue(con, run_id, requested_url, "http_error", "high", "Page returned an HTTP error", str(status or result.get("error") or "fetch failed"))
     if status and status != 304 and 300 <= status < 400:
         add_issue(con, run_id, requested_url, "redirect", "medium", "Page redirects", final_url)
-    if status and 200 <= status < 300:
+    if resource_type == "html" and status and 200 <= status < 300:
         if not title:
             add_issue(con, run_id, requested_url, "missing_title", "high", "Missing title tag")
         elif len(title) < 20:
@@ -714,8 +837,22 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
             add_issue(con, run_id, requested_url, "robots_blocked", "medium", "Blocked by robots.txt")
 
     best_effort_site_page(con, domain, final_url)
+    evidence = response_evidence(
+        requested_url=requested_url, final_url=final_url, status=status,
+        headers=result.get("headers") or {}, body=result.get("body") or b"",
+        observed_at=utcnow(),
+    )
+    failure = _failure_kind(result)
+    evidence.update({
+        "crawl_state": "fetch_failed" if failure else "fetched",
+        "audit_state": "fetch_failed" if failure else ("duplicate" if duplicate_of else ("audited" if resource_type == "html" else "collected_not_audited")),
+        "failure_kind": failure,
+        "reason": result.get("error") or duplicate_reason or evidence.get("reason", ""),
+        "duplicate_or_canonical_target": duplicate_of,
+        "redirect_chain": result.get("redirect_chain") or [],
+    })
+    persist_resource_outcome(con, crawl_run_id=run_id, domain=domain, outcome=evidence)
     if inventory_id is not None:
-        failure = _failure_kind(result)
         if failure:
             con.execute(
                 """
@@ -745,6 +882,38 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
                     utcnow(), eligibility, reason, utcnow(), inventory_id,
                 ),
             )
+            # llms files are recorded as optional agent-readiness evidence.
+            # They never create crawl candidates or influence URL priority.
+            llm_sources = inspect_agent_readiness_sources(domain)
+            con.execute(
+                """
+                INSERT INTO crawl_event(crawl_run_id,domain,event_type,detail_json,created_at)
+                VALUES (?,?,?,?,?)
+                """,
+                (run_id, domain, "agent_readiness_sources", json.dumps(llm_sources, separators=(",", ":")), utcnow()),
+            )
+            for source in llm_sources:
+                con.execute(
+                    """INSERT INTO llm_source_evidence(
+                         crawl_run_id,domain,source_key,url,availability,http_status,content_type,
+                         headers_json,response_size,response_sha256,observed_at,raw_content,body_retained,
+                         parse_json,parse_error,reason
+                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       ON CONFLICT(crawl_run_id,source_key) DO UPDATE SET
+                         availability=excluded.availability,http_status=excluded.http_status,
+                         content_type=excluded.content_type,headers_json=excluded.headers_json,
+                         response_size=excluded.response_size,response_sha256=excluded.response_sha256,
+                         observed_at=excluded.observed_at,raw_content=excluded.raw_content,
+                         body_retained=excluded.body_retained,parse_json=excluded.parse_json,
+                         parse_error=excluded.parse_error,reason=excluded.reason""",
+                    (run_id, domain, source.get("name", ""), source.get("url", ""), source.get("status", "fetch_failed"),
+                     source.get("http_status"), source.get("content_type", ""), json.dumps(source.get("headers") or {}),
+                     int(source.get("bytes") or 0), source.get("sha256", ""), source.get("observed_at", utcnow()),
+                     source.get("content", "") if int(source.get("bytes") or 0) <= 1024 * 1024 else "",
+                     int(bool(source.get("content")) and int(source.get("bytes") or 0) <= 1024 * 1024),
+                     json.dumps({key: source.get(key) for key in ("parse_status", "headings", "links", "section_count", "duplicate_links", "off_domain_links")}),
+                     source.get("error", ""), source.get("error", "")),
+                )
             if not duplicate_of:
                 classification = prior["classification"] if prior else "unknown"
                 schedule_next_crawl(con, inventory_id, classification, changed=not unchanged)
@@ -777,6 +946,8 @@ def crawl_worker(
     rp, robots_url, robots_error = build_robot_parser(base_url)
     with db_factory() as con:
         policy = get_policy(con, domain)
+        _revalidate_legacy_duplicates(con, domain)
+        _reclassify_redirect_aliases(con, domain)
         existing = con.execute(
             "SELECT COUNT(*) AS n FROM crawl_frontier WHERE crawl_run_id=?", (run_id,)
         ).fetchone()["n"]
@@ -793,15 +964,16 @@ def crawl_worker(
                     domain,
                     base_url,
                     selected_urls=list(selected_urls or []) + list(priority_urls or []),
-                    max_depth=int(policy["max_crawl_depth"]),
+                    max_depth=int(policy["max_crawl_depth"]), crawl_run_id=run_id,
                 )
             if crawl_mode == "background":
                 rows = remaining_background_inventory(con, domain, page_cap)
                 reason = "background_priority_batch"
             elif selected_urls:
-                marks = ",".join("?" for _ in selected_urls)
-                normalized = [normalize_candidate_url(url, domain) for url in selected_urls]
-                normalized = [url for url in normalized if url]
+                normalized = list(dict.fromkeys(
+                    url for url in (normalize_candidate_url(value, domain) for value in selected_urls) if url
+                ))
+                marks = ",".join("?" for _ in normalized)
                 rows = con.execute(
                     f"SELECT * FROM crawl_url_inventory WHERE domain=? AND url IN ({marks}) ORDER BY operator_selected DESC,priority_score DESC",
                     [domain, *normalized],

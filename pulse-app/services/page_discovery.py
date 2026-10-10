@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
+import json
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,18 +18,48 @@ DEFAULT_MAX_DEPTH = 5
 DEFAULT_MAX_URLS = 20_000
 SITEMAP_CONTENT_TYPES = {
     "application/xml", "text/xml", "text/plain", "application/gzip",
-    "application/x-gzip", "application/octet-stream",
+    "application/x-gzip", "application/octet-stream", "application/json",
 }
+ROOT_INVENTORY_PATHS = (
+    "sitemap.xml", "sitemap_index.xml", "sitemap.xml.gz", "sitemap.txt",
+    "urllist.txt", "urls.txt", "atom.xml", "rss.xml", "feed.xml",
+    "mrss.xml", "sitemap.json",
+)
 
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _parse_sitemap(raw: bytes, source_url: str):
+def _decode_inventory(raw: bytes, source_url: str) -> bytes:
     if raw[:2] == b"\x1f\x8b" or source_url.lower().endswith(".gz"):
-        raw = gzip.decompress(raw)
-    return ET.fromstring(raw)
+        return gzip.decompress(raw)
+    return raw
+
+
+def _parse_non_xml_inventory(raw: bytes, source_url: str) -> list[str] | None:
+    """Parse explicit URL lists. JSON is a pragmatic inventory format, not a sitemap standard."""
+    text = raw.decode("utf-8", errors="replace").strip()
+    if source_url.lower().endswith(".json") or text.startswith(("[", "{")):
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            return []
+        found: list[str] = []
+        def walk(item):
+            if isinstance(item, str) and item.startswith(("http://", "https://")):
+                found.append(item)
+            elif isinstance(item, list):
+                for child in item:
+                    walk(child)
+            elif isinstance(item, dict):
+                for child in item.values():
+                    walk(child)
+        walk(value)
+        return found
+    if source_url.lower().endswith((".txt", "/urls", "/urllist")):
+        return [line.strip() for line in text.splitlines() if line.strip().startswith(("http://", "https://"))]
+    return None
 
 
 @dataclass(frozen=True)
@@ -35,6 +68,57 @@ class SitemapEntry:
     source_sitemap: str
     lastmod: str = ""
     priority: float | None = None
+
+
+def inspect_agent_readiness_sources(
+    domain: str, *, fetcher: SafeFetcher = safe_fetcher
+) -> list[dict]:
+    """Collect llms.txt evidence without treating it as crawl authority or ranking input."""
+    observations = []
+    for name in ("llms.txt", "llms-full.txt"):
+        url = f"https://{domain}/{name}"
+        try:
+            response = fetcher.get(
+                url,
+                headers={"User-Agent": "Pulse/1.0"},
+                max_response_bytes=1024 * 1024,
+                allowed_content_types={"text/plain", "text/markdown", "text/html", "application/octet-stream"},
+            )
+            text = response.content.decode("utf-8", errors="replace")
+            links = re.findall(r"https?://[^\s)>\]]+", text)
+            headings = re.findall(r"^#{1,6}\s+(.+?)\s*$", text, flags=re.M)
+            sections = re.split(r"^#{1,6}\s+.+$", text, flags=re.M)
+            empty_sections = sum(1 for section in sections[1:] if not section.strip())
+            malformed = bool(re.search(r"^#{1,6}[^\s#]", text, flags=re.M) or text.count("```") % 2)
+            parse_status = "malformed" if malformed else ("valid_markdown" if text.lstrip().startswith("#") else "plain_text")
+            headers = dict(getattr(response, "headers", {}) or {})
+            observations.append({
+                "name": name, "url": url, "status": "available", "http_status": getattr(response, "status_code", 200), "bytes": len(response.content),
+                "content_type": getattr(response, "headers", {}).get("content-type", ""),
+                "headers": headers,
+                "sha256": hashlib.sha256(response.content).hexdigest(),
+                "observed_at": now(), "parse_status": parse_status,
+                "headings": headings[:200], "section_count": len(headings), "empty_sections": empty_sections,
+                "malformed_markdown_indicators": malformed,
+                "duplicate_links": len(links) - len(set(links)), "off_domain_links": sorted({link for link in links if domain not in link})[:200], "links": sorted(set(links))[:500], "content": text, "error": "",
+            })
+        except Exception as exc:
+            error_text = str(exc)
+            error_name = exc.__class__.__name__.lower()
+            if "404" in error_text or "not found" in error_text.lower():
+                source_status = "absent"
+            elif "large" in error_name or "size" in error_name or "large" in error_text.lower():
+                source_status = "oversized"
+            elif "content" in error_name or "content type" in error_text.lower():
+                source_status = "unsupported_content_type"
+            else:
+                source_status = "fetch_failed"
+            observations.append({
+                "name": name, "url": url, "status": source_status, "bytes": 0,
+                "http_status": getattr(getattr(exc, "response", None), "status_code", None), "content_type": "", "headers": {}, "sha256": "", "observed_at": now(),
+                "parse_status": "unavailable", "headings": [], "links": [], "content": "", "error": str(exc),
+            })
+    return observations
 
 
 def discover_sitemap_inventory(
@@ -67,11 +151,22 @@ def discover_sitemap_inventory(
                 max_response_bytes=5 * 1024 * 1024,
                 allowed_content_types=SITEMAP_CONTENT_TYPES,
             )
-            root_node = _parse_sitemap(response.content, url)
+            raw = _decode_inventory(response.content, url)
+            listed_urls = _parse_non_xml_inventory(raw, url)
+            root_node = None if listed_urls is not None else ET.fromstring(raw)
         except Exception as exc:
             if root:
                 raise
             errors.append(f"{url}: {exc}")
+            return
+
+        if listed_urls is not None:
+            for item_url in listed_urls:
+                normalized = normalize_site_page_url(item_url, domain)
+                if normalized:
+                    entries.setdefault(normalized, SitemapEntry(normalized, url))
+                if len(entries) >= max_urls:
+                    break
             return
 
         root_name = root_node.tag.rsplit("}", 1)[-1].lower()
@@ -83,8 +178,19 @@ def discover_sitemap_inventory(
                     visit(child, depth + 1)
             return
 
-        for item in root_node.findall(".//{*}url"):
+        # Standard sitemap urlsets plus RSS/Atom feeds. Feed entries are only
+        # inventory leads; they do not receive sitemap-specific priority data.
+        items = root_node.findall(".//{*}url")
+        feed_items = root_node.findall(".//{*}item") + root_node.findall(".//{*}entry")
+        for item in items + feed_items:
             loc = item.find("{*}loc")
+            if loc is None:
+                loc = item.find("{*}link")
+            if loc is not None and not (loc.text or "").strip():
+                href = loc.attrib.get("href", "")
+                if href:
+                    loc = ET.Element("loc")
+                    loc.text = href
             normalized = normalize_site_page_url(
                 (loc.text or "").strip() if loc is not None else "", domain
             )
@@ -143,22 +249,34 @@ def discover_domain_sitemap_inventory(
     max_urls: int = DEFAULT_MAX_URLS,
 ) -> tuple[list[SitemapEntry], str, list[str]]:
     failures: list[str] = []
-    for sitemap_url in (f"https://{domain}/sitemap.xml", f"https://{domain}/sitemap_index.xml"):
+    root_failures: list[str] = []
+    entries: dict[str, SitemapEntry] = {}
+    sources: list[str] = []
+    for path in ROOT_INVENTORY_PATHS:
+        sitemap_url = f"https://{domain}/{path}"
         try:
-            entries, child_errors = discover_sitemap_inventory(
+            discovered, child_errors = discover_sitemap_inventory(
                 sitemap_url,
                 domain,
                 fetcher=fetcher,
                 max_depth=max_depth,
                 max_urls=max_urls,
             )
-            if entries:
-                return entries, sitemap_url, child_errors
+            if discovered:
+                sources.append(sitemap_url)
+                for entry in discovered:
+                    entries.setdefault(entry.url, entry)
+                failures.extend(child_errors)
+                if len(entries) >= max_urls:
+                    break
+                continue
             failures.extend(child_errors)
-            failures.append(f"{sitemap_url}: empty sitemap")
+            root_failures.append(f"{sitemap_url}: empty sitemap")
         except Exception as exc:
-            failures.append(f"{sitemap_url}: {exc}")
-    raise RuntimeError("Could not retrieve sitemap: " + " | ".join(failures))
+            root_failures.append(f"{sitemap_url}: {exc}")
+    if entries:
+        return list(entries.values()), " + ".join(sources), failures
+    raise RuntimeError("Could not retrieve sitemap: " + " | ".join(failures + root_failures))
 
 
 def discover_domain_sitemap(

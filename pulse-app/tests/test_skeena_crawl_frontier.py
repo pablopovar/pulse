@@ -7,10 +7,11 @@ from xml.sax.saxutils import escape
 
 from db.migrate import migrate_up
 from db.sqlite import connect_sqlite
-from crawlers.seo import best_effort_site_page
+from crawlers.seo import PageParser, best_effort_site_page
 from services.crawl_frontier import (
     normalize_candidate_url,
     select_initial_inventory,
+    update_policy,
     upsert_inventory_url,
 )
 from services.page_discovery import discover_sitemap_inventory
@@ -70,6 +71,58 @@ def _fetch_result(url):
         "body": b"",
         "error": None,
     }
+
+
+def test_redirect_alias_is_not_reported_as_exact_content_duplicate(tmp_path):
+    from crawlers import seo
+
+    db = tmp_path / "research.db"
+    migrate_up(db)
+    domain = "example.com"
+    alias = f"https://{domain}/about"
+    final = f"https://{domain}/about/"
+    with connect_sqlite(db) as con:
+        run_id = con.execute(
+            "INSERT INTO crawl_run(domain,base_url,status,page_cap,delay_ms,obey_robots,crawl_mode) VALUES (?,?, 'running',2,0,1,'initial')",
+            (domain, f"https://{domain}"),
+        ).lastrowid
+        alias_id = upsert_inventory_url(con, domain, alias, source="sitemap")
+        final_id = upsert_inventory_url(con, domain, final, source="sitemap")
+        result = _fetch_result(final)
+        result["redirect_chain"] = [{"source_url": alias, "status_code": 301, "target_url": final}]
+        seo.persist_page(con, run_id, domain, alias, True, result, _parsed_page("word " * 150), alias_id)
+        seo.persist_page(con, run_id, domain, final, True, _fetch_result(final), _parsed_page("word " * 150), final_id)
+        rows = con.execute("SELECT url,eligibility,decision_reason,duplicate_of_url FROM crawl_url_inventory WHERE domain=? ORDER BY url", (domain,)).fetchall()
+
+    by_url = {row["url"]: row for row in rows}
+    assert by_url[alias]["decision_reason"] == "redirect_alias"
+    assert by_url[alias]["duplicate_of_url"] == final
+    assert by_url[final]["eligibility"] == "eligible"
+    assert by_url[final]["decision_reason"] == "crawled"
+
+
+def test_legacy_redirect_pair_is_repaired_to_final_resource(tmp_path):
+    from crawlers import seo
+
+    db = tmp_path / "research.db"
+    migrate_up(db)
+    domain = "example.com"
+    alias, final = f"https://{domain}/about", f"https://{domain}/about/"
+    with connect_sqlite(db) as con:
+        alias_id = upsert_inventory_url(con, domain, alias, source="sitemap")
+        final_id = upsert_inventory_url(con, domain, final, source="sitemap")
+        con.execute("UPDATE crawl_url_inventory SET final_url=? WHERE id=?", (final, alias_id))
+        con.execute(
+            "UPDATE crawl_url_inventory SET eligibility='duplicate',decision_reason='exact_content_duplicate',duplicate_of_url=? WHERE id=?",
+            (alias, final_id),
+        )
+        seo._reclassify_redirect_aliases(con, domain)
+        rows = con.execute("SELECT url,eligibility,decision_reason,duplicate_of_url FROM crawl_url_inventory WHERE domain=?", (domain,)).fetchall()
+    by_url = {row["url"]: row for row in rows}
+    assert by_url[alias]["decision_reason"] == "redirect_alias"
+    assert by_url[alias]["duplicate_of_url"] == final
+    assert by_url[final]["eligibility"] == "eligible"
+    assert by_url[final]["decision_reason"] == "redirect_final_resource"
 
 
 def test_near_similar_template_pages_remain_distinct_crawl_candidates(tmp_path):
@@ -299,6 +352,36 @@ def test_skeena_parameter_and_www_variants_do_not_multiply_inventory(tmp_path):
     assert len(rows) == 1
     assert rows[0]["eligibility"] == "excluded"
     assert rows[0]["decision_reason"] == "pagination_query"
+
+
+def test_saved_policy_reclassifies_existing_inventory(tmp_path):
+    db = tmp_path / "pulse.db"
+    migrate_up(db)
+    with connect_sqlite(db) as con:
+        included = upsert_inventory_url(con, DOMAIN, f"https://{DOMAIN}/company/", source="sitemap")
+        excluded = upsert_inventory_url(con, DOMAIN, f"https://{DOMAIN}/news/release/", source="sitemap")
+        update_policy(con, DOMAIN, {"excluded_patterns_json": [r"/news/"]})
+        rows = con.execute(
+            "SELECT id,eligibility,decision_reason FROM crawl_url_inventory WHERE id IN (?,?) ORDER BY id",
+            (included, excluded),
+        ).fetchall()
+    assert rows[0]["eligibility"] == "eligible"
+    assert rows[1]["eligibility"] == "excluded"
+    assert rows[1]["decision_reason"] == "domain_excluded_pattern"
+
+
+def test_parser_excludes_navigation_and_hidden_template_text():
+    parser = PageParser()
+    parser.feed(
+        "<html><head><title>Page title</title></head><body>"
+        "<nav>navigation repeated words</nav><main>Editorial evidence remains</main>"
+        "<div hidden>hidden template copy</div><footer>footer copy</footer></body></html>"
+    )
+    parsed = parser.result()
+    assert "Editorial evidence remains" in parsed["visible_text"]
+    assert "navigation repeated words" not in parsed["visible_text"]
+    assert "hidden template copy" not in parsed["visible_text"]
+    assert "footer copy" not in parsed["visible_text"]
 
 
 def test_initial_crawl_is_bounded_and_leaves_background_inventory(tmp_path, monkeypatch):

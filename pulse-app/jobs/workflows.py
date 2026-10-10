@@ -511,6 +511,26 @@ def run_report_refresh(job, worker_id):
             "result_ref": {**crawl["result_ref"], "publication": "withheld"},
             "error": {"kind": "no_initial_evidence", "message": "Initial crawl produced no auditable pages."},
         }
+    with connect_sqlite(RESEARCH_DB, readonly=True) as con:
+        discovered = int(con.execute(
+            "SELECT COUNT(*) AS n FROM crawl_url_inventory WHERE domain=? COLLATE NOCASE",
+            (domain,),
+        ).fetchone()["n"])
+    if discovered >= 5 and len(page_ids) < 2:
+        _require_owned(
+            set_job_publication_status(
+                RESEARCH_DB, rid, worker_id=worker_id, publication_status="withheld"
+            ),
+            stage="withhold_report",
+        )
+        return {
+            "status": "partial",
+            "result_ref": {**crawl["result_ref"], "publication": "withheld"},
+            "error": {
+                "kind": "crawl_coverage_insufficient",
+                "message": f"Only {len(page_ids)} auditable page was produced from {discovered} discovered URLs.",
+            },
+        }
 
     audit = run_audit(
         {**job, "payload": {"domain": domain, "scope": "report", "page_ids": page_ids}},

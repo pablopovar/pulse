@@ -276,7 +276,58 @@ def update_policy(con, domain: str, values: dict) -> dict:
             f"UPDATE domain_crawl_policy SET {assignments},updated_at=? WHERE domain=? COLLATE NOCASE",
             [*updates.values(), now(), domain],
         )
+        reconcile_inventory_policy(con, domain)
     return get_policy(con, domain)
+
+
+def _policy_decision(url: str, classification: str, policy: dict, *, operator_selected: bool) -> tuple[str, str]:
+    eligibility, reason = eligibility_decision(url, classification)
+    if operator_selected:
+        return "eligible", "operator_selected"
+    try:
+        excluded_patterns = json.loads(policy.get("excluded_patterns_json") or "[]")
+    except Exception:
+        excluded_patterns = []
+    try:
+        allowed_patterns = json.loads(policy.get("allowed_patterns_json") or "[]")
+    except Exception:
+        allowed_patterns = []
+    if _matches_patterns(url, excluded_patterns):
+        return "excluded", "domain_excluded_pattern"
+    if allowed_patterns and not _matches_patterns(url, allowed_patterns):
+        return "deferred", "outside_domain_allowed_patterns"
+    return eligibility, reason
+
+
+def reconcile_inventory_policy(con, domain: str) -> None:
+    """Apply a saved domain policy to already discovered, non-terminal URLs."""
+
+    policy = get_policy(con, domain)
+    rows = con.execute(
+        """
+        SELECT id,url,classification,operator_selected,eligibility,decision_reason
+        FROM crawl_url_inventory WHERE domain=? COLLATE NOCASE
+        """,
+        (domain,),
+    ).fetchall()
+    protected_reasons = {"canonical_duplicate", "exact_content_duplicate", "noindex"}
+    for row in rows:
+        if row["eligibility"] == "duplicate" or row["decision_reason"] in protected_reasons:
+            continue
+        eligibility, reason = _policy_decision(
+            row["url"],
+            row["classification"],
+            policy,
+            operator_selected=bool(row["operator_selected"]),
+        )
+        con.execute(
+            """
+            UPDATE crawl_url_inventory
+            SET eligibility=?,decision_reason=?,updated_at=?
+            WHERE id=?
+            """,
+            (eligibility, reason, now(), row["id"]),
+        )
 
 
 def upsert_inventory_url(
@@ -295,26 +346,12 @@ def upsert_inventory_url(
     if not url:
         return None
     classification = infer_classification(url, source_sitemap)
-    eligibility, reason = eligibility_decision(url, classification)
-    policy_row = con.execute(
-        "SELECT allowed_patterns_json,excluded_patterns_json FROM domain_crawl_policy WHERE domain=? COLLATE NOCASE",
-        (domain,),
-    ).fetchone()
-    if policy_row:
-        try:
-            excluded_patterns = json.loads(policy_row["excluded_patterns_json"] or "[]")
-        except Exception:
-            excluded_patterns = []
-        try:
-            allowed_patterns = json.loads(policy_row["allowed_patterns_json"] or "[]")
-        except Exception:
-            allowed_patterns = []
-        if _matches_patterns(url, excluded_patterns):
-            eligibility, reason = "excluded", "domain_excluded_pattern"
-        elif allowed_patterns and not _matches_patterns(url, allowed_patterns):
-            eligibility, reason = "deferred", "outside_domain_allowed_patterns"
-    if operator_selected:
-        eligibility, reason = "eligible", "operator_selected"
+    eligibility, reason = _policy_decision(
+        url,
+        classification,
+        get_policy(con, domain),
+        operator_selected=operator_selected,
+    )
     score = priority_score(
         url,
         classification,

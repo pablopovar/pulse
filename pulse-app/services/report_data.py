@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Any
 
 from db.sqlite import connect_sqlite
 from integrations.opengsc_adapter import OpenGSCAdapter
+from services.sitemap_reconciliation import reconcile_sitemap_urls
 
 
 def _exists(con, name: str) -> bool:
@@ -39,6 +41,8 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
         "domain_score_history": [],
         "page_score_history": [],
         "dataforseo_snapshots": [],
+        "llm_sources": [],
+        "sitemap_reconciliation": [],
     }
 
     adapter = OpenGSCAdapter(seo_db)
@@ -107,16 +111,45 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
                         """,
                         (run_id,),
                     )
+                    if _exists(con, "crawl_event"):
+                        event = _row(con, "SELECT detail_json FROM crawl_event WHERE crawl_run_id=? AND event_type='agent_readiness_sources' ORDER BY id DESC LIMIT 1", (run_id,))
+                        if event:
+                            try:
+                                data["llm_sources"] = json.loads(event.get("detail_json") or "[]")
+                            except (TypeError, ValueError):
+                                data["llm_sources"] = []
                     data["crawl_pages"] = _rows(
                         con,
                         """
                         SELECT path,url,status_code,title,description,canonical,
                                word_count,internal_links,external_links,image_count,
-                               images_missing_alt,schema_types_json,indexable,response_ms,error
+                               images_missing_alt,schema_types_json,indexable,response_ms,error,
+                               content_type,content_bytes,resource_type,response_sha256,audit_status,observed_at,page_type,page_type_confidence
                         FROM crawl_page WHERE crawl_run_id=? ORDER BY path
                         """,
                         (run_id,),
                     )
+                    if _exists(con, "resource_outcome"):
+                        data["resource_outcomes"] = _rows(
+                            con,
+                            """SELECT requested_url,final_url,http_status,content_type,resource_type,response_size,response_sha256,response_headers_json,body_retained,etag,last_modified,redirect_chain_json,discovered_at,observed_at,crawl_state,audit_state,failure_kind,reason,duplicate_or_canonical_target FROM resource_outcome WHERE crawl_run_id=? ORDER BY requested_url""",
+                            (run_id,),
+                        )
+                    if _exists(con, "sitemap_source_evidence"):
+                        data["sitemap"] = _rows(
+                            con,
+                            "SELECT requested_url,source_type,discovery_origin,parent_sitemap,http_status,content_type,response_size,response_sha256,observed_at,parse_status,parse_error,child_sitemaps_json FROM sitemap_source_evidence WHERE crawl_run_id=? ORDER BY requested_url",
+                            (run_id,),
+                        )
+                    if _exists(con, "llm_source_evidence"):
+                        data["llm_sources"] = _rows(
+                            con,
+                            """SELECT source_key AS name,url,availability AS status,http_status,content_type,headers_json AS headers,response_size AS bytes,response_sha256 AS sha256,observed_at,raw_content AS content,body_retained,parse_json,parse_error,reason FROM llm_source_evidence WHERE crawl_run_id=? ORDER BY source_key""",
+                            (run_id,),
+                        )
+                    inventory = _rows(con, "SELECT url,source,source_sitemap,eligibility,decision_reason FROM crawl_url_inventory WHERE domain=?", (domain,)) if _exists(con, "crawl_url_inventory") else []
+                    sitemap_entries = [{"url": row["url"], "source_sitemap": row.get("source_sitemap") or ""} for row in inventory if row.get("source_sitemap")]
+                    data["sitemap_reconciliation"] = reconcile_sitemap_urls(sitemap_entries, data["crawl_pages"], inventory)
 
             if data["audit"]:
                 audit_run_id = data["audit"]["id"]

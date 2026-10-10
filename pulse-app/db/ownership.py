@@ -3,6 +3,7 @@
 TABLE_OWNERS = {
     "manual_ai_analysis_run": "jobs.workflows",
     "durable_job": "jobs.store",
+    "durable_job_event": "jobs.store",
     "domain_discovery_state": "services.page_discovery",
     'ai_question_definition': 'reports.question_governance',
     'ai_question_set': 'reports.question_governance',
@@ -20,6 +21,9 @@ TABLE_OWNERS = {
     'crawl_page': 'crawlers.seo',
     'crawl_run': 'crawlers.seo',
     'crawl_url_inventory': 'services.crawl_frontier',
+    'resource_outcome': 'services.resource_outcome',
+    'sitemap_source_evidence': 'services.page_discovery',
+    'llm_source_evidence': 'services.page_discovery',
     'cross_model_comparison': 'reports.cross_model',
     'cross_model_provider_response': 'reports.cross_model',
     'dashboard_domain': 'services.domain_registry',

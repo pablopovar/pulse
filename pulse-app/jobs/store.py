@@ -12,6 +12,13 @@ ALL_STATUSES = frozenset({"queued", "running", "paused", "completed", "partial",
 TERMINAL_STATUSES = frozenset({"completed", "partial", "failed", "cancelled"})
 
 
+def _event(con, job_id: str, event_type: str, detail: dict[str, Any], at: str) -> None:
+    """Best-effort only for pre-0012 databases; durable once migrated."""
+    exists = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='durable_job_event'").fetchone()
+    if exists:
+        con.execute("INSERT INTO durable_job_event(job_id,event_type,detail_json,created_at) VALUES (?,?,?,?)", (job_id, event_type, json.dumps(detail, separators=(",", ":")), at))
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -87,6 +94,7 @@ def enqueue_job(
 
 
 def get_job(db_path: str | Path, job_id: str) -> dict[str, Any] | None:
+    recover_abandoned_jobs(db_path)
     with connect_sqlite(db_path, readonly=True) as con:
         row = con.execute("SELECT * FROM durable_job WHERE id=?", (job_id,)).fetchone()
     return _row_to_job(row)
@@ -99,6 +107,9 @@ def list_jobs(
     status: str | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
+    # Queue views are also recovery boundaries: an expired lease must not look
+    # like a vanished job simply because the worker has not polled again yet.
+    recover_abandoned_jobs(db_path)
     limit = max(1, min(int(limit), 250))
     where: list[str] = []
     params: list[Any] = []
@@ -171,6 +182,7 @@ def claim_next_job(
             return None
 
         claimed = con.execute("SELECT * FROM durable_job WHERE id=?", (job_id,)).fetchone()
+        _event(con, job_id, "lease_acquired", {"worker_id": worker_id, "lease_expires_at": lease_expires, "attempt": claimed["attempts"]}, now)
         con.commit()
     return _row_to_job(claimed)
 
@@ -198,6 +210,8 @@ def heartbeat_job(
             """,
             (now, lease_expires, now, job_id, worker_id, now),
         ).rowcount
+        if changed:
+            _event(con, job_id, "lease_renewed", {"worker_id": worker_id, "lease_expires_at": lease_expires}, now)
         con.commit()
     return changed == 1
 
@@ -268,6 +282,8 @@ def finish_job(
                 now,
             ),
         ).rowcount
+        if changed:
+            _event(con, job_id, f"terminal_{status}", {"worker_id": worker_id, "result_ref": result_ref or {}, "error": error or {}}, now)
         con.commit()
     return changed == 1
 
@@ -449,6 +465,9 @@ def recover_abandoned_jobs(
                     (now, error_json, now, row["id"]),
                 )
                 requeued += 1
+                _event(con, row["id"], "ownership_lost_requeued", error | {"action": "requeued", "attempt": row["attempts"]}, now)
+                con.execute("UPDATE crawl_run SET status='queued',status_reason=? WHERE execution_run_id=? AND status='running'", ("Worker ownership lost; requeued.", row["id"]))
+                con.execute("UPDATE crawl_frontier SET state='queued',reason=?,updated_at=? WHERE crawl_run_id IN (SELECT id FROM crawl_run WHERE execution_run_id=?) AND state='fetching'", ("Worker ownership lost; requeued.", now, row["id"]))
             else:
                 con.execute(
                     """
@@ -465,6 +484,9 @@ def recover_abandoned_jobs(
                     (now, error_json, now, row["id"]),
                 )
                 failed += 1
+                _event(con, row["id"], "ownership_lost_failed", error | {"action": "failed", "attempt": row["attempts"]}, now)
+                con.execute("UPDATE crawl_run SET status='failed',completed_at=?,status_reason=? WHERE execution_run_id=? AND status='running'", (now, "Worker ownership lost; retry limit exhausted.", row["id"]))
+                con.execute("UPDATE crawl_frontier SET state='failed',reason=?,updated_at=? WHERE crawl_run_id IN (SELECT id FROM crawl_run WHERE execution_run_id=?) AND state IN ('queued','fetching')", ("Worker ownership lost; retry limit exhausted.", now, row["id"]))
         con.commit()
 
     return {"requeued": requeued, "failed": failed}

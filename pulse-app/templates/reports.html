@@ -11,10 +11,10 @@
 <h2>Active work</h2>
 <p>A new monitoring run is in progress. The current Pulse continues to show the last completed observation until this run is successfully published.</p>
 <section class="panel">
-  <table><thead><tr><th>Job</th><th>Type</th><th>Status</th><th>Stage</th><th>Queued</th><th>Controls</th></tr></thead><tbody>
+  <table><thead><tr><th>Job</th><th>Type</th><th>Status</th><th>Stage</th><th>Attempts</th><th>Lease / recovery</th><th>Queued</th><th>Controls</th></tr></thead><tbody>
   {% for job in active_jobs %}
   <tr>
-    <td><code>{{ job.id }}</code></td><td>{{ job.job_type }}</td><td>{{ job.status }}</td><td>{{ job.stage }}</td><td>{{ job.queued_at }}</td>
+    <td><code>{{ job.id }}</code></td><td>{{ job.job_type }}</td><td>{{ job.status }}</td><td>{{ job.stage }}</td><td>{{ job.attempts }}/{{ job.max_attempts }}</td><td>{{ job.lease_expires_at or '—' }}{% if job.error and job.error.previous_worker_id %}<div class="history-note">Recovered from {{ job.error.previous_worker_id }} at {{ job.error.recovered_at or 'unknown time' }}</div>{% endif %}{% if job.error and job.error.message %}<div class="history-note">{{ job.error.message }}</div>{% endif %}</td><td>{{ job.queued_at }}</td>
     <td>
       {% if job.status in ['queued','running'] %}
       <form method="post" action="{{ url_for('domain_job_pause', domain=site.domain, job_id=job.id) }}" style="display:inline"><button type="submit">Pause</button></form>

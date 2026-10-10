@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from db.sqlite import connect_sqlite
 from typing import Any
+from services.page_types import applicability, classify_page_type
 
 from reports.prioritization import (
     GLOSSARY,
@@ -89,17 +90,26 @@ def _json_default(value: Any):
     if isinstance(value,set): return sorted(value)
     raise TypeError(type(value).__name__)
 
+DEFAULT_QUICK_LINKS = [
+    {"label": "AI Visibility", "href": "#ai-visibility"},
+    {"label": "Identity & Authority", "href": "#identity-authority"},
+    {"label": "Evidence & Trust", "href": "#evidence-trust"},
+    {"label": "Content & Answer Readiness", "href": "#content-answer-readiness"},
+    {"label": "SEO Audit", "href": "#seo-audit"},
+]
+
 
 def _load_client_config(con, domain: str) -> dict[str, Any]:
     row = con.execute("SELECT * FROM client_report_config WHERE domain=? COLLATE NOCASE", (domain,)).fetchone()
     if not row:
-        return {"competitors": [], "priority_pages": [], "target_topics": [], "page_groups": [], "integrations": [], "monitored_ai_prompts": []}
+        return {"competitors": [], "priority_pages": [], "target_topics": [], "page_groups": [], "integrations": [], "monitored_ai_prompts": [], "quick_links": DEFAULT_QUICK_LINKS}
     def parsed(name):
         try:
             value=json.loads(row[name] or "[]")
             return value if isinstance(value,list) else []
         except Exception:
             return []
+    quick_links = parsed("quick_links_json") if "quick_links_json" in row.keys() else []
     return {
         "competitors": parsed("competitors_json"),
         "priority_pages": parsed("priority_pages_json"),
@@ -107,6 +117,7 @@ def _load_client_config(con, domain: str) -> dict[str, Any]:
         "page_groups": parsed("page_groups_json"),
         "integrations": parsed("integrations_json"),
         "monitored_ai_prompts": parsed("monitored_ai_prompts_json"),
+        "quick_links": quick_links or DEFAULT_QUICK_LINKS,
         "updated_at": row["updated_at"],
     }
 
@@ -285,13 +296,13 @@ def _attach_monitoring_history(records: list[dict[str, Any]]) -> None:
 
 def save_client_report_config(db_path:Path,domain:str,config:dict[str,Any])->dict[str,Any]:
     now=datetime.now(timezone.utc).isoformat(timespec="seconds")
-    fields=("competitors","priority_pages","target_topics","page_groups","integrations","monitored_ai_prompts")
+    fields=("competitors","priority_pages","target_topics","page_groups","integrations","monitored_ai_prompts","quick_links")
     values={key:(config.get(key) if isinstance(config.get(key),list) else []) for key in fields}
     with _connect(db_path) as con:
-        con.execute("""INSERT INTO client_report_config(domain,competitors_json,priority_pages_json,target_topics_json,page_groups_json,integrations_json,monitored_ai_prompts_json,updated_at)
-                     VALUES (?,?,?,?,?,?,?,?)
-                     ON CONFLICT(domain) DO UPDATE SET competitors_json=excluded.competitors_json,priority_pages_json=excluded.priority_pages_json,target_topics_json=excluded.target_topics_json,page_groups_json=excluded.page_groups_json,integrations_json=excluded.integrations_json,monitored_ai_prompts_json=excluded.monitored_ai_prompts_json,updated_at=excluded.updated_at""",
-                    (domain,json.dumps(values["competitors"]),json.dumps(values["priority_pages"]),json.dumps(values["target_topics"]),json.dumps(values["page_groups"]),json.dumps(values["integrations"]),json.dumps(values["monitored_ai_prompts"]),now))
+        con.execute("""INSERT INTO client_report_config(domain,competitors_json,priority_pages_json,target_topics_json,page_groups_json,integrations_json,monitored_ai_prompts_json,quick_links_json,updated_at)
+                     VALUES (?,?,?,?,?,?,?,?,?)
+                     ON CONFLICT(domain) DO UPDATE SET competitors_json=excluded.competitors_json,priority_pages_json=excluded.priority_pages_json,target_topics_json=excluded.target_topics_json,page_groups_json=excluded.page_groups_json,integrations_json=excluded.integrations_json,monitored_ai_prompts_json=excluded.monitored_ai_prompts_json,quick_links_json=excluded.quick_links_json,updated_at=excluded.updated_at""",
+                    (domain,json.dumps(values["competitors"]),json.dumps(values["priority_pages"]),json.dumps(values["target_topics"]),json.dumps(values["page_groups"]),json.dumps(values["integrations"]),json.dumps(values["monitored_ai_prompts"]),json.dumps(values["quick_links"]),now))
         con.commit()
         return _load_client_config(con,domain)
 
@@ -386,6 +397,7 @@ def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any],*,execu
             "gsc_period_end":(immutable.get("seo") or {}).get("period_end"),
             "source_observations":[{
                 "key":row.get("key"),
+                "label":row.get("label"),
                 "state":row.get("state"),
                 "observed_at":row.get("observed_at") or None,
             } for row in coverage],
@@ -823,11 +835,31 @@ def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
             pass
     meta["last_checked_at"] = checked_at
     meta["last_checked_display"] = checked_display
+    source_rows = data.get("source_inventory") or []
+    by_key = {str(row.get("key") or row.get("name") or "").lower(): row for row in source_rows if isinstance(row, dict)}
+    seo = data.get("seo") or {}
+    manual = data.get("manual_ai_source") or data.get("manual_ai_snapshot") or {}
+    dataforseo = data.get("dataforseo_snapshots") or []
+    llm_sources = data.get("llm_sources") or data.get("agent_readiness_sources") or []
+    sitemap_sources = data.get("sitemap_sources") or data.get("sitemap_inventory") or []
+    meta["observation_dates"] = {
+        "pulse": checked_at,
+        "dataforseo": (dataforseo[0].get("created_at") if dataforseo and isinstance(dataforseo[0], dict) else "") or (by_key.get("dataforseo") or {}).get("updated_at") or (by_key.get("data for seo") or {}).get("updated_at") or "",
+        "gsc": seo.get("period_end") or seo.get("last_available_date") or "",
+        "ai": manual.get("run_at_utc") or manual.get("updated_at") or "",
+        "human": meta.get("human_reviewed_at") or "",
+        "sitemap": max((row.get("observed_at") or "" for row in sitemap_sources if isinstance(row, dict)), default=""),
+        "llms": max((row.get("observed_at") or "" for row in llm_sources if isinstance(row, dict)), default=""),
+    }
     data["report_metadata"] = meta
     signals=[]
     for raw in data.get("audit_signals") or []:
         signal=dict(raw)
         signal["observed_status"]=normalize_status(signal.get("observed_status"))
+        page_type, page_type_confidence = classify_page_type(str(signal.get("url") or ""))
+        signal.setdefault("page_type", page_type)
+        signal.setdefault("page_type_confidence", page_type_confidence)
+        signal.setdefault("applicability", applicability(page_type))
         signals.append(signal)
     data["audit_signals"]=signals
     families=[]
@@ -862,11 +894,14 @@ def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
     crawl_run = monitoring.get("crawl_run") or {}
     target = int(crawl_run.get("page_cap") or 0)
     audited = int((data.get("audit_summary") or {}).get("pages_audited") or 0)
+    insufficient = bool(target >= 5 and audited < 2)
     monitoring["coverage"] = {
         "initial_target": target,
         "audited_pages": audited,
-        "coverage_state": "partial" if target and audited < target else "complete",
+        "coverage_state": "insufficient" if insufficient else ("partial" if target and audited < target else "complete"),
         "coverage_note": (
+            f"Only {audited} pages were audited despite an initial target of {target}; this observation is insufficient for domain-level conclusions."
+            if insufficient else
             f"{audited} pages were successfully audited against an initial target of {target}. "
             "The report remains usable, but conclusions apply only to the audited cohort."
             if target and audited < target else ""

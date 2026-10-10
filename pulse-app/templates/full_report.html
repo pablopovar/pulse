@@ -48,8 +48,33 @@
   </div>
 {%- endmacro %}
 
+{% macro llm_guidance_evidence(llm_sources) -%}
+<section class="llm-evidence-section" aria-label="LLM guidance files">
+  <div class="report-kicker">LLM GUIDANCE FILES</div>
+  <h3>llms.txt evidence</h3>
+  <div class="llm-evidence-grid">
+  {% for wanted_name in ['llms.txt', 'llms-full.txt'] %}
+    {% set source = (llm_sources|selectattr('name','equalto',wanted_name)|list|first) or {} %}
+    {% set note_key = 'llm:' ~ wanted_name %}
+    <article class="llm-evidence-card">
+      <details>
+        <summary>{{ wanted_name }}{% if source.get('status') == 'available' %} · available{% else %} · absent{% endif %}</summary>
+        {% if source.get('status') == 'available' %}
+        <div class="llm-evidence-meta">Observed {{ source.get('observed_at') or '—' }} · {{ source.get('content_type') or 'content type unavailable' }} · {{ source.get('bytes') or 0 }} bytes{% if source.get('sha256') %} · SHA-256 {{ source.get('sha256') }}{% endif %}</div>
+        {% if source.get('headers') %}<details><summary>HTTP headers</summary><pre class="llm-headers">{{ source.get('headers')|tojson(indent=2) }}</pre></details>{% endif %}
+        <pre class="llm-verbatim">{{ source.get('content') or '' }}</pre>
+        {% else %}<p>This file was not available at the time of observation.</p>{% if source.get('error') %}<div class="history-note">{{ source.get('error') }}</div>{% endif %}{% endif %}
+      </details>
+      <div class="llm-human-interpretation"><strong>Human interpretation</strong>{{ note_panel(note_key, 'Interpretation and discussion', True) }}</div>
+    </article>
+  {% endfor %}
+  </div>
+</section>
+{%- endmacro %}
+
 {% set meta = report.get('report_metadata') or {} %}
 {% set mai_snapshot = report.get('manual_ai_snapshot') or report.get('manual_ai') or report.get('manual_ai_source') or {} %}
+{% set llm_sources = report.get('llm_sources') or report.get('agent_readiness_sources') or [] %}
 <div class="report-document report-mode-living">
 <style>
 .report-document .status-pill{display:inline-flex;align-items:center;padding:.18rem .5rem;border-radius:999px;font-size:.76rem;font-weight:700;letter-spacing:.02em}
@@ -105,6 +130,7 @@
 .report-document .last-checked span{display:block;color:var(--brand-muted);font-size:.72rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
 .report-document .last-checked strong{display:block;margin-top:.35rem;font-size:1.1rem}
 .report-document .last-checked time{display:block;margin-top:.2rem;color:var(--brand-muted);font-size:.78rem}
+.report-document .client-display-mode{display:block;margin-top:.85rem}.report-document .client-display-mode span{display:block;font-size:.65rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--brand-muted)}.report-document .client-display-mode select{width:100%;max-width:235px;margin-top:.28rem;padding:.38rem .45rem;border:1px solid var(--brand-line);border-radius:7px;background:#fff;color:var(--brand-ink);font:inherit;font-size:.78rem}
 .report-document .observation-selector{display:block;margin-top:.85rem}
 .report-document .observation-selector span{font-size:.65rem}
 .report-document .observation-selector select{width:100%;max-width:235px;margin-top:.28rem;padding:.38rem .45rem;border:1px solid var(--brand-line);border-radius:7px;background:#fff;color:var(--brand-ink);font:inherit;font-size:.78rem}
@@ -113,6 +139,18 @@
 .report-document .heading-actions{grid-column:1/-1;display:flex;gap:.5rem;flex-wrap:wrap}
 .report-document .heading-actions .button{border-radius:9px}
 .report-document .heading-actions .button.primary{background:var(--brand-blue)!important;border-color:var(--brand-blue)!important}
+.report-document .observation-dates{grid-column:1/-1;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.55rem;border-top:1px solid var(--brand-line);padding-top:.8rem}
+.report-document .observation-date{padding:.45rem .55rem;background:#fafafa;border:1px solid var(--brand-line);border-radius:8px}
+.report-document .observation-date span{display:block;color:var(--brand-muted);font-size:.64rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.report-document .observation-date strong{display:block;margin-top:.2rem;font-size:.78rem}
+.report-document .quick-links{grid-column:1/-1;display:flex;gap:.45rem;align-items:center;flex-wrap:wrap}
+.report-document .quick-links a{font-size:.78rem}
+.report-document .quick-links-admin{grid-column:1/-1}.report-document .quick-links-admin textarea{width:min(620px,100%);min-height:70px;font:inherit;font-size:.78rem}
+.report-document .benefit-to-fix{margin:1.2rem 0;border:1px solid #c9d8f2;border-left:5px solid var(--brand-blue);border-radius:12px;background:#f5f8ff;padding:1rem 1.1rem}
+.report-document .benefit-to-fix h2{font-size:1rem;margin:0 0 .35rem}.report-document .benefit-to-fix p{margin:0;max-width:900px;font-size:.9rem;line-height:1.45}
+.report-document .llm-evidence-section{margin:1.2rem 0 1.5rem}.report-document .llm-evidence-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem}.report-document .llm-evidence-card{border:1px solid var(--brand-line);border-radius:10px;padding:.8rem;background:#fff}.report-document .llm-evidence-card summary{cursor:pointer;font-weight:700}.report-document .llm-evidence-meta{margin:.65rem 0;color:var(--brand-muted);font-size:.75rem}.report-document .llm-verbatim,.report-document .llm-headers{max-height:360px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:#f6f7f9;border:1px solid var(--brand-line);padding:.7rem;border-radius:7px;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.report-document .llm-human-interpretation{margin-top:.8rem}.report-document .llm-human-interpretation>.pablo-note{margin-top:.35rem}
+@media(max-width:900px){.report-document .observation-dates{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:720px){.report-document .llm-evidence-grid{grid-template-columns:1fr}}
 .report-document .about-report-link{border-color:var(--brand-navy)!important;color:var(--brand-navy)!important}
 @media(max-width:720px){.report-document .report-header{grid-template-columns:1fr}.report-document .last-checked{text-align:left;min-width:0}}
 
@@ -734,6 +772,106 @@
 .report-document .admin-thread-message.client strong{color:#5b52c7}
 .report-document .admin-thread-message.owner strong{color:var(--brand-blue,#185ed8)}
 
+/* A report has a number of deliberately light editorial surfaces.  They need
+   an explicit dark counterpart because per-domain skins are loaded before this
+   document's component styles.  Use the domain skin variables when present,
+   with neutral defaults so every report remains legible in dark mode. */
+html[data-theme="dark"] .report-document{
+  --brand-ink:var(--skin-ink,#f5f1ea);
+  --brand-muted:var(--skin-muted,#c9c1d4);
+  --brand-line:var(--skin-line,#564765);
+  --brand-paper:var(--skin-workspace,#17141b);
+  --brand-navy:var(--skin-brand-strong,#e2d6ed);
+  --brand-blue:var(--skin-brand,#c8a8e1);
+  --brand-sky:#8fc8dc;
+  --brand-violet:#c7a6de;
+  --brand-orange:var(--skin-accent,#f5823a);
+  --brand-lime:#c6d36c;
+  color:var(--brand-ink);
+}
+html[data-theme="dark"] .report-document .report-header,
+html[data-theme="dark"] .report-document .headline-number-card,
+html[data-theme="dark"] .report-document .severity-ring-card,
+html[data-theme="dark"] .report-document .verdict-card,
+html[data-theme="dark"] .report-document .movement-item,
+html[data-theme="dark"] .report-document .root-cause-card,
+html[data-theme="dark"] .report-document .llm-evidence-card,
+html[data-theme="dark"] .report-document .monitoring-coverage,
+html[data-theme="dark"] .report-document .coverage-item,
+html[data-theme="dark"] .report-document .human-interpretation,
+html[data-theme="dark"] .report-document .pablo-note-edit,
+html[data-theme="dark"] .report-document .pablo-note-public,
+html[data-theme="dark"] .report-document .client-note-dialog,
+html[data-theme="dark"] .report-document .client-note-dialog-head,
+html[data-theme="dark"] .report-document .check-note-popover,
+html[data-theme="dark"] .report-document .table-wrap,
+html[data-theme="dark"] .report-document .panel,
+html[data-theme="dark"] .report-document .report-score-card,
+html[data-theme="dark"] .report-document .family-nav-card,
+html[data-theme="dark"] .report-document .snapshot-card{
+  background:var(--skin-card,#241b2b)!important;
+  color:var(--brand-ink);
+  border-color:var(--brand-line)!important;
+}
+html[data-theme="dark"] .report-document .report-meta span,
+html[data-theme="dark"] .report-document .observation-date,
+html[data-theme="dark"] .report-document .monitoring-summary span,
+html[data-theme="dark"] .report-document .root-cause-meta span,
+html[data-theme="dark"] .report-document .client-display-mode select,
+html[data-theme="dark"] .report-document .observation-selector select,
+html[data-theme="dark"] .report-document input,
+html[data-theme="dark"] .report-document textarea,
+html[data-theme="dark"] .report-document .llm-verbatim,
+html[data-theme="dark"] .report-document .llm-headers,
+html[data-theme="dark"] .report-document .returned-answer,
+html[data-theme="dark"] .report-document .client-note-dialog-close{
+  background:var(--skin-workspace,#17141b)!important;
+  color:var(--brand-ink)!important;
+  border-color:var(--brand-line)!important;
+}
+html[data-theme="dark"] .report-document .benefit-to-fix{
+  background:#202838!important;
+  border-color:#526a94!important;
+  color:var(--brand-ink);
+}
+html[data-theme="dark"] .report-document .high-signal-item,
+html[data-theme="dark"] .report-document .high-signal-item:nth-child(n){
+  background:var(--skin-card,#241b2b)!important;
+  color:var(--brand-ink);
+}
+html[data-theme="dark"] .report-document .quality-warning,
+html[data-theme="dark"] .report-document .coverage-warning{
+  background:#3a2d17!important;
+  color:#f6d89b;
+}
+html[data-theme="dark"] .report-document .quality-error{background:#3b2024!important;color:#f4c5ca}
+html[data-theme="dark"] .report-document .severity-ring:after{background:var(--skin-card,#241b2b)}
+html[data-theme="dark"] .report-document .severity-ring{background:conic-gradient(var(--ring) 0 78%,var(--brand-line) 78% 100%)}
+html[data-theme="dark"] .report-document .report-table th,
+html[data-theme="dark"] .report-document .report-table td,
+html[data-theme="dark"] .report-document td{border-color:var(--brand-line)!important}
+html[data-theme="dark"] .report-document .report-table th{background:var(--skin-workspace,#17141b)!important;color:var(--brand-ink)}
+html[data-theme="dark"] .report-document .report-controls{
+  background:var(--skin-card,#241b2b)!important;
+  border-color:var(--brand-line)!important;
+  color:var(--brand-ink);
+}
+html[data-theme="dark"] .report-document .report-controls > div span,
+html[data-theme="dark"] .report-document .report-controls label,
+html[data-theme="dark"] .report-document .report-controls .history-note{color:var(--brand-muted)!important}
+html[data-theme="dark"] .report-document .check-detail-row td{
+  background:var(--skin-card,#241b2b)!important;
+  color:var(--brand-ink);
+}
+html[data-theme="dark"] .report-document .check-detail-row summary{color:var(--brand-blue)!important}
+html[data-theme="dark"] .report-document .finding-fail td{background:#2e1c22!important}
+html[data-theme="dark"] .report-document .finding-partial td{background:#30291c!important}
+html[data-theme="dark"] .report-document .family-nav-card:hover{background:#30233b!important;border-color:var(--brand-blue)!important}
+html[data-theme="dark"] .report-document .about-report details,
+html[data-theme="dark"] .report-document .pablo-discussion,
+html[data-theme="dark"] .report-document .admin-note-thread,
+html[data-theme="dark"] .report-document .root-cause-card.compact-action-card .action-details{border-color:var(--brand-line)}
+
 @media print{.report-document details:not([open])>*:not(summary){display:none}.report-document .report-controls,.report-document .family-collapse-toggle,.report-document .interactive-evidence,.report-document .report-quality-ui{display:none!important}}
 </style>
 
@@ -761,10 +899,33 @@
       </select>
     </label>
     {% endif %}
+    {% if request.endpoint == 'public_report' %}
+    <label class="client-display-mode">
+      <span>Display</span>
+      <select data-theme-preference aria-label="Display mode">
+        <option value="system">System</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
+    {% endif %}
   </div>
+  {% set obs = meta.get('observation_dates') or {} %}
+  <div class="observation-dates" aria-label="Observation dates">
+    {% for key, label in [('pulse','Pulse last check'),('dataforseo','DataForSEO last observed'),('gsc','GSC last observed'),('ai','AI chats last queried'),('human','Human last reviewed')] %}
+    <div class="observation-date"><span>{{ label }}</span><strong>{{ obs.get(key) or '—' }}</strong></div>
+    {% endfor %}
+  </div>
+  {% set links = (report.client_config or {}).get('quick_links') or [] %}
+  {% if links %}<nav class="quick-links" aria-label="Quick links"><strong>Quick links</strong>{% for link in links %}<a href="{{ link.href }}">{{ link.label }}</a>{% endfor %}</nav>{% endif %}
+  {% if request.endpoint != 'public_report' %}<details class="quick-links-admin"><summary>Manage quick links</summary><form method="post" action="{{ url_for('save_report_quick_links', domain=site.domain) }}"><input type="hidden" name="report_id" value="{{ report_session.id }}"><p class="history-note">One link per line: <code>Label|#section-id</code>.</p><textarea name="quick_links">{% for link in links %}{{ link.label }}|{{ link.href }}{% if not loop.last %}&#10;{% endif %}{% endfor %}</textarea><br><button class="button" type="submit">Save links</button></form></details>{% endif %}
   {% if request.endpoint != 'public_report' %}
   <div class="heading-actions">
     {% if report.report_quality and report.report_quality.blocking %}<span class="button export-blocked" title="Resolve report-quality blockers before export">Export blocked</span>{% else %}<a class="button primary" href="{{ url_for('report_session_pdf', domain=site.domain, report_id=report_session.id) }}">Export PDF</a>{% endif %}
+    <a class="button" href="{{ url_for('report_session_export', domain=site.domain, report_id=report_session.id, fmt='json') }}">JSON</a>
+    <a class="button" href="{{ url_for('report_session_export', domain=site.domain, report_id=report_session.id, fmt='csv') }}">CSV</a>
+    <a class="button" href="{{ url_for('report_session_export', domain=site.domain, report_id=report_session.id, fmt='xml') }}">XML</a>
+    <a class="button" href="{{ url_for('report_session_export', domain=site.domain, report_id=report_session.id, fmt='md') }}">Markdown</a>
     <a class="button" href="{{ url_for('reports', domain=site.domain) }}">Observation history</a>
     <a class="button" href="https://pulse.povarchik.com/reports/{{ report_session.id }}" target="_blank" rel="noopener">Client view</a>
     <a class="button about-report-link" href="#about-this-report">About this report</a>
@@ -777,6 +938,7 @@
 {% set executive_finding = report.high_signal_findings[0] if report.high_signal_findings else {} %}
 {% set executive_action = report.top_actions[0] if report.top_actions else {} %}
 {% set pulse = report.pulse_summary or {} %}
+{% if report.get('sitemap_reconciliation') %}<section class="llm-evidence-section" aria-label="Sitemap reconciliation"><div class="report-kicker">SITEMAP RECONCILIATION</div><h2>Sitemap URL evidence</h2><details><summary>{{ report.get('sitemap_reconciliation')|length }} sitemap URL records</summary><div class="table-wrap report-table"><table><thead><tr><th>URL</th><th>Source</th><th>Status</th><th>Findings</th></tr></thead><tbody>{% for row in report.get('sitemap_reconciliation') %}<tr><td class="report-url">{{ row.url }}</td><td>{{ row.source_sitemap or '—' }}</td><td>{{ row.status_code or 'Not crawled' }}</td><td>{{ row.findings|join(', ') or 'No discrepancy recorded' }}</td></tr>{% endfor %}</tbody></table></div></details></section>{% endif %}
 <section class="executive-fold" aria-label="Executive summary">
   <div class="headline-number-card">
     <strong>{{ executive_action.pages_affected or (report.audit_summary.pages_audited if report.audit_summary else 0) or 0 }}</strong>
@@ -803,9 +965,11 @@
   <div class="movement-item resolved"><span>Resolved pages</span><strong>{{ pulse.get('resolved',0) }}</strong></div>
   <div class="movement-item improved"><span>Improved pages</span><strong>{{ pulse.get('improved',0) }}</strong></div>
   <div class="movement-item worsened"><span>Worsened pages</span><strong>{{ pulse.get('worsened',0) }}</strong></div>
-  <div class="movement-item new"><span>New issue pages</span><strong>{{ pulse.get('new',0) }}</strong></div>
+  <div class="movement-item new"><span>Discovered pages</span><strong>{{ pulse.get('new',0) }}</strong></div>
   {% if pulse.get('mixed',0) %}<div class="movement-item unchanged"><span>Mixed change pages</span><strong>{{ pulse.get('mixed',0) }}</strong></div>{% endif %}
 </section>
+
+<section class="benefit-to-fix" aria-label="Benefit-to-fix explanation"><h2>What does Benefit-to-fix mean?</h2><p>A qualitative explanation of the likely practical value of resolving a finding, based on scope, severity, confidence, exposure, and whether one change can improve multiple pages. It is not a forecast of traffic or revenue.</p></section>
 
 <section class="report-high-signal">
   <div class="report-kicker">WHAT MATTERS MOST NOW</div>
@@ -877,7 +1041,7 @@
 {% set monitoring_coverage = monitoring.coverage or {} %}
 <details class="monitoring-coverage interactive-evidence">
   <summary>Monitoring coverage & URL history · {{ monitoring_summary.get('known_urls', 0) }} known URLs</summary>
-  {% if monitoring_coverage.coverage_state == 'partial' %}<div class="coverage-warning"><strong>Partial coverage.</strong> {{ monitoring_coverage.coverage_note }}</div>{% endif %}
+  {% if monitoring_coverage.coverage_state in ['partial', 'insufficient'] %}<div class="coverage-warning"><strong>{% if monitoring_coverage.coverage_state == 'insufficient' %}Insufficient coverage.{% else %}Partial coverage.{% endif %}</strong> {{ monitoring_coverage.coverage_note }}</div>{% endif %}
   <div class="monitoring-summary">
     <span>Eligible {{ monitoring_summary.get('eligible', 0) }}</span><span>Crawled {{ monitoring_summary.get('crawled', 0) }}</span><span>Unchanged {{ monitoring_summary.get('unchanged', 0) }}</span><span>Failed {{ monitoring_summary.get('failed', 0) }}</span><span>Deferred {{ monitoring_summary.get('deferred', 0) }}</span><span>Excluded {{ monitoring_summary.get('excluded', 0) }}</span><span>Duplicate {{ monitoring_summary.get('duplicate', 0) }}</span>
   </div>
@@ -913,6 +1077,8 @@
   </header>
   <div class="family-note-slot">{{ note_panel(family_note_key, "Pablo's note", True) }}</div>
   <button type="button" class="family-collapse-toggle interactive-evidence" aria-expanded="{% if family.id in report.technical_family_ids %}false{% else %}true{% endif %}">{% if family.id in report.technical_family_ids %}Expand section{% else %}Collapse section{% endif %}</button>
+
+  {% if family.id == 'machine-readability-eligibility' %}{{ llm_guidance_evidence(llm_sources) }}{% endif %}
 
   {% if family.kind == 'ai' %}
     <div class="ai-visibility-report-content">
