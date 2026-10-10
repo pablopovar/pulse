@@ -20,6 +20,8 @@ from services.page_discovery import (
 @dataclass
 class Resp:
     content: bytes
+    status_code: int = 200
+    headers: dict | None = None
 
 
 class FakeFetcher:
@@ -32,6 +34,8 @@ class FakeFetcher:
         value = self.mapping[url]
         if isinstance(value, BaseException):
             raise value
+        if isinstance(value, Resp):
+            return value
         return Resp(value.encode() if isinstance(value, str) else value)
 
 
@@ -128,6 +132,17 @@ def test_agent_readiness_sources_are_observations_not_crawl_inventory():
     assert rows[0]["status"] == "available"
     assert rows[0]["links"] == ["https://example.com/about"]
     assert rows[1]["status"] == "absent"
+
+
+def test_agent_readiness_http_404_is_absent_not_guidance():
+    fetcher = FakeFetcher({
+        "https://example.com/llms.txt": Resp(b"<html>Not found</html>", 404, {"content-type": "text/html"}),
+        "https://example.com/llms-full.txt": Resp(b"# valid", 200, {"content-type": "text/plain"}),
+    })
+    rows = inspect_agent_readiness_sources("example.com", fetcher=fetcher)
+    assert rows[0]["status"] == "absent"
+    assert rows[0]["content"] == ""
+    assert rows[1]["status"] == "available"
 
 
 def test_malformed_root_xml_fails():

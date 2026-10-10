@@ -573,9 +573,10 @@ def _reclassify_redirect_aliases(con, domain):
 def _sync_url_inventory(con, domain, base_url, selected_urls=None, max_depth=5, crawl_run_id=None):
     warnings = []
     sitemap_source = ""
+    source_evidence = []
     try:
         entries, sitemap_source, warnings = discover_domain_sitemap_inventory(
-            domain, max_depth=max_depth
+            domain, max_depth=max_depth, source_evidence=source_evidence
         )
     except Exception as exc:
         entries = []
@@ -614,14 +615,12 @@ def _sync_url_inventory(con, domain, base_url, selected_urls=None, max_depth=5, 
     # Discovery has already fetched these sources.  Persist their provenance so
     # a successful sibling and a failed optional filename are never conflated.
     if crawl_run_id is not None:
-        for source in filter(None, sitemap_source.split(" + ")):
-            lower = source.lower()
-            source_type = "compressed_sitemap" if lower.endswith(".gz") else ("json_url_list" if lower.endswith(".json") else ("text_url_list" if lower.endswith(".txt") else ("feed" if lower.endswith(("rss.xml", "atom.xml", "feed.xml", "mrss.xml")) else "xml_sitemap")))
+        for evidence in source_evidence:
             con.execute(
-                """INSERT INTO sitemap_source_evidence(crawl_run_id,domain,requested_url,source_type,discovery_origin,observed_at,parse_status,parse_error)
-                   VALUES (?,?,?,?,?,?,?,?)
-                   ON CONFLICT(crawl_run_id,requested_url) DO UPDATE SET parse_status=excluded.parse_status,parse_error=excluded.parse_error,observed_at=excluded.observed_at""",
-                (crawl_run_id, domain, source, source_type, "conventional_filename", utcnow(), "parsed", ""),
+                """INSERT INTO sitemap_source_evidence(crawl_run_id,domain,requested_url,source_type,discovery_origin,parent_sitemap,http_status,content_type,response_size,response_sha256,observed_at,parse_status,parse_error,child_sitemaps_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(crawl_run_id,requested_url) DO UPDATE SET source_type=excluded.source_type,parent_sitemap=excluded.parent_sitemap,http_status=excluded.http_status,content_type=excluded.content_type,response_size=excluded.response_size,response_sha256=excluded.response_sha256,parse_status=excluded.parse_status,parse_error=excluded.parse_error,child_sitemaps_json=excluded.child_sitemaps_json,observed_at=excluded.observed_at""",
+                (crawl_run_id, domain, evidence["requested_url"], evidence["source_type"], "conventional_filename", evidence.get("parent_sitemap", ""), evidence.get("http_status"), evidence.get("content_type", ""), int(evidence.get("response_size") or 0), evidence.get("response_sha256", ""), evidence.get("observed_at", utcnow()), evidence.get("parse_status", "unavailable"), evidence.get("parse_error", ""), json.dumps(evidence.get("child_sitemaps") or [])),
             )
         for warning in warnings:
             source = warning.split(":", 1)[0] if warning.startswith("http") else ""

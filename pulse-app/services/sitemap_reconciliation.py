@@ -1,17 +1,27 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from services.url_policy import crawl_url_identity
 
 def reconcile_sitemap_urls(sitemap_entries, crawl_pages, inventory_urls=(), *, now=None):
     """Return evidence rows without turning applicability into a page failure."""
-    pages = {str(row.get("url") or row.get("requested_url") or ""): row for row in crawl_pages or []}
-    inventory = {str(row.get("url") or ""): row for row in inventory_urls or []}
+    pages = {}
+    for row in crawl_pages or []:
+        for value in (row.get("url"), row.get("requested_url"), row.get("final_url"), row.get("canonical")):
+            if value:
+                pages[crawl_url_identity(str(value))] = row
+    inventory = {}
+    for row in inventory_urls or []:
+        for value in (row.get("url"), row.get("final_url"), row.get("canonical_url"), row.get("duplicate_of_url")):
+            if value:
+                inventory[crawl_url_identity(str(value))] = row
     observed = now or datetime.now(timezone.utc).isoformat(timespec="seconds")
     rows = []
     for entry in sitemap_entries or []:
         url = str(entry.get("url") if isinstance(entry, dict) else getattr(entry, "url", ""))
-        page = pages.get(url) or {}
-        inv = inventory.get(url) or {}
+        identity = crawl_url_identity(url)
+        page = pages.get(identity) or {}
+        inv = inventory.get(identity) or {}
         status = page.get("status_code")
         canonical = page.get("canonical") or ""
         reasons = []
@@ -19,7 +29,7 @@ def reconcile_sitemap_urls(sitemap_entries, crawl_pages, inventory_urls=(), *, n
         if status and int(status) >= 400: reasons.append("error_status_in_sitemap")
         if page.get("robots_allowed") is False: reasons.append("robots_blocked_in_sitemap")
         if page.get("robots_meta") and "noindex" in str(page.get("robots_meta")).lower(): reasons.append("noindex_in_sitemap")
-        if canonical and canonical != url: reasons.append("canonical_mismatch")
+        if canonical and crawl_url_identity(canonical) != identity: reasons.append("canonical_mismatch")
         if page and page.get("resource_type") and page.get("resource_type") != "html": reasons.append("non_html_sitemap_resource")
         if not page and not inv: reasons.append("not_crawled")
         if inv and inv.get("source") and "sitemap" not in str(inv.get("source")):

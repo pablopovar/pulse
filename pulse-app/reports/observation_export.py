@@ -84,7 +84,12 @@ def markdown_text(dataset: dict[str, Any]) -> bytes:
     rows = dataset.get("resource_outcomes") or dataset.get("url_decisions") or dataset.get("crawl_pages") or []
     lines += ["## URL decisions", "", "| URL | Status | Decision | Type |", "| --- | --- | --- | --- |"]
     for row in rows:
-        lines.append("| {url} | {status} | {decision} | {resource_type} |".format(url=row.get("url", ""), status=row.get("status_code", row.get("outcome", "")), decision=row.get("decision_reason", row.get("eligibility", "")), resource_type=row.get("resource_type", row.get("content_type", ""))))
+        lines.append("| {url} | {status} | {decision} | {resource_type} |".format(
+            url=row.get("requested_url", row.get("url", "")),
+            status=row.get("http_status", row.get("status_code", row.get("outcome", ""))),
+            decision=row.get("audit_state", row.get("crawl_state", row.get("decision_reason", row.get("eligibility", "")))),
+            resource_type=row.get("resource_type", row.get("content_type", "")),
+        ))
     for source in dataset.get("llm_sources") or []:
         lines += ["", f"## {source.get('name') or source.get('source_key') or 'LLM guidance'}", "", f"- Availability: `{source.get('status') or source.get('availability') or 'unavailable'}`", f"- Observed: `{source.get('observed_at') or 'unavailable'}`"]
         if source.get("content") or source.get("raw_content"):

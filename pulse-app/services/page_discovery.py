@@ -62,6 +62,19 @@ def _parse_non_xml_inventory(raw: bytes, source_url: str) -> list[str] | None:
     return None
 
 
+def sitemap_source_type(url: str) -> str:
+    lower = url.lower().split("?", 1)[0]
+    if lower.endswith(".gz"):
+        return "compressed_sitemap"
+    if lower.endswith(".json"):
+        return "json_url_list"
+    if lower.endswith(".txt"):
+        return "text_url_list"
+    if lower.endswith(("rss.xml", "atom.xml", "feed.xml", "mrss.xml")):
+        return "feed"
+    return "xml_sitemap"
+
+
 @dataclass(frozen=True)
 class SitemapEntry:
     url: str
@@ -84,6 +97,30 @@ def inspect_agent_readiness_sources(
                 max_response_bytes=1024 * 1024,
                 allowed_content_types={"text/plain", "text/markdown", "text/html", "application/octet-stream"},
             )
+            status_code = int(getattr(response, "status_code", 200) or 200)
+            headers = dict(getattr(response, "headers", {}) or {})
+            content_type = headers.get("content-type", "")
+            # A fetcher may return a response object for HTTP errors instead
+            # of raising.  A server's 404 HTML page is evidence of absence,
+            # never llms.txt guidance.
+            if status_code in {404, 410}:
+                observations.append({
+                    "name": name, "url": url, "status": "absent", "http_status": status_code,
+                    "bytes": len(response.content), "content_type": content_type, "headers": headers,
+                    "sha256": hashlib.sha256(response.content).hexdigest() if response.content else "",
+                    "observed_at": now(), "parse_status": "unavailable", "headings": [], "links": [],
+                    "content": "", "error": "HTTP response indicates the file is absent.",
+                })
+                continue
+            if not 200 <= status_code < 300:
+                observations.append({
+                    "name": name, "url": url, "status": "fetch_failed", "http_status": status_code,
+                    "bytes": len(response.content), "content_type": content_type, "headers": headers,
+                    "sha256": hashlib.sha256(response.content).hexdigest() if response.content else "",
+                    "observed_at": now(), "parse_status": "unavailable", "headings": [], "links": [],
+                    "content": "", "error": f"HTTP {status_code} while retrieving the file.",
+                })
+                continue
             text = response.content.decode("utf-8", errors="replace")
             links = re.findall(r"https?://[^\s)>\]]+", text)
             headings = re.findall(r"^#{1,6}\s+(.+?)\s*$", text, flags=re.M)
@@ -91,10 +128,9 @@ def inspect_agent_readiness_sources(
             empty_sections = sum(1 for section in sections[1:] if not section.strip())
             malformed = bool(re.search(r"^#{1,6}[^\s#]", text, flags=re.M) or text.count("```") % 2)
             parse_status = "malformed" if malformed else ("valid_markdown" if text.lstrip().startswith("#") else "plain_text")
-            headers = dict(getattr(response, "headers", {}) or {})
             observations.append({
-                "name": name, "url": url, "status": "available", "http_status": getattr(response, "status_code", 200), "bytes": len(response.content),
-                "content_type": getattr(response, "headers", {}).get("content-type", ""),
+                "name": name, "url": url, "status": "available", "http_status": status_code, "bytes": len(response.content),
+                "content_type": content_type,
                 "headers": headers,
                 "sha256": hashlib.sha256(response.content).hexdigest(),
                 "observed_at": now(), "parse_status": parse_status,
@@ -128,6 +164,7 @@ def discover_sitemap_inventory(
     fetcher: SafeFetcher = safe_fetcher,
     max_depth: int = DEFAULT_MAX_DEPTH,
     max_urls: int = DEFAULT_MAX_URLS,
+    source_evidence: list[dict] | None = None,
 ) -> tuple[list[SitemapEntry], list[str]]:
     """Traverse a sitemap tree without discarding child-sitemap provenance."""
 
@@ -135,7 +172,7 @@ def discover_sitemap_inventory(
     entries: dict[str, SitemapEntry] = {}
     errors: list[str] = []
 
-    def visit(url: str, depth: int, *, root: bool = False) -> None:
+    def visit(url: str, depth: int, *, root: bool = False, parent: str = "") -> None:
         if url in seen_sitemaps:
             return
         if depth > max_depth:
@@ -155,10 +192,16 @@ def discover_sitemap_inventory(
             listed_urls = _parse_non_xml_inventory(raw, url)
             root_node = None if listed_urls is not None else ET.fromstring(raw)
         except Exception as exc:
+            if source_evidence is not None:
+                source_evidence.append({"requested_url": url, "source_type": sitemap_source_type(url), "parent_sitemap": parent, "http_status": getattr(getattr(exc, "response", None), "status_code", None), "content_type": "", "response_size": 0, "response_sha256": "", "observed_at": now(), "parse_status": "failed", "parse_error": str(exc), "child_sitemaps": []})
             if root:
                 raise
             errors.append(f"{url}: {exc}")
             return
+
+        if source_evidence is not None:
+            headers = dict(getattr(response, "headers", {}) or {})
+            source_evidence.append({"requested_url": url, "source_type": sitemap_source_type(url), "parent_sitemap": parent, "http_status": getattr(response, "status_code", 200), "content_type": headers.get("content-type", ""), "response_size": len(response.content), "response_sha256": hashlib.sha256(response.content).hexdigest(), "observed_at": now(), "parse_status": "parsed", "parse_error": "", "child_sitemaps": []})
 
         if listed_urls is not None:
             for item_url in listed_urls:
@@ -175,7 +218,9 @@ def discover_sitemap_inventory(
                 loc = sitemap.find("{*}loc")
                 child = (loc.text or "").strip() if loc is not None else ""
                 if child:
-                    visit(child, depth + 1)
+                    if source_evidence:
+                        source_evidence[-1]["child_sitemaps"].append(child)
+                    visit(child, depth + 1, parent=url)
             return
 
         # Standard sitemap urlsets plus RSS/Atom feeds. Feed entries are only
@@ -247,6 +292,7 @@ def discover_domain_sitemap_inventory(
     fetcher: SafeFetcher = safe_fetcher,
     max_depth: int = DEFAULT_MAX_DEPTH,
     max_urls: int = DEFAULT_MAX_URLS,
+    source_evidence: list[dict] | None = None,
 ) -> tuple[list[SitemapEntry], str, list[str]]:
     failures: list[str] = []
     root_failures: list[str] = []
@@ -261,6 +307,7 @@ def discover_domain_sitemap_inventory(
                 fetcher=fetcher,
                 max_depth=max_depth,
                 max_urls=max_urls,
+                source_evidence=source_evidence,
             )
             if discovered:
                 sources.append(sitemap_url)
