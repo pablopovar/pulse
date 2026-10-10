@@ -9,6 +9,7 @@ from pathlib import Path
 from db.sqlite import connect_sqlite
 from typing import Any
 from services.page_types import applicability, classify_page_type
+from services.applicability_policy import apply_policy, load_page_type_overrides, load_policy
 
 from reports.prioritization import (
     GLOSSARY,
@@ -371,6 +372,8 @@ def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any],*,execu
         audit=immutable.get("audit") or {}
         audit_summary=immutable.get("audit_summary") or {}
         immutable["client_config"]=_load_client_config(con,domain)
+        immutable["applicability_policy"]=load_policy(db_path,domain)
+        immutable["page_type_overrides"]=load_page_type_overrides(db_path,domain)
         immutable["monitoring_inventory"]=_build_monitoring_inventory_snapshot(con,domain,immutable)
         immutable["recommendation_tracking"]=_load_recommendation_tracking(con,domain)
         immutable["snapshot_contract"]={
@@ -524,10 +527,12 @@ def _audit_family(defn,signals,data=None):
             reviews=[d for d in details if is_review(d.get("observed_status"))]
             unavailable=[d for d in details if normalize_status(d.get("observed_status"))=="DATA_UNAVAILABLE"]
             sample=details[0]
+            domain_wide=bool(details) and all(d.get("scope") == "domain" for d in details)
             checks.append({
                 "signal_key":signal_key,"title":title,"category":category_name,"family":sample.get("family") or "",
                 "status":_rollup_status(details),"severity":_rollup_severity(details),"impact_rank":_impact(sample),
-                "pages_affected":len({d.get("path") or "/" for d in affected}),
+                "scope":"domain" if domain_wide else "page",
+                "pages_affected":(1 if domain_wide and affected else len({d.get("path") or "/" for d in affected})),
                 "pages_review_required":len({d.get("path") or "/" for d in reviews}),
                 "pages_data_unavailable":len({d.get("path") or "/" for d in unavailable}),
                 "pages_tested":len({d.get("path") or "/" for d in details}),
@@ -861,6 +866,8 @@ def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
         signal.setdefault("page_type_confidence", page_type_confidence)
         signal.setdefault("applicability", applicability(page_type))
         signals.append(signal)
+    if "applicability_policy" in data:
+        signals = apply_policy(signals, policy=data.get("applicability_policy") or {}, overrides=data.get("page_type_overrides") or {})
     data["audit_signals"]=signals
     families=[]
     for defn in FAMILIES:

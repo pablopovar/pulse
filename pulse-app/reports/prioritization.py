@@ -186,10 +186,14 @@ def merge_duplicate_checks(checks: list[dict[str, Any]], data: dict[str, Any]) -
         affected = [d for d in deduped if str(d.get("observed_status") or "").upper() in {"FAIL", "PARTIAL"}]
         review = [d for d in deduped if str(d.get("observed_status") or "").upper() == "MANUAL_REVIEW"]
         unavailable = [d for d in deduped if str(d.get("observed_status") or "").upper() in {"UNKNOWN", "DATA_UNAVAILABLE"}]
-        base["pages_affected"] = len({d.get("path") or "/" for d in affected})
-        base["pages_review_required"] = len({d.get("path") or "/" for d in review})
-        base["pages_data_unavailable"] = len({d.get("path") or "/" for d in unavailable})
-        base["pages_tested"] = len({d.get("path") or "/" for d in deduped})
+        domain_wide = bool(deduped) and all(d.get("scope") == "domain" for d in deduped)
+        base["scope"] = "domain" if domain_wide else "page"
+        # A response policy is one domain condition observed across many URLs;
+        # it must not turn into a page-prevalence multiplier.
+        base["pages_affected"] = (1 if affected else 0) if domain_wide else len({d.get("path") or "/" for d in affected})
+        base["pages_review_required"] = (1 if review else 0) if domain_wide else len({d.get("path") or "/" for d in review})
+        base["pages_data_unavailable"] = (1 if unavailable else 0) if domain_wide else len({d.get("path") or "/" for d in unavailable})
+        base["pages_tested"] = 1 if domain_wide else len({d.get("path") or "/" for d in deduped})
         base["traffic_exposure"] = round(_detail_exposure(deduped, data), 3)
         base["prevalence"] = round(base["pages_affected"] / base["pages_tested"], 3) if base["pages_tested"] else 0.0
         base["value_score_explanation"] = value_to_fix_components(base, data)

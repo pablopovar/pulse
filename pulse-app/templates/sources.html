@@ -63,6 +63,29 @@
   </form>
 </section>
 
+<section class="panel source-domain-settings" id="applicability">
+  <h2>Applicability</h2>
+  <p>Enable an optional check family only when it belongs to this domain's content strategy. Disabled checks are reported as not applicable in future observations, rather than as missing content.</p>
+  <form method="post" action="{{ url_for('save_domain_applicability', domain=site.domain) }}" class="source-domain-settings-form">
+    {% for key, label in applicability_policy.choices.items() %}
+    <label><span><input type="checkbox" name="enabled_checks" value="{{ key }}" {% if key in applicability_policy.enabled_checks %}checked{% endif %}> {{ label }}</span></label>
+    {% endfor %}
+    <button type="submit">Save applicability</button>
+  </form>
+  <h3>Page-type override</h3>
+  <p>Use this only when Pulse has classified a special page incorrectly. The override is saved with each future observation as evidence.</p>
+  <form method="post" action="{{ url_for('save_domain_page_type', domain=site.domain) }}" class="source-domain-settings-form">
+    <label><span>Page URL</span><input type="url" name="url" placeholder="https://{{ site.domain }}/privacy/"></label>
+    <label><span>Page type</span><select name="page_type">
+      {% for page_type in ['homepage', 'service', 'product', 'blog_post', 'blog_index', 'contact', 'application', 'thank_you', 'privacy_legal', 'utility', 'unknown'] %}
+      <option value="{{ page_type }}">{{ page_type|replace('_', ' ')|title }}</option>
+      {% endfor %}
+    </select></label>
+    <button type="submit">Save page type</button>
+  </form>
+  {% if page_type_overrides %}<p class="research-help"><strong>Current overrides:</strong> {% for url, page_type in page_type_overrides.items() %}<code>{{ url }}</code> → {{ page_type|replace('_', ' ') }}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+</section>
+
 <section class="panel source-domain-settings">
   <h2>Client report access</h2>
   <p>{% if public_report_access.enabled %}Password protection is enabled for this domain's public report links.{% else %}Public report links currently do not require a password.{% endif %} The password is never displayed or stored in readable form.</p>

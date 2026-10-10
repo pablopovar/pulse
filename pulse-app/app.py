@@ -49,6 +49,7 @@ from reports.observation_export import canonical_dataset, csv_bytes, json_bytes,
 from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, list_models as list_manual_ai_analysis_models
 from services.security_boundary import configure_security
 from services.domain_skin import load_skin, rendered_css, save_skin
+from services.applicability_policy import load_page_type_overrides, load_policy, save_page_type_override, save_policy
 from services.public_report_access import access_state as public_report_access_state, disable_access_password, password_valid, set_access_password
 from jobs.store import enqueue_job
 from jobs.store import cancel_job, get_job, list_jobs, pause_job, resume_job
@@ -705,6 +706,8 @@ def domain_sources(domain):
         client_config=load_client_report_config(RESEARCH_DB, domain),
         public_report_access=public_report_access_state(RESEARCH_DB, domain),
         domain_skin=load_skin(RESEARCH_DB, site["domain"]),
+        applicability_policy=load_policy(RESEARCH_DB, domain),
+        page_type_overrides=load_page_type_overrides(RESEARCH_DB, domain),
     )
 
 
@@ -757,6 +760,30 @@ def save_report_scope(domain):
                  f"{len(config['priority_pages'])} priority page(s), "
                  f"{len(config['target_topics'])} topic(s)."),
     ))
+
+
+@app.post("/d/<domain>/sources/applicability")
+def save_domain_applicability(domain):
+    site = get_site(domain)
+    policy = save_policy(RESEARCH_DB, site["domain"], request.form.getlist("enabled_checks"))
+    return redirect(url_for(
+        "domain_sources", domain=site["domain"],
+        message=f"Applicability saved: {len(policy['enabled_checks'])} optional check group(s) enabled for future observations.",
+    ) + "#applicability")
+
+
+@app.post("/d/<domain>/sources/page-type")
+def save_domain_page_type(domain):
+    site = get_site(domain)
+    url = request.form.get("url", "").strip()
+    page_type = request.form.get("page_type", "").strip()
+    if not url:
+        return redirect(url_for("domain_sources", domain=site["domain"], message="Enter a page URL before saving a page-type override.") + "#applicability")
+    try:
+        save_page_type_override(RESEARCH_DB, site["domain"], url, page_type)
+    except ValueError as exc:
+        return redirect(url_for("domain_sources", domain=site["domain"], message=str(exc)) + "#applicability")
+    return redirect(url_for("domain_sources", domain=site["domain"], message="Page-type override saved for future observations.") + "#applicability")
 
 @app.post("/d/<domain>/report-quick-links")
 def save_report_quick_links(domain):
