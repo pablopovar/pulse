@@ -7,13 +7,8 @@
   <title>{% block title %}SEO / GEO / AEO Dashboard{% endblock %}</title>
   <script data-pulse-theme-init="1">
   (() => {
-    const reportPage = {{ 'true' if request.endpoint in ['public_report', 'report_session_view'] else 'false' }};
     const system = window.matchMedia('(prefers-color-scheme: dark)');
     const apply = () => {
-      if (reportPage) {
-        document.documentElement.dataset.theme = 'light';
-        return;
-      }
       let preference = 'system';
       try { preference = localStorage.getItem('pulse-theme') || 'system'; } catch (_err) {}
       document.documentElement.dataset.theme = preference === 'system'
