@@ -372,7 +372,8 @@ def upsert_inventory_url(
             source=CASE
                 WHEN excluded.source='operator' THEN 'operator'
                 WHEN crawl_url_inventory.source='operator' THEN crawl_url_inventory.source
-                ELSE excluded.source END,
+                WHEN instr('+' || crawl_url_inventory.source || '+', '+' || excluded.source || '+') > 0 THEN crawl_url_inventory.source
+                ELSE crawl_url_inventory.source || '+' || excluded.source END,
             source_sitemap=CASE WHEN excluded.source_sitemap<>'' THEN excluded.source_sitemap ELSE crawl_url_inventory.source_sitemap END,
             classification=CASE WHEN crawl_url_inventory.classification='unknown' THEN excluded.classification ELSE crawl_url_inventory.classification END,
             eligibility=CASE WHEN excluded.operator_selected=1 THEN 'eligible' ELSE crawl_url_inventory.eligibility END,

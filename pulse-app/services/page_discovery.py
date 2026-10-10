@@ -193,7 +193,13 @@ def discover_sitemap_inventory(
             root_node = None if listed_urls is not None else ET.fromstring(raw)
         except Exception as exc:
             if source_evidence is not None:
-                source_evidence.append({"requested_url": url, "source_type": sitemap_source_type(url), "parent_sitemap": parent, "http_status": getattr(getattr(exc, "response", None), "status_code", None), "content_type": "", "response_size": 0, "response_sha256": "", "observed_at": now(), "parse_status": "failed", "parse_error": str(exc), "child_sitemaps": []})
+                headers = dict(getattr(exc, "headers", {}) or {})
+                content_length = getattr(exc, "content_length", headers.get("content-length", 0))
+                try:
+                    size = int(content_length or 0)
+                except (TypeError, ValueError):
+                    size = 0
+                source_evidence.append({"requested_url": url, "source_type": sitemap_source_type(url), "parent_sitemap": parent, "http_status": getattr(exc, "status_code", getattr(getattr(exc, "response", None), "status_code", None)), "content_type": headers.get("content-type", ""), "response_size": size, "response_sha256": "", "observed_at": now(), "parse_status": "failed", "parse_error": str(exc), "child_sitemaps": []})
             if root:
                 raise
             errors.append(f"{url}: {exc}")

@@ -335,6 +335,13 @@ class SafeFetcher:
             try:
                 self._validate_content_type(normalized_headers, allowed_content_types, method)
                 content = b"" if method == "HEAD" else self._read_limited(response, max_bytes)
+            except DisallowedContentType as exc:
+                # The body is deliberately not read, but callers auditing an
+                # optional source still need the observed response metadata.
+                exc.status_code = int(response.status_code)
+                exc.headers = normalized_headers
+                exc.content_length = normalized_headers.get("content-length", "")
+                raise
             finally:
                 response.close()
 

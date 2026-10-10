@@ -39,6 +39,16 @@ def test_crawled_url_is_added_to_auditable_site_page_inventory(tmp_path):
     assert row["updated_at"]
 
 
+def test_inventory_preserves_combined_discovery_provenance(tmp_path):
+    db = tmp_path / "research.db"
+    migrate_up(db)
+    with connect_sqlite(db) as con:
+        upsert_inventory_url(con, "example.com", "https://example.com/", source="sitemap")
+        upsert_inventory_url(con, "example.com", "https://example.com/", source="internal_link")
+        row = con.execute("SELECT source FROM crawl_url_inventory WHERE domain='example.com'").fetchone()
+    assert row["source"] == "sitemap+internal_link"
+
+
 def _parsed_page(text, *, canonical=""):
     words = text.split()
     return {

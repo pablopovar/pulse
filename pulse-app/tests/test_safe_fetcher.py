@@ -112,8 +112,11 @@ def test_timeout(monkeypatch):
 def test_disallowed_content_type(monkeypatch):
     _public_dns(monkeypatch)
     session = FakeSession([FakeResponse(200, {"Content-Type": "image/png"}, [b"png"])])
-    with pytest.raises(DisallowedContentType):
+    with pytest.raises(DisallowedContentType) as caught:
         SafeFetcher(session=session).get("https://example.com/image.png")
+    assert caught.value.status_code == 200
+    assert caught.value.headers["content-type"] == "image/png"
+    assert caught.value.content_length == ""
 
 
 def test_non_http_scheme_blocked():
