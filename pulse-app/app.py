@@ -723,7 +723,8 @@ def save_domain_skin(domain):
             RESEARCH_DB,
             site["domain"],
             request.form.get("skin_mode", "basic"),
-            request.form.get("skin_css", ""),
+            request.form.get("skin_light_css", ""),
+            request.form.get("skin_dark_css", ""),
         )
     except ValueError as exc:
         message = str(exc)
@@ -1715,9 +1716,12 @@ def public_report_static(filename):
 @app.get("/d/<domain>/skin.css")
 def domain_skin(domain):
     site = get_site(domain)
+    variant = request.args.get("variant")
+    if variant not in {None, "light", "dark"}:
+        abort(404)
     default_css = (APP_DIR / "static" / "skins" / "default.css").read_text(encoding="utf-8")
     response = app.response_class(
-        rendered_css(RESEARCH_DB, site["domain"], default_css), mimetype="text/css"
+        rendered_css(RESEARCH_DB, site["domain"], default_css if variant is None else "", variant), mimetype="text/css"
     )
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"

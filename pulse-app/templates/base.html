@@ -18,6 +18,7 @@
       try { preference = localStorage.getItem('pulse-theme') || 'system'; } catch (_err) {}
       document.documentElement.dataset.theme = preference === 'system'
         ? (system.matches ? 'dark' : 'light') : preference;
+      window.dispatchEvent(new Event('pulse-theme-changed'));
     };
     apply();
     if (!reportPage) system.addEventListener('change', apply);
@@ -28,6 +29,23 @@
   <link rel="stylesheet" href="{{ url_for(asset_endpoint, filename='app.css') }}">
   {% if site %}
   <link rel="stylesheet" href="{{ url_for('domain_skin', domain=site.domain) }}">
+  <link rel="stylesheet" href="{{ url_for('domain_skin', domain=site.domain, variant='light') }}" data-domain-theme-skin>
+  <script data-domain-theme-skin-init="1">
+  (() => {
+    const link = document.querySelector('[data-domain-theme-skin]');
+    if (!link) return;
+    const setVariant = () => {
+      const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+      const url = new URL(link.href, window.location.href);
+      if (url.searchParams.get('variant') !== theme) {
+        url.searchParams.set('variant', theme);
+        link.href = url.toString();
+      }
+    };
+    setVariant();
+    window.addEventListener('pulse-theme-changed', setVariant);
+  })();
+  </script>
   {% endif %}
   <script data-pulse-csrf-adapter="1">
   (() => {
@@ -128,6 +146,7 @@
       document.documentElement.dataset.theme = select.value === 'system'
         ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
         : select.value;
+      window.dispatchEvent(new Event('pulse-theme-changed'));
     });
   })();
   </script>

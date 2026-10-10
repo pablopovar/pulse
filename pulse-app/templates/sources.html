@@ -30,17 +30,19 @@
 
 <section class="panel source-domain-settings" id="report-appearance">
   <h2>Report appearance</h2>
-  <p>Choose the skin for {{ site.domain }}. The custom CSS is saved as this domain's own file and applies to its dashboard and client reports.</p>
+  <p>Choose the skin for {{ site.domain }}. Custom light and dark CSS are saved as this domain's own files and apply to its dashboard and client reports.</p>
   {% if message and ('skin' in message|lower or 'css' in message|lower) %}<p class="notice" role="status">{{ message }}</p>{% endif %}
   <form method="post" action="{{ url_for('save_domain_skin', domain=site.domain) }}" class="source-domain-settings-form skin-settings-form">
     <label for="skinMode"><span>Theme for this domain</span></label>
     <select id="skinMode" name="skin_mode">
       <option value="basic" {% if domain_skin.mode == 'basic' %}selected{% endif %}>Basic</option>
-      <option value="custom" {% if domain_skin.mode == 'custom' %}selected{% endif %}>Custom CSS</option>
+      <option value="custom" {% if domain_skin.mode == 'custom' %}selected{% endif %}>Custom light and dark themes</option>
     </select>
-    <label for="skinCss"><span>Skin CSS file for {{ site.domain }}</span></label>
-    <textarea id="skinCss" name="skin_css" rows="15" spellcheck="false" placeholder=":root {&#10;  --skin-brand: #b5313f;&#10;  --skin-brand-strong: #922633;&#10;}">{{ domain_skin.css }}</textarea>
-    <p class="research-help">Basic remains available when you switch themes. Custom CSS is added after the basic skin, so you can change colors and add layout rules here.</p>
+    <label for="skinLightCss"><span>Light-theme CSS for {{ site.domain }}</span></label>
+    <textarea id="skinLightCss" name="skin_light_css" rows="12" spellcheck="false" placeholder=":root {&#10;  --skin-brand: #b5313f;&#10;  --skin-brand-strong: #922633;&#10;}">{{ domain_skin.light_css }}</textarea>
+    <label for="skinDarkCss"><span>Dark-theme CSS for {{ site.domain }}</span></label>
+    <textarea id="skinDarkCss" name="skin_dark_css" rows="12" spellcheck="false" placeholder="html[data-theme=&quot;dark&quot;] {&#10;  --skin-brand: #bf5864;&#10;  --skin-workspace: #171419;&#10;}">{{ domain_skin.dark_css }}</textarea>
+    <p class="research-help">Pulse loads the matching file when Display is Light, Dark, or follows your system. Basic remains available when you switch themes. Each custom file is added after the basic skin, so you can change colors and add layout rules.</p>
     <div class="skin-settings-actions">
       <button type="submit" class="primary">Save report appearance</button>
       <a class="button" href="{{ url_for('reports', domain=site.domain) }}">View reports</a>
