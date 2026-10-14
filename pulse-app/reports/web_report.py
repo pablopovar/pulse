@@ -686,6 +686,8 @@ def _dedupe_executive_root_causes(findings, root_causes):
             })
         else:
             item=dict(finding)
+            if root:
+                item["title"] = root.get("title") or label
             item.setdefault("confidence","medium")
             item.setdefault("evidence_type","derived_report_summary")
             out.append(item)
@@ -927,6 +929,28 @@ def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
     data["high_signal_findings"] = build_high_signal_findings(data, families, limit=5)
     data["high_signal_findings"] = _merge_answer_readiness_executive_findings(data.get("high_signal_findings"))
     data["high_signal_findings"] = _dedupe_executive_root_causes(data.get("high_signal_findings"),roots)
+    executive_action = roots[0] if roots else {}
+    executive_finding = next(
+        (
+            finding for finding in data["high_signal_findings"]
+            if str(finding.get("title") or "").strip().lower()
+            == str(executive_action.get("title") or "").strip().lower()
+        ),
+        None,
+    )
+    if executive_action and not executive_finding:
+        recommendation = executive_action.get("recommendation_object") or {}
+        executive_finding = {
+            "title": executive_action.get("title") or "Highest-priority observed pattern",
+            "message": recommendation.get("why_it_matters") or recommendation.get("problem") or "",
+            "source": " · ".join(executive_action.get("family_names") or []),
+            "confidence": executive_action.get("confidence"),
+            "value_score": executive_action.get("value_score"),
+        }
+    data["executive_summary"] = {
+        "finding": executive_finding or (data["high_signal_findings"][0] if data["high_signal_findings"] else {}),
+        "action": executive_action,
+    }
     data["methodology"] = METHODOLOGY
     data["methodology_version"] = METHODOLOGY_VERSION
     data["scoring_version"] = SCORING_VERSION

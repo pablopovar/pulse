@@ -26,7 +26,7 @@ from services.report_collaboration import (
 from db.sqlite import connect_sqlite
 from db.migrate import validate_schema_current
 
-from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, send_from_directory, session, url_for
+from flask import Flask, abort, jsonify, make_response, redirect, render_template, request, send_file, send_from_directory, session, url_for
 import urllib.parse
 import re
 import json
@@ -37,7 +37,6 @@ SEO_DB = Path(os.environ.get("SEO_DB", "/data/opengsc/prod.db"))
 REPORTS_DIR = Path(os.environ.get("REPORTS_DIR", "/data/reports"))
 RESEARCH_DB = Path(os.environ.get("RESEARCH_DB", "/data/dashboard/research.db"))
 from audits.geo_aeo.service import run_audit as run_geo_aeo_audit
-from reports.full_pdf import build_full_report_pdf
 from reports.web_report import (
     load_client_report_config,
     load_report_session,
@@ -45,7 +44,8 @@ from reports.web_report import (
     prepare_report_view,
     save_client_report_config,
 )
-from reports.observation_export import canonical_dataset, csv_bytes, json_bytes, markdown_text, xml_bytes
+from reports.observation_export import canonical_dataset, render_observation
+from reports.localization import localize_report_html, resolve_report_locale
 from reports.manual_ai_analysis import DEFAULT_ANALYSIS_SYSTEM_PROMPT, list_models as list_manual_ai_analysis_models
 from services.security_boundary import configure_security
 from services.domain_skin import load_skin, rendered_css, save_skin
@@ -1746,7 +1746,7 @@ def reports(domain):
 @app.post("/d/<domain>/reports/full")
 def generate_full_web_report(domain):
     get_site(domain)
-    job=enqueue_job(RESEARCH_DB,"report_refresh",domain=domain,payload={"domain":domain,"page_cap":5000,"delay_ms":0,"obey_robots":True},max_attempts=3)
+    job=enqueue_job(RESEARCH_DB,"report_refresh",domain=domain,payload={"domain":domain},max_attempts=3)
     return redirect(url_for("reports",domain=domain,message=f"Full Pulse refresh queued · job {job['id']}"))
 
 
@@ -1837,7 +1837,7 @@ def public_report_pdf(report_id):
     domain = report_domain(RESEARCH_DB, report_id)
     if not domain:
         abort(404)
-    return report_session_pdf(domain, report_id)
+    return _send_observation_export(domain, report_id, "pdf")
 
 
 @app.post("/d/<domain>/report-workflow/exclusion")
@@ -1937,7 +1937,11 @@ def report_session_view(domain, report_id):
     human_interpretation = load_human_interpretation(RESEARCH_DB, domain, report_id)
     report_notes = load_report_notes(RESEARCH_DB, domain)
 
-    return render_template(
+    locale = resolve_report_locale(
+        request.args.get("lang"), request.cookies.get("pulse-report-language"),
+        request.headers.get("Accept-Language"),
+    )
+    rendered = render_template(
         "full_report.html",
         sites=get_sites(),
         site=site,
@@ -1945,7 +1949,14 @@ def report_session_view(domain, report_id):
         report=report,
         human_interpretation=human_interpretation,
         report_notes=report_notes,
+        report_locale=locale,
     )
+    response = make_response(localize_report_html(rendered, locale))
+    response.set_cookie(
+        "pulse-report-language", locale, max_age=31536000, samesite="Lax",
+        secure=request.is_secure,
+    )
+    return response
 
 
 @app.get("/d/<domain>/reports/<report_id>/export.<fmt>")
@@ -1959,33 +1970,25 @@ def _send_observation_export(domain, report_id, fmt):
     if not session:
         abort(404)
     dataset = canonical_dataset(json.loads(json.dumps(session["snapshot"])), domain=domain, observation_id=report_id)
-    exporters = {"json": (json_bytes, "application/json"), "csv": (csv_bytes, "text/csv"), "xml": (xml_bytes, "application/xml"), "md": (markdown_text, "text/markdown"), "markdown": (markdown_text, "text/markdown")}
-    if fmt not in exporters:
+    dataset["presentation_locale"] = resolve_report_locale(
+        request.args.get("lang"), request.cookies.get("pulse-report-language"),
+        request.headers.get("Accept-Language"),
+    )
+    try:
+        body, renderer = render_observation(dataset, fmt)
+    except KeyError:
         abort(404)
-    body, mimetype = exporters[fmt]
-    return send_file(io.BytesIO(body(dataset)), mimetype=mimetype, as_attachment=True, download_name=f"{domain}-observation-{report_id}.{ 'md' if fmt == 'markdown' else fmt }")
+    return send_file(
+        io.BytesIO(body), mimetype=renderer.mimetype, as_attachment=True,
+        download_name=f"{domain}-observation-{report_id}.{renderer.extension}",
+    )
 
 
 
 @app.get("/d/<domain>/reports/<report_id>/pdf")
 def report_session_pdf(domain, report_id):
-    get_site(domain)
-    session = load_report_session(RESEARCH_DB, domain, report_id)
-    if not session:
-        abort(404)
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    safe_domain = re.sub(r"[^A-Za-z0-9._-]+", "-", domain).strip("-") or "domain"
-    filename = f"{safe_domain}-audit-{report_id}.pdf"
-    output_path = REPORTS_DIR / filename
-    # PDF uses the exact same stored historical snapshot as HTML.
-    historical_snapshot = json.loads(json.dumps(session["snapshot"]))
-    build_full_report_pdf(historical_snapshot, output_path)
-    return send_file(
-        output_path,
-        mimetype="application/pdf",
-        as_attachment=True,
-        download_name=filename,
-    )
+    site = get_site(domain)
+    return _send_observation_export(site["domain"], report_id, "pdf")
 
 
 @app.post("/d/<domain>/audit")

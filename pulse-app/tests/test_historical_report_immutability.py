@@ -103,10 +103,10 @@ def test_historical_pdf_route_does_not_apply_live_exclusions():
     calls = _function_calls(app_source, "report_session_pdf")
 
     assert "_apply_report_exclusions" not in calls
-    assert "build_full_report_pdf" in calls
+    assert "_send_observation_export" in calls
 
 
-def test_html_and_pdf_routes_both_read_session_snapshot_directly():
+def test_html_and_all_export_routes_read_the_immutable_session_snapshot():
     source = (Path(__file__).resolve().parents[1] / "app.py").read_text()
     tree = ast.parse(source)
 
@@ -114,12 +114,13 @@ def test_html_and_pdf_routes_both_read_session_snapshot_directly():
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in {
             "report_session_view",
-            "report_session_pdf",
+            "_send_observation_export",
         }:
             relevant[node.name] = ast.get_source_segment(source, node) or ""
 
-    assert set(relevant) == {"report_session_view", "report_session_pdf"}
+    assert set(relevant) == {"report_session_view", "_send_observation_export"}
     assert 'session["snapshot"]' in relevant["report_session_view"]
-    assert 'session["snapshot"]' in relevant["report_session_pdf"]
+    assert 'session["snapshot"]' in relevant["_send_observation_export"]
     assert "historical_snapshot" in relevant["report_session_view"]
-    assert "historical_snapshot" in relevant["report_session_pdf"]
+    assert "canonical_dataset" in relevant["_send_observation_export"]
+    assert "render_observation" in relevant["_send_observation_export"]

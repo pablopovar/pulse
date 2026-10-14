@@ -4,12 +4,14 @@ import json
 import re
 import sqlite3
 from collections import Counter, defaultdict
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from db.sqlite import connect_sqlite
 from typing import Any
 from services.report_data import collect_report_data
 from reports.prioritization import GLOSSARY, METHODOLOGY, build_high_signal_findings
+from reports.localization import translate_text
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -35,6 +37,7 @@ GREEN = colors.HexColor("#15803D")
 AMBER = colors.HexColor("#B45309")
 RED = colors.HexColor("#B91C1C")
 MUTED = colors.HexColor("#64748B")
+_PDF_LOCALE: ContextVar[str] = ContextVar("pulse_pdf_locale", default="en")
 
 
 def _connect(path: Path, readonly=False):
@@ -132,7 +135,7 @@ def _styles():
 
 
 def _P(text, style):
-    text = _clean(text)
+    text = translate_text(_clean(text), _PDF_LOCALE.get())
     text = (
         text.replace("&", "&amp;")
         .replace("<", "&lt;")
@@ -189,12 +192,21 @@ def _header_footer(canvas, doc):
     canvas.line(18*mm, 15*mm, PAGE_W-18*mm, 15*mm)
     canvas.setFont("Helvetica", 7)
     canvas.setFillColor(MUTED)
-    canvas.drawString(18*mm, 9*mm, "SEO / GEO / AEO Domain Audit")
-    canvas.drawRightString(PAGE_W-18*mm, 9*mm, f"Page {doc.page}")
+    locale = _PDF_LOCALE.get()
+    canvas.drawString(18*mm, 9*mm, translate_text("SEO / GEO / AEO Domain Audit", locale))
+    canvas.drawRightString(PAGE_W-18*mm, 9*mm, translate_text(f"Page {doc.page}", locale))
     canvas.restoreState()
 
 
-def build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
+def build_full_report_pdf(data: dict[str, Any], output_path: Path, *, locale: str = "en") -> Path:
+    token = _PDF_LOCALE.set(locale)
+    try:
+        return _build_full_report_pdf(data, output_path)
+    finally:
+        _PDF_LOCALE.reset(token)
+
+
+def _build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     S = _styles()
     story = []
@@ -230,12 +242,24 @@ def build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
     story.append(PageBreak())
 
     story.append(_P("Executive Summary", S["h1"]))
-    high_signal = build_high_signal_findings(data, [], limit=5)
+    high_signal = data.get("high_signal_findings") or build_high_signal_findings(data, [], limit=5)
     if high_signal:
         story.append(_P("High-signal findings", S["h2"]))
         for item in high_signal:
             story.append(_P(item["title"], S["body"]))
             story.append(_P(item["message"], S["small"]))
+    top_actions = data.get("top_actions") or []
+    if top_actions:
+        story.append(_P("Top actions", S["h2"]))
+        for action in top_actions[:5]:
+            recommendation = action.get("recommendation_object") or {}
+            story.append(_P(action.get("title") or "Action", S["body"]))
+            story.append(_P(
+                recommendation.get("recommended_action")
+                or action.get("recommendation")
+                or "",
+                S["small"],
+            ))
     story.append(_P("Methodology & scope", S["h2"]))
     story.append(_P(METHODOLOGY, S["body"]))
     story.append(_P("GEO / AEO / AIO glossary", S["h2"]))
@@ -294,7 +318,7 @@ def build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
             _P(s.get("path",""), S["tiny"]),
             _P(s.get("title",""), S["tiny"]),
             _P(s.get("observed_status",""), S["tiny"]),
-            _P(_short(s.get("recommendation",""), 150), S["tiny"]),
+            _P(_short(translate_text(str(s.get("recommendation") or ""), _PDF_LOCALE.get()), 150), S["tiny"]),
         ])
     if issue_rows:
         story.append(_table(
@@ -441,9 +465,10 @@ def build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
             rows = [[_P(x,S["tiny"]) for x in ["Family","Finding","Status","Severity","Evidence / Recommendation"]]]
             for s in by_page.get(path, []):
                 combined = _short(s.get("evidence",""), 180)
-                rec = _short(s.get("recommendation",""), 180)
+                rec = _short(translate_text(str(s.get("recommendation") or ""), _PDF_LOCALE.get()), 180)
                 if rec:
-                    combined = f"{combined}  Recommendation: {rec}".strip()
+                    label = translate_text("Recommendation", _PDF_LOCALE.get())
+                    combined = f"{combined}  {label}: {rec}".strip()
                 rows.append([
                     _P(s.get("family",""), S["tiny"]),
                     _P(s.get("title",""), S["tiny"]),
@@ -486,9 +511,9 @@ def build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
         rightMargin=18*mm,
         topMargin=18*mm,
         bottomMargin=20*mm,
-        title=f"SEO GEO AEO Domain Audit - {domain}",
+        title=f"{translate_text('Domain Audit Report', _PDF_LOCALE.get())} - {domain}",
         author="SEO / GEO / AEO Audit App",
-        subject=f"Domain audit report for {domain}",
+        subject=f"{translate_text('Domain Audit Report', _PDF_LOCALE.get())}: {domain}",
     )
     doc.build(story, onFirstPage=_header_footer, onLaterPages=_header_footer)
     return output_path

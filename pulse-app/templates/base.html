@@ -8,6 +8,7 @@
   <script data-pulse-theme-init="1">
   (() => {
     const system = window.matchMedia('(prefers-color-scheme: dark)');
+    const reportPage = {{ 'true' if request.endpoint in ['public_report', 'report_session_view'] else 'false' }};
     const apply = () => {
       let preference = 'system';
       try { preference = localStorage.getItem('pulse-theme') || 'system'; } catch (_err) {}

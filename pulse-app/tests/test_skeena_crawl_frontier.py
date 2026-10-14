@@ -380,6 +380,17 @@ def test_saved_policy_reclassifies_existing_inventory(tmp_path):
     assert rows[1]["decision_reason"] == "domain_excluded_pattern"
 
 
+def test_saved_robots_policy_is_authoritative(tmp_path):
+    db = tmp_path / "pulse.db"
+    migrate_up(db)
+    with connect_sqlite(db) as con:
+        disabled = update_policy(con, DOMAIN, {"obey_robots": False})
+        enabled = update_policy(con, DOMAIN, {"obey_robots": True})
+        con.commit()
+    assert disabled["obey_robots"] == 0
+    assert enabled["obey_robots"] == 1
+
+
 def test_parser_excludes_navigation_and_hidden_template_text():
     parser = PageParser()
     parser.feed(

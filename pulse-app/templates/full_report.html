@@ -907,8 +907,8 @@ html[data-theme="dark"] .report-document .root-cause-card.compact-action-card .a
 
 
 {% set opening_note = report_notes.get('executive:lead') or {} %}
-{% set executive_finding = report.high_signal_findings[0] if report.high_signal_findings else {} %}
-{% set executive_action = report.top_actions[0] if report.top_actions else {} %}
+{% set executive_finding = report.executive_summary.finding if report.executive_summary else (report.high_signal_findings[0] if report.high_signal_findings else {}) %}
+{% set executive_action = report.executive_summary.action if report.executive_summary else (report.top_actions[0] if report.top_actions else {}) %}
 {% set pulse = report.pulse_summary or {} %}
 <section class="executive-fold" aria-label="Executive summary">
   <div class="headline-number-card">
@@ -936,7 +936,8 @@ html[data-theme="dark"] .report-document .root-cause-card.compact-action-card .a
   <div class="report-kicker">WHAT MATTERS MOST NOW</div>
   <h2>High-signal findings</h2>
   <div class="high-signal-list">
-    {% for finding in report.high_signal_findings[1:5] %}
+    {% for finding in report.high_signal_findings %}
+    {% if finding.title != executive_finding.title %}
     {% set finding_note_key = 'top-finding:' ~ (finding.get('root_cause_id') or finding.title) %}
     <article class="high-signal-item">
       <strong>{{ finding.title }} {{ note_marker(finding_note_key) }}</strong>
@@ -944,6 +945,7 @@ html[data-theme="dark"] .report-document .root-cause-card.compact-action-card .a
       <small>{{ finding.source }}{% if finding.confidence %} · {{ finding.confidence }} confidence{% endif %}</small>
       {{ note_panel(finding_note_key, "Pablo's note", True) }}
     </article>
+    {% endif %}
     {% else %}<div class="panel"><p>No high-signal finding can be established from the current evidence yet.</p></div>{% endfor %}
   </div>
 </section>
@@ -1226,7 +1228,7 @@ html[data-theme="dark"] .report-document .root-cause-card.compact-action-card .a
   </div>
   <p>Methodology, terminology, monitoring coverage, and report-quality notes are kept here so they remain available without competing with the executive findings.</p>
   <section class="report-reference-controls" aria-label="Report options">
-    <label><span>Language</span><select id="report-language" aria-label="Report language"><option value="en">English</option><option value="es">Español</option></select></label>
+    <label><span>Language</span><select id="report-language" aria-label="Report language"><option value="en" {% if report_locale == 'en' %}selected{% endif %}>English</option><option value="es" {% if report_locale == 'es' %}selected{% endif %}>Español</option></select></label>
     {% if request.endpoint == 'public_report' %}
     <div class="client-downloads"><strong>Download this report</strong>
       <a class="button" href="{{ url_for('public_report_pdf', report_id=report_session.id) }}">PDF</a>
@@ -2032,45 +2034,9 @@ html[data-theme="dark"] .report-document .root-cause-card.compact-action-card .a
   function filterInventory(){const text=(urlSearch?.value||'').toLowerCase(),change=urlChange?.value||'';document.querySelectorAll('#monitoring-url-table tbody tr[data-monitoring-change]').forEach(row=>{row.hidden=!!((text&&!row.textContent.toLowerCase().includes(text))||(change&&row.dataset.monitoringChange!==change));});}
   [urlSearch,urlChange].forEach(el=>el&&el.addEventListener(el.type==='search'?'input':'change',filterInventory));
 
-  // The report data and quoted source evidence remain immutable.  This small
-  // presentation dictionary changes client-facing labels only; it never
-  // rewrites a source response, URL, or technical evidence field.
   const language=document.getElementById('report-language');
-  const languageCode=new URL(window.location.href).searchParams.get('lang')==='es'?'es':'en';
   if(language){
-    language.value=languageCode;
     language.addEventListener('change',()=>{const u=new URL(window.location.href);if(language.value==='en')u.searchParams.delete('lang');else u.searchParams.set('lang','es');window.location.href=u.toString();});
-  }
-  if(languageCode==='es'){
-    document.documentElement.lang='es';
-    const es={
-      'Your visibility and website report':'Tu informe de visibilidad y sitio web',
-      'What is working, what needs attention, and the most useful next actions.':'Qué está funcionando, qué necesita atención y las acciones más útiles.',
-      'Current verdict':'Conclusión actual','What matters most now':'Lo más importante ahora','High-signal findings':'Hallazgos principales','Highest-value actions':'Acciones prioritarias',
-      'Search visibility is not turning into search clicks':'La visibilidad en búsquedas no se está convirtiendo en clics',
-      'TOP ACTIONS':'ACCIONES PRIORITARIAS','LIVING DOMAIN PULSE':'PULSO DEL DOMINIO',
-      'What does Benefit-to-fix mean?':'¿Qué significa beneficio de resolverlo?','Resolved pages':'Páginas resueltas','Improved pages':'Páginas mejoradas','Worsened pages':'Páginas empeoradas','Discovered pages':'Páginas descubiertas',
-      'About this report':'Acerca de este informe','REPORT REFERENCE':'REFERENCIA DEL INFORME','Language':'Idioma','Download this report':'Descargar este informe','Observation, display & source dates':'Observación, visualización y fechas de fuentes',
-      'Last checked':'Última comprobación','Viewing observation':'Observación visualizada','Display':'Visualización','System':'Sistema','Light':'Claro','Dark':'Oscuro','Quick links':'Enlaces rápidos',
-      'Observation metadata':'Metadatos de la observación','Methodology & scope':'Metodología y alcance','Monitoring coverage':'Cobertura de seguimiento','SITEMAP RECONCILIATION':'CONCILIACIÓN DEL MAPA DEL SITIO','Sitemap URL evidence':'Evidencia de URL del mapa del sitio',
-      'Confirmed findings':'Hallazgos confirmados','Review required':'Revisión necesaria','Pages affected':'Páginas afectadas','Value to fix':'Beneficio de resolverlo','Checks':'Comprobaciones','Confirmed issues':'Problemas confirmados','Pages tested':'Páginas analizadas',
-      'AI Visibility':'Visibilidad en IA','Identity & Authority':'Identidad y autoridad','Evidence & Trust':'Evidencia y confianza','Content & Answer Readiness':'Preparación de contenido y respuestas','Machine Readability & Eligibility':'Legibilidad para máquinas y elegibilidad','SEO Audit':'Auditoría SEO','Onsite Audit':'Auditoría del sitio',
-      'Official profiles connected':'Perfiles oficiales conectados','Comparisons are structured':'Las comparaciones están estructuradas','Claims and evidence are not consistently substantiated':'Las afirmaciones y la evidencia no están justificadas de forma coherente','Content is not consistently structured for answer retrieval':'El contenido no está estructurado de forma coherente para recuperar respuestas','Lists expose grouped facts or steps':'Las listas muestran hechos o pasos agrupados',
-      'Several related answer-readiness checks fail broadly across the site. Rather than a single FAQ or heading problem, the pattern indicates that much of the content is not consistently organized around clear questions, direct answers, and reusable answer blocks.':'Varios controles de preparación para respuestas fallan en gran parte del sitio. No se trata de un único problema de preguntas frecuentes o encabezados: gran parte del contenido no está organizada de forma coherente en torno a preguntas claras, respuestas directas y bloques reutilizables.',
-      'Official profiles connected is a repeated site-wide pattern: 11 of 11 tested pages are affected.':'Los perfiles oficiales conectados son un patrón repetido en todo el sitio: 11 de 11 páginas analizadas están afectadas.',
-      'No confirmed fail/partial findings currently require attention.':'No hay fallos o hallazgos parciales confirmados que requieran atención ahora.','No human interpretation has been added.':'No se ha añadido una interpretación humana.'
-    };
-    const blocked='pre,code,script,style,.report-url,.llm-verbatim,.llm-headers,.data-block,[data-analysis-markdown]';
-    const walker=document.createTreeWalker(document.querySelector('.report-document'),NodeFilter.SHOW_TEXT,{acceptNode(node){return node.parentElement?.closest(blocked)?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT;}});
-    const nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);
-    nodes.forEach(node=>{const key=node.nodeValue.trim();if(es[key])node.nodeValue=node.nodeValue.replace(key,es[key]);else node.nodeValue=node.nodeValue
-      .replace(/(\d+) affected pages/g,'$1 páginas afectadas')
-      .replace(/(\d+) supporting checks/g,'$1 comprobaciones relacionadas')
-      .replace(/Recommendation: open/g,'Recomendación: pendiente')
-      .replace(/high confidence/g,'confianza alta')
-      .replace(/medium confidence/g,'confianza media')
-      .replace(/Details/g,'Detalles')
-      .replace(/pages affected by the highest-priority observed pattern/g,'páginas afectadas por el patrón observado de mayor prioridad');});
   }
 })();
 </script>

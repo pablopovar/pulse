@@ -65,6 +65,7 @@ DEFAULT_POLICY = {
     "excluded_patterns_json": "[]",
     "included_sitemaps_json": "[]",
     "background_enabled": 1,
+    "obey_robots": 1,
 }
 
 
@@ -262,8 +263,9 @@ def update_policy(con, domain: str, values: dict) -> dict:
     for field, (minimum, maximum) in integer_fields.items():
         if field in values:
             updates[field] = max(minimum, min(maximum, int(values[field])))
-    if "background_enabled" in values:
-        updates["background_enabled"] = int(bool(values["background_enabled"]))
+    for field in ("background_enabled", "obey_robots"):
+        if field in values:
+            updates[field] = int(bool(values[field]))
     for field in ("allowed_patterns_json", "excluded_patterns_json", "included_sitemaps_json"):
         if field in values:
             raw = values[field]

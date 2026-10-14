@@ -126,6 +126,15 @@ ROOT_CAUSE_RULES = [
     ),
 ]
 
+# Check names describe the desired state. Confirmed failures need an issue
+# label in executive and action surfaces so a client never reads a failed
+# check as though it were a success.
+ISSUE_LABELS = {
+    "official profiles connected": "Official profiles are not consistently connected",
+    "lists expose grouped facts or steps": "Lists do not consistently expose grouped facts or steps",
+    "title is concise and descriptive": "Some page titles need refinement",
+}
+
 DEFAULT_OWNER_BY_FAMILY = {
     "Identity & Authority": "Communications / Brand",
     "Evidence & Trust": "Communications / Editorial",
@@ -186,7 +195,7 @@ def root_cause_key(title: str) -> tuple[str, str]:
     for key, label, titles in ROOT_CAUSE_RULES:
         if normalized in titles:
             return key, label
-    return "check:" + normalized.replace(" ", "-"), str(title or "Issue")
+    return "check:" + normalized.replace(" ", "-"), ISSUE_LABELS.get(normalized, str(title or "Issue"))
 
 
 def _evidence_refs(check: dict[str, Any], limit: int = 8) -> list[dict[str, Any]]:

@@ -1389,7 +1389,9 @@ def register_crawler(app, research_db: Callable, get_site: Callable):
         except Exception:
             delay_ms = 2000
         delay_ms = max(0, min(delay_ms, 10000))
-        obey_robots = request.form.get("obey_robots", "1") != "0"
+        with research_db() as con:
+            policy = get_policy(con, site["domain"])
+        obey_robots = bool(policy["obey_robots"])
 
         job = enqueue_job(
             RESEARCH_DB_PATH,
@@ -1423,11 +1425,10 @@ def register_crawler(app, research_db: Callable, get_site: Callable):
         except Exception:
             delay_ms = DEFAULT_DELAY_MS
         delay_ms = max(0, min(delay_ms, 10000))
-        obey_robots = request.form.get("obey_robots", "1") != "0"
-
         with research_db() as con:
             policy = get_policy(con, site["domain"])
             con.commit()
+        obey_robots = bool(policy["obey_robots"])
         page_cap = min(page_cap, int(policy["initial_target"]))
         job = enqueue_job(
             RESEARCH_DB_PATH,
@@ -1462,6 +1463,7 @@ def register_crawler(app, research_db: Callable, get_site: Callable):
             "max_retry_count": request.form.get("max_retry_count", 3),
             "max_crawl_depth": request.form.get("max_crawl_depth", 5),
             "background_enabled": request.form.get("background_enabled") == "1",
+            "obey_robots": request.form.get("obey_robots") == "1",
             "allowed_patterns_json": request.form.get("allowed_patterns", ""),
             "excluded_patterns_json": request.form.get("excluded_patterns", ""),
             "included_sitemaps_json": request.form.get("included_sitemaps", ""),

@@ -50,6 +50,10 @@
       <input type="checkbox" name="background_enabled" value="1" {% if policy.background_enabled %}checked{% endif %}>
       Background crawling enabled
     </label>
+    <label>
+      <input type="checkbox" name="obey_robots" value="1" {% if policy.obey_robots %}checked{% endif %}>
+      Obey robots.txt for every crawl
+    </label>
     <label>Allowed URL patterns (one regular expression per line)
       <textarea name="allowed_patterns" rows="3">{{ policy_allowed_patterns }}</textarea>
     </label>
@@ -71,10 +75,7 @@
     <label>Delay (ms)
       <input type="number" name="delay_ms" min="0" max="60000" value="{{ policy.delay_ms }}">
     </label>
-    <label>
-      <input type="checkbox" name="obey_robots" value="1" checked>
-      Obey robots.txt
-    </label>
+    <span class="research-help">Robots policy: <strong>{{ 'obey' if policy.obey_robots else 'ignore' }}</strong>. Change it in the saved policy above.</span>
     <button type="submit" class="primary">Run bounded initial crawl</button>
   </form>
   <p class="research-help">Sitemap-aware, classified and same-domain. Discovery does not automatically make a URL eligible to crawl.</p>
