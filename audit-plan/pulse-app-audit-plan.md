@@ -1,4 +1,4 @@
-# Pulse App — current-state audit plan and per-run tasks
+# Pulse App — audit handoff and execution plan
 
 Repository: `pablopovar/pulse`  
 Pinned commit: `5b4148c0e24030494fca8609e0180ab3a4b0fc9d`  
@@ -12,7 +12,7 @@ Review only `pulse-app/`. Exclude `pulse-app/tests/` entirely, including fixture
 
 Current database access, schema assumptions, table ownership, constraints and indexes remain in scope through runtime code and, if available, a read-only schema inspection of the existing database. Do not infer actual database state from source alone. No historical migration review, migration execution, fresh-install certification, upgrade-safety assessment or test-suite audit is included. Inspect startup invocation and failure propagation at its call site without tracing excluded migration internals. Existing tests may optionally be run as supporting evidence, but their source is not an audit target and they are not a completion requirement. Do not follow excluded files without an explicit scope amendment.
 
-Inventory: **88 primary audit files; 56 primary runs; eight comparison runs; eight integration/reconciliation runs**. Original B IDs are preserved. Retired runs: B004, B005, B006, B014, B017, B020, B022, B025, B027, B037, B049. They require no work and do not count as unfinished runs. This document contains the complete task list; no companion file is required.
+Inventory: **88 primary audit files; 56 primary runs; eight comparison runs; eight integration/reconciliation runs**. Original B IDs are preserved. Excluded-only former runs: B004, B005, B006, B014, B017, B020, B022, B025, B027, B037, B049. They require no work and do not count as unfinished runs. This document contains the complete task list; no companion file is required.
 
 ## Execution rules and outputs
 
@@ -22,9 +22,49 @@ Inventory: **88 primary audit files; 56 primary runs; eight comparison runs; eig
 4. For each run record status (planned/in progress/blocked/complete), commit, exact coverage, caller links, checks and results, findings, limitations and outstanding questions. Static reading is not a runtime pass.
 5. Findings require severity, confidence, file and line, trigger, affected behavior, evidence and reproduction where feasible. Separate confirmed defects, suspected defects, intentional differences and unreachable-code candidates. Consolidate duplicate findings.
 6. Use small isolated runtime probes where useful; record commands and actual outcomes. Mock external contracts locally without relying on excluded test fixtures. Avoid live provider charges and external writes.
-7. Primary runs execute in listed order. Then complete C01–C08 and I01–I07; I08 is the final gate. All runs below start as **planned**.
+7. Use the execution schedule below. Integration checks follow the relevant flow; I08 is the final gate. Record prerequisite gaps during preliminary checks and reconcile them when primary coverage is complete. All runs below start as **planned**.
 
 Every primary run must produce an evidence-backed review note and ledger entry. A blocked check must remain explicitly qualified. The final output is a consolidated findings report, completed coverage record, remaining uncertainties and corrected architecture description.
+
+## Instructions to the receiving auditor
+
+Execute this independent audit; do not implement fixes. This handoff supersedes earlier ZIP plans and run ordering. Begin by confirming the pinned source and reading the in-scope README and REPORT_CONTRACT.md. Respect repository instructions that apply, without silently expanding exclusions. No defect-audit run has been completed by preparing this handoff. Architectural concerns below are investigation seeds, not certified defects.
+
+The application’s defining risk is a plausible but incorrect report. Prioritize security, cross-domain data integrity, execution provenance and evidence meaning. Read all scoped files even if the initial risk pass finds nothing. Stop only for a material missing prerequisite; continue independent static work and record blocked runtime checks. Do not equate optional existing test success with proof.
+
+## Audit invariants
+
+- **Domain isolation:** requests, jobs, evidence, reports, notes, skins and exports remain bound to the intended domain and permitted actor.
+- **Publication ownership:** lease loss, cancellation or stale worker identity prevents publication and other ownership-protected writes.
+- **Execution identity:** a report uses the intended observation/run, not merely any internally coherent latest audit/crawl pair.
+- **Honest coverage:** missing, failed, unavailable and nonapplicable evidence cannot silently become a pass, complete coverage or resolved finding.
+- **Historical meaning:** current inputs, new interpretations and presentation changes cannot silently substitute historical evidence or its meaning; mutable overlays are identifiable.
+- **Safe input boundaries:** crawled/pasted/provider content and URLs cannot gain authority over access, network targets, filesystem paths or rendered executable content.
+- **Operator control:** initiation, progress, partial success, failure, retry and cancellation communicate the actual state; the operator can identify the affected run and recover without guessing.
+- **Evidence consistency:** displayed findings, counts, dates, confidence and exports have traceable support and consistent semantics.
+
+## Execution schedule
+
+Run order is governed by this schedule, not numeric IDs. Existing IDs are retained solely for traceability. Record one primary coverage entry per file/window; later revisits add evidence without double-counting coverage.
+
+| Stage | Work in order | Gate/output |
+| --- | --- | --- |
+| 0. Orient | Confirm commit, instructions, README/report contract and available runtime/database evidence. Inventory route/job registration from production code. | Scope and environment record; no migration execution. |
+| 1. Early risk pass | Focused reads of B015, B023, B019, B021, B046 and relevant web_report/app callers; preliminary C04 and I01/I02/I04 probes. | Assess unauthorized access, unsafe fetching, stale publication and misleading report identity first. These focused reads do not close whole-file batches unless fully reviewed. |
+| 2. Runtime foundation and access | B001, B002, B003, B007, B008–B013, B015, B016, B018; C01; initial C07/C08; I01 boundary checks, I06 adapter checks and I07 configuration/filesystem checks. | Configuration, domain identity and access map; carry UI-specific route checks forward. |
+| 3. Jobs and capture | B019, B021, B023, B024, B026, B028–B036; C02, C05; I02/I03. | Ownership/recovery and two-capture evidence results. Reconcile publication portion after report assembly review. |
+| 4. Manual and external evidence | B038–B042; C03; I05 and remaining I06. | Completeness, raw retention, stale analysis, provider settings and bounded-cost behavior. |
+| 5. Reports and historical meaning | B043–B048, B050–B061; finish C04; I04 and publication portion of I02. | Snapshot/history/export/localization parity and evidence-backed finding semantics. |
+| 6. Operator workflows | B062–B067; finish C06/C07/C08; reconcile I01/I07 and affected I04 checks against all UI routes. | Research/keyword/taxonomy actions, recovery feedback, files and complete route dispositions. |
+| 7. Close | I08 after all 56 retained B runs, C01–C08 and I01–I07 have outcomes. | Consolidated findings, coverage and limitations; corrected architecture. |
+
+Integration work can begin before every related batch is finished. It closes only after relevant callers, UI and comparison dependencies are reconciled. Revisit a passing probe only when new code evidence, changes or unresolved contradictions justify it.
+
+## Finding and run record
+
+For every run retain: ID, pinned commit, status, files/windows actually read, consulted in-scope context, caller/storage/output links, invariant checked, expected behavior, evidence or probe command/result, findings, unresolved edges and next action. Carry this record in the final audit report or session handoff; this plan is the single input document.
+
+A finding records: ID; severity (critical/high/medium/low, with impact rationale); confidence; confirmed or suspected; file/line and symbol; trigger; expected versus actual behavior; user/data consequence; supporting evidence; affected flows; and verification limits. Recommendations describe the required correction without implementing it. Informational observations and intentional differences are separate from defects.
 
 ## Architecture and critical provenance
 
@@ -41,12 +81,15 @@ Files/windows:
 
 - `pulse-app/.env.example`
 
+**Establish:** Which settings are required and which silently fall back?
+
 Tasks:
 
-- Review ports, mounts, startup, secrets, reproducibility, dependency supply chain and update/backup behavior.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Compare documented database, provider and security variables with runtime consumers; flag examples that encourage insecure deployment or expose secrets.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B002 — 01. Deployment and dependencies
 
@@ -56,12 +99,15 @@ Files/windows:
 - `pulse-app/entrypoint.sh`
 - `pulse-app/requirements.txt`
 
+**Establish:** Does the supported container start the intended application with predictable configuration?
+
 Tasks:
 
-- Review ports, mounts, startup, secrets, reproducibility, dependency supply chain and update/backup behavior.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace entrypoint commands, environment propagation, user/permissions, mounts and dependency versions. Inspect only the migration invocation/failure handling, not migration implementation or upgrade behavior.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B003 — 02. Pulse schema and storage
 
@@ -69,12 +115,15 @@ Files/windows:
 
 - `pulse-app/db/__init__.py`
 
+**Establish:** Does runtime database initialization use the intended database and transaction boundary?
+
 Tasks:
 
-- Review schema ownership, constraints, foreign keys, WAL, read-only access and rollback.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace exports, connection selection and runtime initialization in db/__init__.py; identify hidden writes and failure handling without following excluded migration code.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B007 — 02. Pulse schema and storage
 
@@ -83,12 +132,15 @@ Files/windows:
 - `pulse-app/db/ownership.py`
 - `pulse-app/db/sqlite.py`
 
+**Establish:** Are connection behavior and table ownership consistent with actual writers?
+
 Tasks:
 
-- Review schema ownership, constraints, foreign keys, WAL, read-only access and rollback.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Check foreign-key enablement, busy timeouts, WAL/read-only handling, transaction cleanup and ownership registration. Distinguish declared constraints from confirmed current schema.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B008 — 03. Pulse HTTP shell and route contracts
 
@@ -96,12 +148,17 @@ Files/windows:
 
 - `pulse-app/app.py` — lines 1–400
 
+Navigation anchors: db (78–81), sqlite_regexp (86–92), research_db (95–98), detected_source_state (102–103), domain_sources_for_site (106–111), manual_ai_default_prompt (113–133), load_manual_ai_source (136–142), _manual_ai_upload_text (145–150), infer_company_name (171–172), research_state_from_request (175–176), research_redirect (178–179), normalize_tag_name (181–182), move_research_keyword_to_wanted (184–194), _fetch_sitemap_urls (198–204), sitemap_pages (207–209), _site_id_value (212–213), gsc_rows_for_domain (216–220), sync_site_pages (223–231), canonical_keyword_tags (233–241), ensure_keyword_tag (244–250), ensure_page_tag (253–259), parse_keyword_csv_enriched (261–304), parse_keyword_csv (306–325), host_from_site (327–336), _opengsc_get_sites (339–345), _opengsc_get_site (347–351), domain_seo (354–355), page_rows (358–359), page_detail (362–363), keyword_rows (366–367), build_domain_export (370–391), geo_engine_audit (393–394), latest_audit_page (397–403), find (274–278), csv_bytes (376–383).
+
+**Establish:** Do the routes and helpers in this window preserve authorization, domain identity and service contracts?
+
 Tasks:
 
-- Review trace every route and helper, registration, request validation, response behavior and cross-domain identifiers. Reconcile extracted services with remaining inline code.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- For each named route/helper, map accepted methods/inputs, boundary checks, invoked services, SQL/filesystem/network effects and rendered response. Inspect wrappers versus inline implementations and record links for C01/C02/C06/C08. Reconcile corresponding route-checklist rows.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B009 — 03. Pulse HTTP shell and route contracts
 
@@ -109,12 +166,17 @@ Files/windows:
 
 - `pulse-app/app.py` — lines 401–800
 
+Navigation anchors: latest_audit_page (397–403), recompute_domain_summary (406–432), store_structured_audit (435–461), audit_worker (464–476), start_audit_run (479–481), report_files (484–500), normalize_dashboard_domain (504–519), _site_value (522–530), _opengsc_site_domain (533–541), sync_dashboard_domains_from_opengsc (544–577), get_sites (581–594), get_site (597–616), create_dashboard_domain (619–637), index (641–645), domain_new (650–675), domain_sources (678–711), save_source_company_name (716–719), save_domain_skin (723–737), save_report_scope (741–762), save_domain_applicability (766–772), save_domain_page_type (776–786), save_report_quick_links (789–801), avg (408–410), lines (743–744).
+
+**Establish:** Do the routes and helpers in this window preserve authorization, domain identity and service contracts?
+
 Tasks:
 
-- Review trace every route and helper, registration, request validation, response behavior and cross-domain identifiers. Reconcile extracted services with remaining inline code.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- For each named route/helper, map accepted methods/inputs, boundary checks, invoked services, SQL/filesystem/network effects and rendered response. Inspect wrappers versus inline implementations and record links for C01/C02/C06/C08. Reconcile corresponding route-checklist rows.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B010 — 03. Pulse HTTP shell and route contracts
 
@@ -122,12 +184,17 @@ Files/windows:
 
 - `pulse-app/app.py` — lines 801–1200
 
+Navigation anchors: save_report_quick_links (789–801), save_client_report_access (805–821), domain_settings (825–827), manual_ai_source (830–867), manual_ai_analysis_models (871–877), manual_ai_source_analyze (881–901), tools (906–908), overview (915–918), pages (922–957), page (962–975), keywords_dashboard (980–982), keywords (987–994), export_domain (998–1011), wanted (1017–1141), wanted_add (1146–1154), wanted_delete (1157–1161), research_save (1164–1170), research (1174–1204), f (887–890).
+
+**Establish:** Do the routes and helpers in this window preserve authorization, domain identity and service contracts?
+
 Tasks:
 
-- Review trace every route and helper, registration, request validation, response behavior and cross-domain identifiers. Reconcile extracted services with remaining inline code.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- For each named route/helper, map accepted methods/inputs, boundary checks, invoked services, SQL/filesystem/network effects and rendered response. Inspect wrappers versus inline implementations and record links for C01/C02/C06/C08. Reconcile corresponding route-checklist rows.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B011 — 03. Pulse HTTP shell and route contracts
 
@@ -135,12 +202,17 @@ Files/windows:
 
 - `pulse-app/app.py` — lines 1201–1600
 
+Navigation anchors: research (1174–1204), research_bulk_save (1208–1222), research_bulk_tag (1226–1245), research_bulk_delete (1248–1259), research_upload (1263–1301), research_edit (1305–1313), research_delete (1316–1320), pages_sync (1324–1334), page_workspace (1337–1366), page_wanted_add (1370–1418), page_note_save (1422–1434), wanted_assign_page (1438–1447), keyword_note_get (1451–1463), keyword_note_save (1467–1489), taxonomy_lookup (1494–1510), taxonomy_apply (1514–1546), keyword_workspace (1550–1568), keyword_wanted_set (1572–1586), keyword_tag_change (1590–1608).
+
+**Establish:** Do the routes and helpers in this window preserve authorization, domain identity and service contracts?
+
 Tasks:
 
-- Review trace every route and helper, registration, request validation, response behavior and cross-domain identifiers. Reconcile extracted services with remaining inline code.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- For each named route/helper, map accepted methods/inputs, boundary checks, invoked services, SQL/filesystem/network effects and rendered response. Inspect wrappers versus inline implementations and record links for C01/C02/C06/C08. Reconcile corresponding route-checklist rows.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B012 — 03. Pulse HTTP shell and route contracts
 
@@ -148,12 +220,17 @@ Files/windows:
 
 - `pulse-app/app.py` — lines 1601–2000
 
+Navigation anchors: keyword_tag_change (1590–1608), keyword_note_page_save (1612–1620), geo_aeo_integrated (1623–1649), geo_aeo_run_domain (1653–1660), geo_aeo_run_page (1664–1669), geo_aeo_page_json (1673–1688), geo_aeo_signal_state (1692–1709), geo_aeo_report (1713–1729), reports (1732–1743), generate_full_web_report (1747–1750), public_report_static (1755–1756), domain_skin (1760–1771), public_report_access (1775–1794), public_report_note_reply (1799–1811), public_report (1815–1819), public_report_export (1823–1832), public_report_pdf (1836–1840), report_workflow_exclusion (1844–1866), save_report_human_interpretation (1870–1878), save_report_note (1882–1895), save_report_note_reply (1899–1916), report_notes_json (1920–1922), report_session_view (1926–1959), report_session_export (1963–1965), _send_observation_export (1968–1984), report_session_pdf (1989–1991), run_audit (1995–1996).
+
+**Establish:** Do the routes and helpers in this window preserve authorization, domain identity and service contracts?
+
 Tasks:
 
-- Review trace every route and helper, registration, request validation, response behavior and cross-domain identifiers. Reconcile extracted services with remaining inline code.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- For each named route/helper, map accepted methods/inputs, boundary checks, invoked services, SQL/filesystem/network effects and rendered response. Inspect wrappers versus inline implementations and record links for C01/C02/C06/C08. Reconcile corresponding route-checklist rows.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B013 — 03. Pulse HTTP shell and route contracts
 
@@ -161,12 +238,17 @@ Files/windows:
 
 - `pulse-app/app.py` — lines 2001–2118
 
+Navigation anchors: download_report (2001–2004), helpers (2008–2014), durable_job_status (2035–2039), durable_jobs_index (2043–2051), durable_job_cancel (2055–2065), durable_job_pause (2069–2075), durable_job_resume (2079–2085), _domain_job_or_404 (2088–2093), domain_job_cancel (2097–2100), domain_job_pause (2104–2107), domain_job_resume (2111–2114), pct (2009–2013).
+
+**Establish:** Do the routes and helpers in this window preserve authorization, domain identity and service contracts?
+
 Tasks:
 
-- Review trace every route and helper, registration, request validation, response behavior and cross-domain identifiers. Reconcile extracted services with remaining inline code.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- For each named route/helper, map accepted methods/inputs, boundary checks, invoked services, SQL/filesystem/network effects and rendered response. Inspect wrappers versus inline implementations and record links for C01/C02/C06/C08. Reconcile corresponding route-checklist rows.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B015 — 04. Pulse security and client access
 
@@ -175,12 +257,15 @@ Files/windows:
 - `pulse-app/services/public_report_access.py`
 - `pulse-app/services/security_boundary.py`
 
+**Establish:** Can an unauthorized actor reach management or another domain’s client report?
+
 Tasks:
 
-- Review management authentication, proxy assertions, CSRF, public capabilities, optional passwords, revocation, exports and static/skin exceptions.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace proxy trust, management authentication, CSRF, tokens, password checks, expiry/revocation and exempt paths. Probe denied and permitted requests through the actual boundary.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B016 — 05. Pulse domain lifecycle and presentation settings
 
@@ -191,12 +276,15 @@ Files/windows:
 - `pulse-app/services/domain_skin.py`
 - `pulse-app/services/domains.py`
 
+**Establish:** Do web/worker domain identity, deletion and presentation settings agree?
+
 Tasks:
 
-- Review domain normalization, import/suppression, deletion cleanup, company identity and custom CSS handling.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Compare normalization and imported fields; trace suppression and deletion dependencies. Check company metadata isolation, custom CSS paths, traversal, atomic writes and cleanup.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B018 — 06. Pulse OpenGSC adapter
 
@@ -204,12 +292,15 @@ Files/windows:
 
 - `pulse-app/integrations/opengsc_adapter.py`
 
+**Establish:** Do external database reads produce correctly scoped and qualified evidence?
+
 Tasks:
 
-- Review read-only SQL schema compatibility, missing tables, time windows, normalization and correct site/domain scoping.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Check read-only enforcement, schema/NULL handling, site matching, timezone/date windows, missing versus zero and bounded metrics; use isolated contract data.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B019 — 07. Pulse durable job lifecycle
 
@@ -220,12 +311,15 @@ Files/windows:
 - `pulse-app/jobs/store.py`
 - `pulse-app/jobs/worker.py`
 
+**Establish:** Can two workers claim or complete the same work incorrectly?
+
 Tasks:
 
-- Review atomic claim, leases, retries, heartbeat ownership, pause/resume/cancel and crash recovery; distinguish job state from workflow state.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Inspect claim transactions, leases, heartbeats, retries, worker identity, handler dispatch and pause/cancel transitions. Map every HANDLERS entry to payload and result contracts.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B021 — 08. Pulse workflow and publication
 
@@ -234,12 +328,15 @@ Files/windows:
 - `pulse-app/jobs/publication.py`
 - `pulse-app/jobs/workflows.py`
 
+**Establish:** Can a refresh publish incomplete, stale or foreign-execution evidence?
+
 Tasks:
 
-- Review stage transitions, idempotency, publication withholding, bounded crawl scope, ownership fencing, current/baseline pointers and background scheduling.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace stage transitions, prerequisites, idempotency, lost ownership, publication withholding, current/baseline pointers and background scheduling. Enumerate all direct and fenced publication callers.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B023 — 09. Pulse URL and outbound HTTP boundary
 
@@ -248,12 +345,15 @@ Files/windows:
 - `pulse-app/services/safe_fetcher.py`
 - `pulse-app/services/url_policy.py`
 
+**Establish:** Can attacker-controlled URLs escape the allowed fetch boundary?
+
 Tasks:
 
-- Review sSRF, DNS rebinding, redirects, private addresses, timeout/body limits, canonical identity and hostname equivalence.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Probe schemes, ports, credentials, IDNA, IP literals, DNS answers, redirects, private/link-local addresses, timeouts and response limits. Check the validated address is the address actually contacted.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B024 — 10. Pulse page discovery and reconciliation
 
@@ -262,12 +362,15 @@ Files/windows:
 - `pulse-app/services/page_discovery.py`
 - `pulse-app/services/sitemap_reconciliation.py`
 
+**Establish:** Does discovery preserve eligibility and source provenance under malformed inputs?
+
 Tasks:
 
-- Review nested sitemap parsing, gzip/text inventories, depth/size limits, source provenance, unavailable evidence, reconciliation and request-time IO.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Check nested/text/gzip sitemap handling, depth/size/cycle limits, deduplication, unavailable sources and reconciliation. Identify request-time network I/O and use of SafeFetcher.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B026 — 11. Pulse crawl selection and frontier
 
@@ -275,12 +378,15 @@ Files/windows:
 
 - `pulse-app/services/crawl_frontier.py`
 
+**Establish:** Does the frontier spend crawl budgets on the intended eligible pages?
+
 Tasks:
 
-- Review eligibility versus discovery, ranking, page classes, budgets, delayed work, persistent frontier and duplicate decisions.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace ranking, page classes, deduplication, delayed/retried work and persisted decisions. Check starvation, budget boundaries and restart behavior.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B028 — 12. Pulse crawler and evidence
 
@@ -288,12 +394,17 @@ Files/windows:
 
 - `pulse-app/crawlers/seo.py` — lines 1–400
 
+Navigation anchors: utcnow (54–55), same_site (58–59), PageParser (62–210), fetch (213–259), decode_body (262–270), parse_sitemap (273–280), _candidate_reason (288–299), _candidate_score (301–326), ten_page_candidates (328–370), discover_seed_urls (372–384), build_robot_parser (386–412), __init__ (63–84), handle_starttag (86–133), handle_endtag (135–156), handle_data (158–166), _extract_schema (168–187), result (189–210), walk (174–185).
+
+**Establish:** Does this crawler segment preserve policy, execution ownership and captured evidence?
+
 Tasks:
 
-- Review fetch/parse/persist, robots failures, redirects, conditional requests, fingerprints, retained evidence, coverage and cooperative job controls.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace the listed symbols through fetch/parse/store/control stages. Check robots and redirect handling, response limits, conditional requests, evidence hashes/timestamps, partial failures and lease/cancel checks where present. Carry cross-window dependencies to the final crawler window.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B029 — 12. Pulse crawler and evidence
 
@@ -301,12 +412,17 @@ Files/windows:
 
 - `pulse-app/crawlers/seo.py` — lines 401–800
 
+Navigation anchors: build_robot_parser (386–412), _content_fingerprints (415–427), _content_is_substantial (430–441), _hamming (444–448), _failure_kind (451–466), _revalidate_legacy_duplicates (469–499), _reclassify_redirect_aliases (502–570), _sync_url_inventory (573–635), add_issue (639–645), best_effort_site_page (648–667), persist_page (670–925).
+
+**Establish:** Does this crawler segment preserve policy, execution ownership and captured evidence?
+
 Tasks:
 
-- Review fetch/parse/persist, robots failures, redirects, conditional requests, fingerprints, retained evidence, coverage and cooperative job controls.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace the listed symbols through fetch/parse/store/control stages. Check robots and redirect handling, response limits, conditional requests, evidence hashes/timestamps, partial failures and lease/cancel checks where present. Carry cross-window dependencies to the final crawler window.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B030 — 12. Pulse crawler and evidence
 
@@ -314,12 +430,17 @@ Files/windows:
 
 - `pulse-app/crawlers/seo.py` — lines 801–1200
 
+Navigation anchors: persist_page (670–925), crawl_worker (928–1261).
+
+**Establish:** Does this crawler segment preserve policy, execution ownership and captured evidence?
+
 Tasks:
 
-- Review fetch/parse/persist, robots failures, redirects, conditional requests, fingerprints, retained evidence, coverage and cooperative job controls.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace the listed symbols through fetch/parse/store/control stages. Check robots and redirect handling, response limits, conditional requests, evidence hashes/timestamps, partial failures and lease/cancel checks where present. Carry cross-window dependencies to the final crawler window.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B031 — 12. Pulse crawler and evidence
 
@@ -327,12 +448,17 @@ Files/windows:
 
 - `pulse-app/crawlers/seo.py` — lines 1201–1519
 
+Navigation anchors: crawl_worker (928–1261), register_crawler (1264–1519), seo_crawl (1268–1344), get_sites_for_template (1348–1354), ten_page_select (1358–1367), ten_page_run (1370–1412), seo_crawl_run (1415–1450), seo_crawl_policy (1453–1474), _domain_job (1476–1481), seo_crawl_pause (1484–1487), seo_crawl_resume (1490–1493), seo_crawl_cancel (1496–1499), seo_crawl_status (1502–1519).
+
+**Establish:** Does this crawler segment preserve policy, execution ownership and captured evidence?
+
 Tasks:
 
-- Review fetch/parse/persist, robots failures, redirects, conditional requests, fingerprints, retained evidence, coverage and cooperative job controls.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace the listed symbols through fetch/parse/store/control stages. Check robots and redirect handling, response limits, conditional requests, evidence hashes/timestamps, partial failures and lease/cancel checks where present. Carry cross-window dependencies to the final crawler window.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B032 — 12. Pulse crawler and evidence
 
@@ -342,12 +468,15 @@ Files/windows:
 - `pulse-app/templates/crawl.html`
 - `pulse-app/templates/ten_page_select.html`
 
+**Establish:** Do resource outcomes and crawl UI accurately describe the evidence obtained?
+
 Tasks:
 
-- Review fetch/parse/persist, robots failures, redirects, conditional requests, fingerprints, retained evidence, coverage and cooperative job controls.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace unavailable/failed/partial outcomes into counts and labels. Check selection submission, page/domain identifiers, escaping and actionable crawl status.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B033 — 13. Pulse GEO/AEO audit and scoring
 
@@ -355,12 +484,17 @@ Files/windows:
 
 - `pulse-app/audits/geo_aeo/engine.py` — lines 1–400
 
+Navigation anchors: normalize_url (33–37), _text (40–41), _meta (44–46), _property (49–51), _decode_response (54–55), _schema_objects (58–78), _schema_types (81–89), _page_type (92–108), _supporting_file (111–121), _robots_blocks (124–135), capture_page (138–297), _status (300–301), evaluate (304–522), collect (62–70), add (307–316).
+
+**Establish:** Are the assessments produced here supported by the engine’s own capture?
+
 Tasks:
 
-- Review independent second page capture, signal evidence, unknown versus fail, weighting, applicability, page classification, aggregation and reference validity.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace the listed detectors and capture helpers, supporting-resource requests, parsing assumptions and evidence references. Check unknown versus fail, applicability, score denominators and error behavior. Compare second-capture timing with crawler evidence in C05.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B034 — 13. Pulse GEO/AEO audit and scoring
 
@@ -368,12 +502,17 @@ Files/windows:
 
 - `pulse-app/audits/geo_aeo/engine.py` — lines 401–571
 
+Navigation anchors: evaluate (304–522), summarize (525–538), build_report (541–571).
+
+**Establish:** Are the assessments produced here supported by the engine’s own capture?
+
 Tasks:
 
-- Review independent second page capture, signal evidence, unknown versus fail, weighting, applicability, page classification, aggregation and reference validity.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace the listed detectors and capture helpers, supporting-resource requests, parsing assumptions and evidence references. Check unknown versus fail, applicability, score denominators and error behavior. Compare second-capture timing with crawler evidence in C05.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B035 — 13. Pulse GEO/AEO audit and scoring
 
@@ -384,12 +523,15 @@ Files/windows:
 - `pulse-app/services/audit_execution.py`
 - `pulse-app/services/page_types.py`
 
+**Establish:** Do classification, applicability and persistence yield defensible aggregate scores?
+
 Tasks:
 
-- Review independent second page capture, signal evidence, unknown versus fail, weighting, applicability, page classification, aggregation and reference validity.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace page-type assignment, unknown/nonapplicable handling, weights, denominators and summary writes. Compare service storage with app.py persistence in C02.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B036 — 13. Pulse GEO/AEO audit and scoring
 
@@ -400,12 +542,15 @@ Files/windows:
 - `pulse-app/templates/geo_aeo_integrated.html`
 - `pulse-app/templates/geo_aeo_report.html`
 
+**Establish:** Does the GEO/AEO UI faithfully display the assessment and its limits?
+
 Tasks:
 
-- Review independent second page capture, signal evidence, unknown versus fail, weighting, applicability, page classification, aggregation and reference validity.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace API fields into all three views and page JS; check escaping, missing-data states, status labels, denominators and cross-domain links.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B038 — 14. Pulse manual AI evidence and analysis
 
@@ -413,12 +558,15 @@ Files/windows:
 
 - `pulse-app/reports/cross_model.py`
 
+**Establish:** Is cross-model comparison active, and what can its evidence actually establish?
+
 Tasks:
 
-- Review raw pasted evidence, parsing, phase/state/provider denominators, question governance, provider settings, prompt grounding and stale-analysis protection.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Find callers and validate model/source comparability, absent responses, citations and conclusions. Record unreachable candidates with reachability limits.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B039 — 14. Pulse manual AI evidence and analysis
 
@@ -429,12 +577,15 @@ Files/windows:
 - `pulse-app/services/manual_ai_payload.py`
 - `pulse-app/services/manual_ai_report.py`
 
+**Establish:** Can parsing, governance or optional analysis misstate manual evidence?
+
 Tasks:
 
-- Review raw pasted evidence, parsing, phase/state/provider denominators, question governance, provider settings, prompt grounding and stale-analysis protection.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace phase/state/question/provider identities, malformed payloads, citation grounding, analysis parameters, source snapshots and stale-result fencing.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B040 — 14. Pulse manual AI evidence and analysis
 
@@ -443,12 +594,15 @@ Files/windows:
 - `pulse-app/services/manual_ai_sources.py`
 - `pulse-app/templates/manual_ai_responses.html`
 
+**Establish:** Does pasted evidence survive storage and UI rendering with correct identity?
+
 Tasks:
 
-- Review raw pasted evidence, parsing, phase/state/provider denominators, question governance, provider settings, prompt grounding and stale-analysis protection.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Check raw retention, provider/state completeness, save validation, parsing errors and escaped display; reconcile the storage loader with report projection in C03.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B041 — 15. Pulse source selection and paid integration
 
@@ -459,12 +613,15 @@ Files/windows:
 - `pulse-app/reports/extended_sources.py`
 - `pulse-app/services/source_inventory.py`
 
+**Establish:** Do source selection and paid-provider calls respect operator intent?
+
 Tasks:
 
-- Review selected versus available sources, provider errors, kill switch, credential handling, cost behavior and captured provenance.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace available versus selected sources, settings scope, credentials, kill switches, usage/cost accounting, failures and captured dates. Check alternate enrichment reachability.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B042 — 15. Pulse source selection and paid integration
 
@@ -473,12 +630,15 @@ Files/windows:
 - `pulse-app/templates/dataforseo.html`
 - `pulse-app/templates/sources.html`
 
+**Establish:** Can operators understand and control source/provider state?
+
 Tasks:
 
-- Review selected versus available sources, provider errors, kill switch, credential handling, cost behavior and captured provenance.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Check settings forms, selected-source persistence, disabled/error states, secret exposure, CSRF and messaging about provider calls or unavailable data.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B043 — 16. Pulse report collection and immutable sessions
 
@@ -486,12 +646,17 @@ Files/windows:
 
 - `pulse-app/reports/web_report.py` — lines 1–400
 
+Navigation anchors: _connect (82–83), _json_default (88–92), _load_client_config (103–123), load_client_report_config (126–133), _table_exists (136–139), _json_list (142–147), _build_monitoring_inventory_snapshot (150–261), _monitoring_change (264–276), _attach_monitoring_history (279–295), save_client_report_config (298–308), _load_recommendation_tracking (311–313), set_recommendation_tracking (316–326), _auto_update_recommendations (329–349), create_report_session (352–417), parsed (107–112).
+
+**Establish:** Does this report segment preserve observation identity and avoid unsupported completeness?
+
 Tasks:
 
-- Review crawl/audit execution linkage, source dates, snapshot content, historical stability, current pointer and monitoring inventory.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace source selection, domain/run IDs, dates, snapshot fields, missing-data handling and publication/read paths in the listed symbols. Check serialization, legacy fallbacks and mutable overlays. Record expected-execution questions for C04 and parity checks for I04.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B044 — 16. Pulse report collection and immutable sessions
 
@@ -499,12 +664,17 @@ Files/windows:
 
 - `pulse-app/reports/web_report.py` — lines 401–800
 
+Navigation anchors: create_report_session (352–417), _session_with_history (420–466), load_report_session (469–472), load_current_report_session (475–482), list_report_sessions (485–488), _impact (491–498), _rollup_status (501–502), _rollup_severity (505–507), _audit_family (510–588), _ai_family (591–610), _seo_family (613–628), _onsite_family (631–636), _merge_answer_readiness_executive_findings (639–664), _dedupe_executive_root_causes (667–695), _apply_recommendation_tracking (698–707), _normalize_manual_ai_snapshot (710–820), _active_manual_ai_json (758–768).
+
+**Establish:** Does this report segment preserve observation identity and avoid unsupported completeness?
+
 Tasks:
 
-- Review crawl/audit execution linkage, source dates, snapshot content, historical stability, current pointer and monitoring inventory.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace source selection, domain/run IDs, dates, snapshot fields, missing-data handling and publication/read paths in the listed symbols. Check serialization, legacy fallbacks and mutable overlays. Record expected-execution questions for C04 and parity checks for I04.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B045 — 16. Pulse report collection and immutable sessions
 
@@ -512,12 +682,17 @@ Files/windows:
 
 - `pulse-app/reports/web_report.py` — lines 801–961
 
+Navigation anchors: _normalize_manual_ai_snapshot (710–820), prepare_report_view (823–961).
+
+**Establish:** Does this report segment preserve observation identity and avoid unsupported completeness?
+
 Tasks:
 
-- Review crawl/audit execution linkage, source dates, snapshot content, historical stability, current pointer and monitoring inventory.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace source selection, domain/run IDs, dates, snapshot fields, missing-data handling and publication/read paths in the listed symbols. Check serialization, legacy fallbacks and mutable overlays. Record expected-execution questions for C04 and parity checks for I04.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B046 — 16. Pulse report collection and immutable sessions
 
@@ -525,12 +700,15 @@ Files/windows:
 
 - `pulse-app/services/report_data.py`
 
+**Establish:** Does report-data collection preserve the intended run and domain identity?
+
 Tasks:
 
-- Review crawl/audit execution linkage, source dates, snapshot content, historical stability, current pointer and monitoring inventory.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace execution selection, joins and missing/legacy linkage through report_data; compare requested refresh identity with selected latest audit and matching crawl.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B047 — 17. Pulse findings, history and prioritization
 
@@ -539,12 +717,15 @@ Files/windows:
 - `pulse-app/reports/prioritization.py`
 - `pulse-app/reports/pulse_history.py`
 
+**Establish:** Can history or prioritization turn missing evidence into improvement?
+
 Tasks:
 
-- Review finding identity, missing versus resolved, comparisons, confidence, root-cause deduplication, priority and unsupported business claims.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Check finding keys, missing-versus-resolved rules, baseline/current comparisons, deduplication, exposure factors, zero nonissue scores and material-event counts.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B048 — 17. Pulse findings, history and prioritization
 
@@ -552,12 +733,15 @@ Files/windows:
 
 - `pulse-app/reports/report_intelligence.py`
 
+**Establish:** Are conclusions, confidence and recommended work supported by evidence?
+
 Tasks:
 
-- Review finding identity, missing versus resolved, comparisons, confidence, root-cause deduplication, priority and unsupported business claims.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace report-intelligence inputs, root-cause grouping, priority claims and required finding fields. Distinguish implemented recommendations from verified outcomes.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B050 — 18. Pulse report presentation and export
 
@@ -566,12 +750,15 @@ Files/windows:
 - `pulse-app/reports/__init__.py`
 - `pulse-app/reports/full_pdf.py`
 
+**Establish:** Does PDF generation reproduce the saved observation safely?
+
 Tasks:
 
-- Review hTML/JS escaping, discussions, permissions, PDF/dataset parity, locale transformations, skin isolation and historical navigation.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace report/session selection, conversion options, local/network resource access, temporary files, subprocess failures and output parity; inspect report package exports.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B051 — 18. Pulse report presentation and export
 
@@ -579,12 +766,15 @@ Files/windows:
 
 - `pulse-app/reports/localization.py`
 
+**Establish:** Does localization preserve observation meaning and identity?
+
 Tasks:
 
-- Review hTML/JS escaping, discussions, permissions, PDF/dataset parity, locale transformations, skin isolation and historical navigation.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Check locale selection, fallback, status/number/date formatting and whether translation changes evidence, IDs, links or confidence.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B052 — 18. Pulse report presentation and export
 
@@ -592,12 +782,15 @@ Files/windows:
 
 - `pulse-app/reports/localization_es_detectors.py`
 
+**Establish:** Can Spanish detector translations change the technical conclusion?
+
 Tasks:
 
-- Review hTML/JS escaping, discussions, permissions, PDF/dataset parity, locale transformations, skin isolation and historical navigation.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Compare detector keys and status-sensitive phrases against their source meanings; check missing translations, interpolation and unsupported stronger claims.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B053 — 18. Pulse report presentation and export
 
@@ -608,12 +801,15 @@ Files/windows:
 - `pulse-app/static/analysis-markdown.js`
 - `pulse-app/static/collapsible-notes.js`
 
+**Establish:** Are exports and collaboration safely separated from immutable evidence?
+
 Tasks:
 
-- Review hTML/JS escaping, discussions, permissions, PDF/dataset parity, locale transformations, skin isolation and historical navigation.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace export quality gates and field parity; verify note/reply/interpretation permissions and domain/report binding. Inspect Markdown escaping and browser interaction state.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B054 — 18. Pulse report presentation and export
 
@@ -621,12 +817,15 @@ Files/windows:
 
 - `pulse-app/static/skins/default.css`
 
+**Establish:** Can skin styling obscure or misrepresent evidence?
+
 Tasks:
 
-- Review hTML/JS escaping, discussions, permissions, PDF/dataset parity, locale transformations, skin isolation and historical navigation.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Check readable status distinctions, long content, print behavior and CSS assumptions; ensure skin errors do not hide essential report content or controls.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B055 — 18. Pulse report presentation and export
 
@@ -634,12 +833,17 @@ Files/windows:
 
 - `pulse-app/templates/full_report.html` — lines 1–400
 
+Navigation anchors: line 2: {% block title %}{{ site.domain }} · Living Domain Pulse{% endblock %}; line 3: {% block content %}; line 5: {% macro note_marker(note_key) -%}; line 12: {% macro note_panel(note_key, label="Pablo's note", compact=True) -%}; line 51: {% macro llm_guidance_evidence(llm_sources) -%}; line 54: llms.txt evidence.
+
+**Establish:** Does this report-template segment present saved evidence faithfully and safely?
+
 Tasks:
 
-- Review hTML/JS escaping, discussions, permissions, PDF/dataset parity, locale transformations, skin isolation and historical navigation.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Inventory each visible section and bind its displayed claim, status, count, date, link and action to its input field and source. Check escaping, absent/partial states, history/current context and locale/export differences; identify whether data comes from the snapshot or a mutable overlay.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B056 — 18. Pulse report presentation and export
 
@@ -647,12 +851,17 @@ Files/windows:
 
 - `pulse-app/templates/full_report.html` — lines 401–800
 
+Navigation anchors: template data bindings, conditions and controls in the listed window.
+
+**Establish:** Does this report-template segment present saved evidence faithfully and safely?
+
 Tasks:
 
-- Review hTML/JS escaping, discussions, permissions, PDF/dataset parity, locale transformations, skin isolation and historical navigation.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Inventory each visible section and bind its displayed claim, status, count, date, link and action to its input field and source. Check escaping, absent/partial states, history/current context and locale/export differences; identify whether data comes from the snapshot or a mutable overlay.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B057 — 18. Pulse report presentation and export
 
@@ -660,12 +869,17 @@ Files/windows:
 
 - `pulse-app/templates/full_report.html` — lines 801–1200
 
+Navigation anchors: line 890: Your visibility and website report; line 925: {{ opening_note.get('content') or executive_finding.get('title') or 'Current observations are availa; line 937: High-signal findings; line 956: Highest-value actions; line 991: What does Benefit-to-fix mean? A qualitative explanation of the likely practical value of resolving ; line 1030: {{ report.check_history_index|tojson }}; line 1039: {{ family.name }} {{ note_marker(family_note_key) }}; line 1057: SITEMAP RECONCILIATION Sitemap URL evidence; line 1069: AI RESPONSE SOURCE Manual AI response evidence; line 1082: AI RESPONSE ANALYSIS Model interpretation; line 1090: Human interpretation; line 1113: Confirmed findings.
+
+**Establish:** Does this report-template segment present saved evidence faithfully and safely?
+
 Tasks:
 
-- Review hTML/JS escaping, discussions, permissions, PDF/dataset parity, locale transformations, skin isolation and historical navigation.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Inventory each visible section and bind its displayed claim, status, count, date, link and action to its input field and source. Check escaping, absent/partial states, history/current context and locale/export differences; identify whether data comes from the snapshot or a mutable overlay.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B058 — 18. Pulse report presentation and export
 
@@ -673,12 +887,17 @@ Files/windows:
 
 - `pulse-app/templates/full_report.html` — lines 1201–1600
 
+Navigation anchors: line 1201: {% if family.dataforseo_snapshots %} DataForSEO evidence captured This report includes {{ family.dat; line 1202: 6.1 Organic Search Performance; line 1207: 6.2 Search Opportunities Striking Distance Keywords {% if family.striking_distance %} Query Page Lat; line 1208: 6.3 Cannibalization Exact-query cannibalization {% if family.exact_cannibalization %} Query Ranking ; line 1209: 6.4 Content Decay DATA_UNAVAILABLE Content Decay is not persisted in the current observation.; line 1210: 6.5 Rank Tracking {% if family.rank_tracking %} Keyword Last position Previous Best URL Last checked; line 1211: 6.6 Keyword Demand {% if family.wanted %} Wanted keyword Target page Monthly searches Competition So; line 1212: 6.7 Competitive Search Gaps {% if family.competitor_keywords %} Competitor Keyword Position Volume D; line 1213: 6.8 Backlinks & Search Authority {% if family.domain_metrics %} DR {{ family.domain_metrics.dr or '—; line 1214: 6.9 Audience / Search Performance Context {% if family.clarity %} {{ family.clarity.data }} {% else ; line 1225: About this report; line 1325: .
+
+**Establish:** Does this report-template segment present saved evidence faithfully and safely?
+
 Tasks:
 
-- Review hTML/JS escaping, discussions, permissions, PDF/dataset parity, locale transformations, skin isolation and historical navigation.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Inventory each visible section and bind its displayed claim, status, count, date, link and action to its input field and source. Check escaping, absent/partial states, history/current context and locale/export differences; identify whether data comes from the snapshot or a mutable overlay.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B059 — 18. Pulse report presentation and export
 
@@ -686,12 +905,17 @@ Files/windows:
 
 - `pulse-app/templates/full_report.html` — lines 1601–2000
 
+Navigation anchors: template data bindings, conditions and controls in the listed window.
+
+**Establish:** Does this report-template segment present saved evidence faithfully and safely?
+
 Tasks:
 
-- Review hTML/JS escaping, discussions, permissions, PDF/dataset parity, locale transformations, skin isolation and historical navigation.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Inventory each visible section and bind its displayed claim, status, count, date, link and action to its input field and source. Check escaping, absent/partial states, history/current context and locale/export differences; identify whether data comes from the snapshot or a mutable overlay.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B060 — 18. Pulse report presentation and export
 
@@ -699,12 +923,17 @@ Files/windows:
 
 - `pulse-app/templates/full_report.html` — lines 2001–2044
 
+Navigation anchors: template data bindings, conditions and controls in the listed window.
+
+**Establish:** Does this report-template segment present saved evidence faithfully and safely?
+
 Tasks:
 
-- Review hTML/JS escaping, discussions, permissions, PDF/dataset parity, locale transformations, skin isolation and historical navigation.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Inventory each visible section and bind its displayed claim, status, count, date, link and action to its input field and source. Check escaping, absent/partial states, history/current context and locale/export differences; identify whether data comes from the snapshot or a mutable overlay. Finish with a whole-template synthesis of section conditions, scripts, links and export controls.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B061 — 18. Pulse report presentation and export
 
@@ -713,12 +942,15 @@ Files/windows:
 - `pulse-app/templates/public_report_access.html`
 - `pulse-app/templates/reports.html`
 
+**Establish:** Do report navigation and public access expose only intended observations?
+
 Tasks:
 
-- Review hTML/JS escaping, discussions, permissions, PDF/dataset parity, locale transformations, skin isolation and historical navigation.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace report/session/domain identifiers, token/password flow, expired/revoked access, historical links and empty/error states.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B062 — 19. Pulse research and operator UI
 
@@ -726,12 +958,15 @@ Files/windows:
 
 - `pulse-app/static/app.css`
 
+**Establish:** Does operator styling keep state and controls understandable?
+
 Tasks:
 
-- Review keyword/page assignment, CSV imports/exports, taxonomy, notes, sorting, navigation and empty/error/loading states.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Check overflow, hidden content, focus/disabled states, contrast of error/coverage labels and desktop/mobile readability of dense evidence.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B063 — 19. Pulse research and operator UI
 
@@ -742,12 +977,15 @@ Files/windows:
 - `pulse-app/static/taxonomy.js`
 - `pulse-app/templates/base.html`
 
+**Establish:** Do shared navigation and browser helpers preserve route and data identity?
+
 Tasks:
 
-- Review keyword/page assignment, CSV imports/exports, taxonomy, notes, sorting, navigation and empty/error/loading states.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace template URL construction, keyword links, sorting, taxonomy edits, JS initialization and escaping; confirm mutations surface failures and apply to the intended domain.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B064 — 19. Pulse research and operator UI
 
@@ -758,12 +996,15 @@ Files/windows:
 - `pulse-app/templates/domain_settings.html`
 - `pulse-app/templates/empty.html`
 
+**Establish:** Are domain creation, settings and deletion safe and intelligible?
+
 Tasks:
 
-- Review keyword/page assignment, CSV imports/exports, taxonomy, notes, sorting, navigation and empty/error/loading states.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Check form fields against handlers, CSRF, normalization errors, secret handling, destructive confirmation and stale domain identifiers.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B065 — 19. Pulse research and operator UI
 
@@ -774,12 +1015,15 @@ Files/windows:
 - `pulse-app/templates/keywords_dashboard.html`
 - `pulse-app/templates/overview.html`
 
+**Establish:** Do keyword workspaces report the same entities and metrics as their handlers?
+
 Tasks:
 
-- Review keyword/page assignment, CSV imports/exports, taxonomy, notes, sorting, navigation and empty/error/loading states.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace filters, assignment/taxonomy controls, sorting, dates, missing-data labels, empty states and mutations across the four views.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B066 — 19. Pulse research and operator UI
 
@@ -790,12 +1034,15 @@ Files/windows:
 - `pulse-app/templates/pages.html`
 - `pulse-app/templates/research.html`
 
+**Establish:** Can page and research workflows silently lose or misassign work?
+
 Tasks:
 
-- Review keyword/page assignment, CSV imports/exports, taxonomy, notes, sorting, navigation and empty/error/loading states.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Trace page/domain/keyword identities, imports/exports, pagination, assignment/note actions and error recovery across page and research views.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ### B067 — 19. Pulse research and operator UI
 
@@ -804,16 +1051,19 @@ Files/windows:
 - `pulse-app/templates/tools.html`
 - `pulse-app/templates/wanted.html`
 
+**Establish:** Do tools and wanted-keyword actions perform the work their UI promises?
+
 Tasks:
 
-- Review keyword/page assignment, CSV imports/exports, taxonomy, notes, sorting, navigation and empty/error/loading states.
-- Trace the listed implementation’s inputs, active callers, outputs and side effects; validate its contract with adjacent components.
-- Check invalid, missing, empty, stale and concurrent inputs where applicable; document concrete failure behavior and uncertainty.
-- Record exact reviewed coverage, findings and any follow-up for the comparison/integration runs.
+- Compare forms and links with route contracts, validation, mutation permissions, empty/error states and request-time side effects.
+- Trace one ordinary case and one relevant counterexample through the listed code; record expected versus actual behavior. Use an isolated probe when executable; otherwise record the static evidence and verification limit.
+- Record findings, caller links and exact coverage. Resolve enclosing definitions and carry unresolved cross-file questions to the assigned comparison/integration run.
+
+**Completion evidence:** file/line references, input/condition, observed or inferred result, applicable invariant, and explicit status. At the last window of any split file, reconcile the whole file.
 
 ## Comparison runs
 
-These deliberately revisit implementations. Use their listed prerequisites and compare related files in small subpasses.
+These deliberately revisit implementations. Use their listed prerequisites and compare related files in small subpasses. Start alongside the flow schedule and close after all prerequisites are reviewed.
 
 ## C01. Web/worker domain parity
 
@@ -827,7 +1077,9 @@ Files:
 - `pulse-app/services/url_policy.py`
 - `pulse-app/jobs/workflows.py`
 
-Completion: document actual callers, intended divergence, fixture results and remaining uncertainty. Status: planned.
+Required counterexample/check: Submit uppercase/IDNA/port variants through both web and worker paths; compare canonical identity and synced fields.
+
+Completion: document actual callers, contract differences, check results and uncertainty. Status: planned.
 
 ## C02. Audit persistence duplication and reachability
 
@@ -841,7 +1093,9 @@ Files:
 - `pulse-app/jobs/handlers.py`
 - `pulse-app/jobs/workflows.py`
 
-Completion: document actual callers, intended divergence, fixture results and remaining uncertainty. Status: planned.
+Required counterexample/check: Feed the same isolated audit result into each reachable persistence path; compare stored signals, aggregate denominators and transaction failure behavior.
+
+Completion: document actual callers, contract differences, check results and uncertainty. Status: planned.
 
 ## C03. Manual AI storage, projection and governance
 
@@ -858,7 +1112,9 @@ Files:
 - `pulse-app/reports/web_report.py`
 - `pulse-app/app.py`
 
-Completion: document actual callers, intended divergence, fixture results and remaining uncertainty. Status: planned.
+Required counterexample/check: Omit one provider answer and change retrieval state; compare raw storage, completeness indicators and the report projection without counting unavailable answers as agreement.
+
+Completion: document actual callers, contract differences, check results and uncertainty. Status: planned.
 
 ## C04. Publication mechanisms and execution identity
 
@@ -872,7 +1128,9 @@ Files:
 - `pulse-app/jobs/workflows.py`
 - `pulse-app/services/report_data.py`
 
-Completion: document actual callers, intended divergence, fixture results and remaining uncertainty. Status: planned.
+Required counterexample/check: Pause refresh A after capture, complete refresh B, resume A; trace each report component to expected execution and verify lease loss prevents A from publishing.
+
+Completion: document actual callers, contract differences, check results and uncertainty. Status: planned.
 
 ## C05. Parallel HTTP capture and parsing
 
@@ -888,7 +1146,9 @@ Files:
 - `pulse-app/services/safe_fetcher.py`
 - `pulse-app/services/resource_outcome.py`
 
-Completion: document actual callers, intended divergence, fixture results and remaining uncertainty. Status: planned.
+Required counterexample/check: Serve different page bodies on crawl and audit requests and record timestamps/hashes; verify which capture each reported claim actually references.
+
+Completion: document actual callers, contract differences, check results and uncertainty. Status: planned.
 
 ## C06. Wrappers, aliases and alternate entry paths
 
@@ -904,7 +1164,9 @@ Files:
 - `pulse-app/reports/extended_sources.py`
 - `pulse-app/integrations/opengsc_adapter.py`
 
-Completion: document actual callers, intended divergence, fixture results and remaining uncertainty. Status: planned.
+Required counterexample/check: Trace an apparent duplicate by imports, registrations, templates, callbacks and jobs; distinguish a delegate from independent behavior before making a duplication/dead-code claim.
+
+Completion: document actual callers, contract differences, check results and uncertainty. Status: planned.
 
 ## C07. Configuration, startup and filesystem parity
 
@@ -921,7 +1183,9 @@ Files:
 - `pulse-app/services/domain_skin.py`
 - `pulse-app/reports/observation_export.py`
 
-Completion: document actual callers, intended divergence, fixture results and remaining uncertainty. Status: planned.
+Required counterexample/check: Unset RESEARCH_DB in isolated web/worker configuration resolution, then set it explicitly; compare resolved paths and report the launch conditions under which they diverge.
+
+Completion: document actual callers, contract differences, check results and uncertainty. Status: planned.
 
 ## C08. Ownership, contracts and route completeness
 
@@ -937,7 +1201,9 @@ Files:
 - `pulse-app/integrations/dataforseo/extension.py`
 - `pulse-app/services/domains.py`
 
-Completion: document actual callers, intended divergence, fixture results and remaining uncertainty. Status: planned.
+Required counterexample/check: Compare recursive static route declarations with runtime URL-map output; nested crawler/DataForSEO registrations must remain visible even without architectural tests.
+
+Completion: document actual callers, contract differences, check results and uncertainty. Status: planned.
 
 ## Integration and final reconciliation runs
 
@@ -991,7 +1257,7 @@ Output: evidence, actual probe results, affected route/job rows, findings and un
 
 ### I07 — Current configuration and filesystem
 
-Prerequisites: B001–B003, B007, B016, C07.
+Prerequisites: B001, B002, B003, B007, B016, C07.
 
 Tasks: Inspect actual configuration resolution in web and worker paths, especially RESEARCH_DB defaults. Compare current schema assumptions with a read-only schema dump if supplied; otherwise qualify database-state uncertainty. Probe skin/export paths, traversal, permissions, atomic writes, concurrent access and cleanup/deletion using temporary directories. Do not run or review migration implementations.
 
@@ -1007,17 +1273,17 @@ Output: evidence, actual probe results, affected route/job rows, findings and un
 
 ## Required report-contract checks
 
-Read `pulse-app/reports/REPORT_CONTRACT.md` as required context. Ranges below refer only to retained runs; retired IDs never add work.
+Read `pulse-app/reports/REPORT_CONTRACT.md` as required context. Ranges below refer only to retained runs; excluded runs never add work.
 
 | Requirement | Owning review |
 | --- | --- |
-| FAIL/PARTIAL versus MANUAL_REVIEW/NOT_APPLICABLE/DATA_UNAVAILABLE; legacy UNKNOWN normalization | B033–B037, B043–B049, I04 |
-| Exact page/check identity; missing assessment is not resolution; material-event history and unique-page movements | B047–B049, I04 |
-| Implemented versus verified recommendations, root-cause evidence retention and required finding fields | B043–B049, I04 |
-| Current/baseline pointer versus immutable observations; completed unchanged monitoring runs | B021–B022, B043–B046, C04, I02, I04 |
+| FAIL/PARTIAL versus MANUAL_REVIEW/NOT_APPLICABLE/DATA_UNAVAILABLE; legacy UNKNOWN normalization | B033–B036, B043–B048, I04 |
+| Exact page/check identity; missing assessment is not resolution; material-event history and unique-page movements | B047–B048, I04 |
+| Implemented versus verified recommendations, root-cause evidence retention and required finding fields | B043–B048, I04 |
+| Current/baseline pointer versus immutable observations; completed unchanged monitoring runs | B021, B043–B046, C04, I02, I04 |
 | Coverage states and timestamps; GA4 versus Clarity; bounded GSC dates/click labels | B018, B041–B049, I06 |
-| Same-execution provenance and limits for legacy data; expected current execution under concurrency | B021–B022, B043–B046, C04, I02–I03 |
-| Value-to-fix-v2 factors, missing exposure and zero nonissue scores | B047–B049, I04 |
+| Same-execution provenance and limits for legacy data; expected current execution under concurrency | B021, B043–B046, C04, I02–I03 |
+| Value-to-fix-v2 factors, missing exposure and zero nonissue scores | B047–B048, I04 |
 | Provider/state/question denominators; model-prior versus retrieval; unsupported causal/truth claims | B038–B040, C03, I05 |
 | Report-quality errors block relevant exports; HTML/PDF/CSV/JSON agree | B043–B061, I04 |
 
