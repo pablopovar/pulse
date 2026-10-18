@@ -1495,3 +1495,25 @@ The following list is the authoritative primary scope. Every file is assigned ab
 - `pulse-app/templates/wanted.html` — B067
 
 Close only when all 56 primary runs, eight comparisons and eight integration/reconciliation runs have recorded outcomes. A blocked runtime check is a limitation, never an assumed pass. The final opinion must distinguish reviewed source, observed runtime behavior and unverified current database state.
+
+## Execution ledger — started 18 October 2026
+
+This section records progress against the schedule above. Earlier plan sections describe intended work; this section is observed audit work. No application source was modified.
+
+### Stage 0 — orientation: complete for available source, runtime evidence pending
+
+- The linked handoff on `audit-plan` was fetched and checked against this document. Source is pinned to `5b4148c0e24030494fca8609e0180ab3a4b0fc9d`.
+- All 88 in-scope source files have been checked against their Git blob hashes. The two CSS files absent from the initial local snapshot were fetched from that commit and verified; the source set is now complete.
+- Read `pulse-app/README.md` and `pulse-app/reports/REPORT_CONTRACT.md`. Inventoried declared Flask routes, including the nested registration sites, and the seven `HANDLERS` entries. Full route-method behavior remains I01 work.
+- No production runtime or current database was supplied. No migrations were run. Isolated runtime probes are pending; this environment lacks Flask, so current observations below are source-backed, not behavioral reproductions.
+
+### Stage 1 — early risk pass: in progress
+
+| ID | Status | Source evidence | Next check |
+| --- | --- | --- | --- |
+| R1 — refresh execution provenance | Suspected high-impact defect, source-backed | `jobs/workflows.py:559–574` calls `collect_report_data(domain, site_id, seo_db, research_db)` without the current job's audit or crawl ID, then labels the new session with `execution_run_id=rid`. `services/report_data.py:80–98` selects the latest completed/partial audit for the domain and its corresponding crawl. An overlapping audit can be selected between refresh A's audit and its collection. `jobs/publication.py` checks that the staged report belongs to A's job but not that its embedded evidence does. | Isolated interleaved two-refresh probe for C04/I02. Verify actual database uniqueness/locking and report-quality gates before confirming impact. |
+| R2 — password rotation and session authorization | Suspected medium-impact access defect, source-backed | `app.py:1774–1794` stores authorized report IDs in the signed session after successful password entry. `services/security_boundary.py:168–184` accepts any session containing the report ID while password protection is enabled. `services/public_report_access.py:57–67` changes password hash and `updated_at`, but the boundary does not compare `updated_at` or another authorization generation. An already authorized browser appears to remain authorized after rotation. | Isolated Flask session probe for B015/I01; establish intended password-rotation semantics and test disable/re-enable. Environment currently lacks Flask. |
+| R3 — URL fetch boundary | Preliminary positive observation, not a completed audit | `services/safe_fetcher.py` resolves and validates addresses, connects production requests to a selected validated IP, and revalidates each redirect; response sizes and content types are bounded. | Complete B023 with edge cases and isolated transport probes, including malformed ports/hostnames and redirects. |
+| R4 — publication lease fence | Preliminary positive observation, not a completed audit | `jobs/publication.py` uses `BEGIN IMMEDIATE`, checks running job/worker/lease and the report's domain/execution ID, then updates the living pointer and publication state in one transaction. | Complete B019/B021/C04/I02; check concurrent acquisition, lease timing and alternate publication callers. |
+
+No B, C or I run is marked complete by these focused reads. Continue Stage 1, then execute Stages 2–7 in the schedule. Findings R1/R2 remain hypotheses until the specified checks or equivalent evidence resolve them.
