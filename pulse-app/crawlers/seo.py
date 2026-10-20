@@ -570,17 +570,12 @@ def _reclassify_redirect_aliases(con, domain):
     return changed
 
 
-def _sync_url_inventory(con, domain, base_url, selected_urls=None, max_depth=5, crawl_run_id=None):
-    warnings = []
-    sitemap_source = ""
-    source_evidence = []
-    try:
-        entries, sitemap_source, warnings = discover_domain_sitemap_inventory(
-            domain, max_depth=max_depth, source_evidence=source_evidence
-        )
-    except Exception as exc:
-        entries = []
-        warnings = [str(exc)]
+def _sync_url_inventory(con, domain, base_url, selected_urls=None, max_depth=5, crawl_run_id=None, discovery=None):
+    # Fetch outside the owner's SQLite write transaction; persist only after
+    # the worker has rechecked ownership under the write lock.
+    if discovery is None:
+        raise ValueError("Sitemap discovery must be prepared before inventory writes.")
+    entries, sitemap_source, warnings, source_evidence = discovery
 
     policy = get_policy(con, domain)
     try:
@@ -961,6 +956,25 @@ def crawl_worker(
     """Run one bounded crawl batch from the persistent classified frontier."""
 
     rp, robots_url, robots_error = build_robot_parser(base_url)
+    discovery = None
+    with db_factory() as read_con:
+        existing_frontier = read_con.execute(
+            "SELECT 1 FROM crawl_frontier WHERE crawl_run_id=? LIMIT 1", (run_id,)
+        ).fetchone()
+        inventory_count = read_con.execute(
+            "SELECT COUNT(*) FROM crawl_url_inventory WHERE domain=? COLLATE NOCASE",
+            (domain,),
+        ).fetchone()[0]
+        discovery_depth = int(get_policy(read_con, domain)["max_crawl_depth"])
+    if not existing_frontier and (crawl_mode != "background" or not inventory_count):
+        source_evidence = []
+        try:
+            entries, sitemap_source, warnings = discover_domain_sitemap_inventory(
+                domain, max_depth=discovery_depth, source_evidence=source_evidence
+            )
+        except Exception as exc:
+            entries, sitemap_source, warnings = [], "", [str(exc)]
+        discovery = (entries, sitemap_source, warnings, source_evidence)
     with db_factory() as con:
         con.execute("BEGIN IMMEDIATE")
         _require_crawl_owner(con, run_id, execution_run_id, worker_id)
@@ -984,6 +998,7 @@ def crawl_worker(
                     base_url,
                     selected_urls=list(selected_urls or []) + list(priority_urls or []),
                     max_depth=int(policy["max_crawl_depth"]), crawl_run_id=run_id,
+                    discovery=discovery,
                 )
             if crawl_mode == "background":
                 rows = remaining_background_inventory(con, domain, page_cap)
