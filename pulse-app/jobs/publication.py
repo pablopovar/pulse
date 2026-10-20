@@ -111,7 +111,18 @@ def publish_report_if_owned(
             con.rollback()
             return False
 
-        updates=_recommendation_updates(con,domain,json.loads(report["snapshot_json"]))
+        snapshot=json.loads(report["snapshot_json"])
+        updates=_recommendation_updates(con,domain,snapshot)
+        if updates:
+            tracking=dict(snapshot.get("recommendation_tracking") or {})
+            for key,status in updates.items():
+                if key in tracking:
+                    tracking[key]={**tracking[key], "status":status, "updated_at":now}
+            snapshot["recommendation_tracking"]=tracking
+            con.execute(
+                "UPDATE report_session SET snapshot_json=? WHERE id=?",
+                (json.dumps(snapshot,separators=(",",":")),report_id),
+            )
         _apply_recommendation_updates(con,domain,updates,now)
         con.commit()
         return True
