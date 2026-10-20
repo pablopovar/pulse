@@ -120,8 +120,12 @@ def reset_crawl(run_id):
         con.commit()
 
 
-def resume_crawl(run_id):
+def resume_crawl(run_id, job_id, worker_id):
+    from crawlers.seo import _require_crawl_owner
+
     with connect_sqlite(RESEARCH_DB) as con:
+        con.execute("BEGIN IMMEDIATE")
+        _require_crawl_owner(con, run_id, job_id, worker_id)
         con.execute(
             """
             UPDATE crawl_frontier
@@ -144,12 +148,12 @@ def run_crawl(job, worker_id):
     run_id, status = ensure_crawl(job)
     if status in {"completed", "partial"}:
         return result(status, crawl_run_id=run_id)
-    if status in {"running", "paused", "failed"}:
-        resume_crawl(run_id)
     _require_owned(
         set_job_stage(RESEARCH_DB, job["id"], worker_id=worker_id, stage="crawl"),
         stage="crawl",
     )
+    if status in {"running", "paused", "failed"}:
+        resume_crawl(run_id, job["id"], worker_id)
     urls = p.get("selected_urls") or None
     crawl_worker(
         run_id,
@@ -163,6 +167,7 @@ def run_crawl(job, worker_id):
         bool(p.get("follow_links", not bool(urls))),
         crawl_mode=p.get("crawl_mode") or "initial",
         execution_run_id=job["id"],
+        worker_id=worker_id,
         priority_urls=p.get("priority_urls") or [],
     )
     with connect_sqlite(RESEARCH_DB, readonly=True) as con:
