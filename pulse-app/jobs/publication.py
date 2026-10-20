@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from reports.web_report import _apply_recommendation_updates, _recommendation_updates
+
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,7 +49,7 @@ def publish_report_if_owned(
 
         report = con.execute(
             """
-            SELECT id
+            SELECT id,snapshot_json
             FROM report_session
             WHERE id=?
               AND domain=? COLLATE NOCASE
@@ -108,5 +111,7 @@ def publish_report_if_owned(
             con.rollback()
             return False
 
+        updates=_recommendation_updates(con,domain,json.loads(report["snapshot_json"]))
+        _apply_recommendation_updates(con,domain,updates,now)
         con.commit()
         return True
