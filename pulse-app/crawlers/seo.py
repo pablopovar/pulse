@@ -571,11 +571,18 @@ def _reclassify_redirect_aliases(con, domain):
 
 
 def _sync_url_inventory(con, domain, base_url, selected_urls=None, max_depth=5, crawl_run_id=None, discovery=None):
-    # Fetch outside the owner's SQLite write transaction; persist only after
-    # the worker has rechecked ownership under the write lock.
+    # The worker prepares discovery before its write transaction. Keep the
+    # direct helper path available for callers that use it independently.
     if discovery is None:
-        raise ValueError("Sitemap discovery must be prepared before inventory writes.")
-    entries, sitemap_source, warnings, source_evidence = discovery
+        source_evidence = []
+        try:
+            entries, sitemap_source, warnings = discover_domain_sitemap_inventory(
+                domain, max_depth=max_depth, source_evidence=source_evidence
+            )
+        except Exception as exc:
+            entries, sitemap_source, warnings = [], "", [str(exc)]
+    else:
+        entries, sitemap_source, warnings, source_evidence = discovery
 
     policy = get_policy(con, domain)
     try:
