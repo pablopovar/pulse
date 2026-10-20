@@ -23,7 +23,16 @@ def _row(con, sql: str, params=()):
     return dict(row) if row else None
 
 
-def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research_db: Path):
+def collect_report_data(
+    domain: str,
+    site_id: str | None,
+    seo_db: Path,
+    research_db: Path,
+    *,
+    execution_run_id: str,
+    audit_run_id: int,
+    crawl_run_id: int,
+):
     data: dict[str, Any] = {
         "domain": domain,
         "site_id": site_id,
@@ -74,86 +83,77 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
                     (domain,),
                 )
 
-            # An audit is the report's anchor.  Never quietly join it to an
-            # arbitrary newer crawl: use the same durable execution when it is
-            # known, otherwise record that the legacy inputs are unlinked.
-            if _exists(con, "audit_run"):
-                data["audit"] = _row(
-                    con,
-                    "SELECT * FROM audit_run WHERE domain=? AND status IN ('completed','partial') ORDER BY id DESC LIMIT 1",
-                    (domain,),
+            data["audit"] = _row(
+                con,
+                "SELECT * FROM audit_run WHERE id=? AND domain=? COLLATE NOCASE AND execution_run_id=? AND status='completed'",
+                (audit_run_id, domain, execution_run_id),
+            ) if _exists(con, "audit_run") else None
+            data["crawl"] = _row(
+                con,
+                "SELECT * FROM crawl_run WHERE id=? AND domain=? COLLATE NOCASE AND execution_run_id=? AND status IN ('completed','partial')",
+                (crawl_run_id, domain, execution_run_id),
+            ) if _exists(con, "crawl_run") else None
+            if not data["audit"] or not data["crawl"]:
+                raise RuntimeError(
+                    f"Report evidence missing or inconsistent for execution {execution_run_id}: "
+                    f"audit_run={audit_run_id}, crawl_run={crawl_run_id}"
                 )
-            if _exists(con, "crawl_run"):
-                audit_execution = (data.get("audit") or {}).get("execution_run_id")
-                if audit_execution:
-                    data["crawl"] = _row(
+                run_id = data["crawl"]["id"]
+                data["crawl_issues"] = _rows(
+                    con,
+                    """
+                    SELECT severity,title,detail,page_url
+                    FROM crawl_issue
+                    WHERE crawl_run_id=?
+                    ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2
+                                           WHEN 'medium' THEN 3 ELSE 4 END,
+                             title,page_url
+                    """,
+                    (run_id,),
+                )
+                if _exists(con, "crawl_event"):
+                    event = _row(con, "SELECT detail_json FROM crawl_event WHERE crawl_run_id=? AND event_type='agent_readiness_sources' ORDER BY id DESC LIMIT 1", (run_id,))
+                    if event:
+                        try:
+                            data["llm_sources"] = json.loads(event.get("detail_json") or "[]")
+                        except (TypeError, ValueError):
+                            data["llm_sources"] = []
+                data["crawl_pages"] = _rows(
+                    con,
+                    """
+                    SELECT path,url,status_code,title,description,canonical,
+                           word_count,internal_links,external_links,image_count,
+                           images_missing_alt,schema_types_json,indexable,response_ms,error,
+                           content_type,content_bytes,resource_type,response_sha256,audit_status,observed_at,page_type,page_type_confidence
+                    FROM crawl_page WHERE crawl_run_id=? ORDER BY path
+                    """,
+                    (run_id,),
+                )
+                if _exists(con, "resource_outcome"):
+                    data["resource_outcomes"] = _rows(
                         con,
-                        "SELECT * FROM crawl_run WHERE domain=? AND execution_run_id=? AND status IN ('completed','partial') ORDER BY id DESC LIMIT 1",
-                        (domain, audit_execution),
-                    )
-                if not data["crawl"] and not audit_execution:
-                    data["crawl"] = _row(
-                        con,
-                        "SELECT * FROM crawl_run WHERE domain=? AND status IN ('completed','partial') ORDER BY id DESC LIMIT 1",
-                        (domain,),
-                    )
-                if data["crawl"]:
-                    run_id = data["crawl"]["id"]
-                    data["crawl_issues"] = _rows(
-                        con,
-                        """
-                        SELECT severity,title,detail,page_url
-                        FROM crawl_issue
-                        WHERE crawl_run_id=?
-                        ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2
-                                               WHEN 'medium' THEN 3 ELSE 4 END,
-                                 title,page_url
-                        """,
+                        """SELECT requested_url,final_url,http_status,content_type,resource_type,response_size,response_sha256,response_headers_json,body_retained,etag,last_modified,redirect_chain_json,discovered_at,observed_at,crawl_state,audit_state,failure_kind,reason,duplicate_or_canonical_target FROM resource_outcome WHERE crawl_run_id=? ORDER BY requested_url""",
                         (run_id,),
                     )
-                    if _exists(con, "crawl_event"):
-                        event = _row(con, "SELECT detail_json FROM crawl_event WHERE crawl_run_id=? AND event_type='agent_readiness_sources' ORDER BY id DESC LIMIT 1", (run_id,))
-                        if event:
-                            try:
-                                data["llm_sources"] = json.loads(event.get("detail_json") or "[]")
-                            except (TypeError, ValueError):
-                                data["llm_sources"] = []
-                    data["crawl_pages"] = _rows(
+                if _exists(con, "sitemap_source_evidence"):
+                    data["sitemap"] = _rows(
                         con,
-                        """
-                        SELECT path,url,status_code,title,description,canonical,
-                               word_count,internal_links,external_links,image_count,
-                               images_missing_alt,schema_types_json,indexable,response_ms,error,
-                               content_type,content_bytes,resource_type,response_sha256,audit_status,observed_at,page_type,page_type_confidence
-                        FROM crawl_page WHERE crawl_run_id=? ORDER BY path
-                        """,
+                        "SELECT requested_url,source_type,discovery_origin,parent_sitemap,http_status,content_type,response_size,response_sha256,observed_at,parse_status,parse_error,child_sitemaps_json FROM sitemap_source_evidence WHERE crawl_run_id=? ORDER BY requested_url",
                         (run_id,),
                     )
-                    if _exists(con, "resource_outcome"):
-                        data["resource_outcomes"] = _rows(
-                            con,
-                            """SELECT requested_url,final_url,http_status,content_type,resource_type,response_size,response_sha256,response_headers_json,body_retained,etag,last_modified,redirect_chain_json,discovered_at,observed_at,crawl_state,audit_state,failure_kind,reason,duplicate_or_canonical_target FROM resource_outcome WHERE crawl_run_id=? ORDER BY requested_url""",
-                            (run_id,),
-                        )
-                    if _exists(con, "sitemap_source_evidence"):
-                        data["sitemap"] = _rows(
-                            con,
-                            "SELECT requested_url,source_type,discovery_origin,parent_sitemap,http_status,content_type,response_size,response_sha256,observed_at,parse_status,parse_error,child_sitemaps_json FROM sitemap_source_evidence WHERE crawl_run_id=? ORDER BY requested_url",
-                            (run_id,),
-                        )
-                        # data_coverage consumes sitemap_urls for legacy
-                        # snapshots.  Feed it the same concrete evidence used
-                        # for this crawler-backed observation.
-                        data["sitemap_urls"] = list(data["sitemap"])
-                    if _exists(con, "llm_source_evidence"):
-                        data["llm_sources"] = _rows(
-                            con,
-                            """SELECT source_key AS name,url,availability AS status,http_status,content_type,headers_json AS headers,response_size AS bytes,response_sha256 AS sha256,observed_at,raw_content AS content,body_retained,parse_json,parse_error,reason FROM llm_source_evidence WHERE crawl_run_id=? ORDER BY source_key""",
-                            (run_id,),
-                        )
-                    inventory = _rows(con, "SELECT url,source,source_sitemap,eligibility,decision_reason FROM crawl_url_inventory WHERE domain=?", (domain,)) if _exists(con, "crawl_url_inventory") else []
-                    sitemap_entries = [{"url": row["url"], "source_sitemap": row.get("source_sitemap") or ""} for row in inventory if row.get("source_sitemap")]
-                    data["sitemap_reconciliation"] = reconcile_sitemap_urls(sitemap_entries, data["crawl_pages"], inventory)
+                    # data_coverage consumes sitemap_urls for legacy
+                    # snapshots.  Feed it the same concrete evidence used
+                    # for this crawler-backed observation.
+                    data["sitemap_urls"] = list(data["sitemap"])
+                if _exists(con, "llm_source_evidence"):
+                    data["llm_sources"] = _rows(
+                        con,
+                        """SELECT source_key AS name,url,availability AS status,http_status,content_type,headers_json AS headers,response_size AS bytes,response_sha256 AS sha256,observed_at,raw_content AS content,body_retained,parse_json,parse_error,reason FROM llm_source_evidence WHERE crawl_run_id=? ORDER BY source_key""",
+                        (run_id,),
+                    )
+                inventory = _rows(con, "SELECT url,source,source_sitemap,eligibility,decision_reason FROM crawl_url_inventory WHERE domain=?", (domain,)) if _exists(con, "crawl_url_inventory") else []
+                sitemap_entries = [{"url": row["url"], "source_sitemap": row.get("source_sitemap") or ""} for row in inventory if row.get("source_sitemap")]
+                data["sitemap_reconciliation"] = reconcile_sitemap_urls(sitemap_entries, data["crawl_pages"], inventory)
 
             if data["audit"]:
                 audit_run_id = data["audit"]["id"]
@@ -233,4 +233,9 @@ def collect_report_data(domain: str, site_id: str | None, seo_db: Path, research
                 "gsc_period_end": (data.get("seo") or {}).get("period_end"),
             }
 
+    if not data["audit"] or not data["crawl"]:
+        raise RuntimeError(
+            f"Report evidence missing or inconsistent for execution {execution_run_id}: "
+            f"audit_run={audit_run_id}, crawl_run={crawl_run_id}"
+        )
     return adapter.enrich_report(data, site_id, domain)
