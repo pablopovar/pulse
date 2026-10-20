@@ -326,10 +326,10 @@ def set_recommendation_tracking(db_path:Path,domain:str,finding_key:str,status:s
     return {"finding_key":finding_key,"status":status,"note":note or "","updated_at":now}
 
 
-def _auto_update_recommendations(con,domain:str,snapshot:dict[str,Any]):
+def _recommendation_updates(con,domain:str,snapshot:dict[str,Any]):
     tracked=_load_recommendation_tracking(con,domain)
     if not tracked:
-        return
+        return {}
     view=prepare_report_view(snapshot)
     root_statuses=defaultdict(list)
     for family in view.get("families") or []:
@@ -339,14 +339,22 @@ def _auto_update_recommendations(con,domain:str,snapshot:dict[str,Any]):
             for check in category.get("checks") or []:
                 key,_=root_cause_key(str(check.get("title") or ""))
                 root_statuses[key].append(normalize_status(check.get("status")))
-    now=datetime.now(timezone.utc).isoformat(timespec="seconds")
+    updates={}
     for key,state in tracked.items():
         statuses=root_statuses.get(key) or []
         if state.get("status")=="implemented" and statuses and all(s=="PASS" for s in statuses):
-            con.execute("UPDATE recommendation_tracking SET status='verified',updated_at=? WHERE domain=? COLLATE NOCASE AND finding_key=?",(now,domain,key))
+            updates[key]="verified"
         elif state.get("status")=="verified" and any(is_issue(s) for s in statuses):
-            con.execute("UPDATE recommendation_tracking SET status='reopened',updated_at=? WHERE domain=? COLLATE NOCASE AND finding_key=?",(now,domain,key))
-    con.commit()
+            updates[key]="reopened"
+    return updates
+
+
+def _apply_recommendation_updates(con,domain:str,updates:dict[str,str],now:str):
+    for key,status in updates.items():
+        con.execute(
+            "UPDATE recommendation_tracking SET status=?,updated_at=? WHERE domain=? COLLATE NOCASE AND finding_key=?",
+            (status,now,domain,key),
+        )
 
 
 def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any],*,execution_run_id:str|None=None,publish:bool=True)->str:
@@ -405,9 +413,16 @@ def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any],*,execu
                 "observed_at":row.get("observed_at") or None,
             } for row in coverage],
         }
-        _auto_update_recommendations(con,domain,immutable)
-        immutable["recommendation_tracking"]=_load_recommendation_tracking(con,domain)
+        updates=_recommendation_updates(con,domain,immutable)
+        # The snapshot describes the state this observation will publish, while
+        # the live tracking table remains untouched until publication succeeds.
+        for key,status in updates.items():
+            immutable["recommendation_tracking"][key]={
+                **immutable["recommendation_tracking"][key], "status":status, "updated_at":now,
+            }
         con.execute("BEGIN IMMEDIATE")
+        if publish:
+            _apply_recommendation_updates(con,domain,updates,now)
         con.execute("INSERT INTO report_session(id,domain,created_at,snapshot_json,execution_run_id) VALUES (?,?,?,?,?)",(report_id,domain,now,json.dumps(immutable,default=_json_default,separators=(",",":")),execution_run_id))
         if publish:
             living=con.execute("SELECT baseline_report_id FROM domain_report WHERE domain=? COLLATE NOCASE",(domain,)).fetchone()
