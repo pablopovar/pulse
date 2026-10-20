@@ -930,6 +930,12 @@ class CrawlOwnershipLost(RuntimeError):
 
 
 def _require_crawl_owner(con, run_id, execution_run_id, worker_id):
+    # A direct bounded crawl has no durable job. Worker-driven crawls must
+    # supply both identifiers and remain owned throughout their writes.
+    if execution_run_id is None and worker_id is None:
+        return
+    if not execution_run_id or not worker_id:
+        raise CrawlOwnershipLost(f"Crawl run {run_id} has no complete job ownership identity.")
     owned = con.execute(
         """
         SELECT 1 FROM durable_job job
