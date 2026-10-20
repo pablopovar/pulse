@@ -413,13 +413,12 @@ def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any],*,execu
                 "observed_at":row.get("observed_at") or None,
             } for row in coverage],
         }
-        updates=_recommendation_updates(con,domain,immutable)
-        # The snapshot describes the state this observation will publish, while
-        # the live tracking table remains untouched until publication succeeds.
-        for key,status in updates.items():
-            immutable["recommendation_tracking"][key]={
-                **immutable["recommendation_tracking"][key], "status":status, "updated_at":now,
-            }
+        if publish:
+            updates=_recommendation_updates(con,domain,immutable)
+            for key,status in updates.items():
+                immutable["recommendation_tracking"][key]={
+                    **immutable["recommendation_tracking"][key], "status":status, "updated_at":now,
+                }
         con.execute("BEGIN IMMEDIATE")
         if publish:
             _apply_recommendation_updates(con,domain,updates,now)
