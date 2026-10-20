@@ -1517,3 +1517,13 @@ This section records progress against the schedule above. Earlier plan sections 
 | R4 — publication lease fence | Preliminary positive observation, not a completed audit | `jobs/publication.py` uses `BEGIN IMMEDIATE`, checks running job/worker/lease and the report's domain/execution ID, then updates the living pointer and publication state in one transaction. | Complete B019/B021/C04/I02; check concurrent acquisition, lease timing and alternate publication callers. |
 
 No B, C or I run is marked complete by these focused reads. Continue Stage 1, then execute Stages 2–7 in the schedule. Findings R1/R2 remain hypotheses until the specified checks or equivalent evidence resolve them.
+
+### Stage 1 probe checkpoint — 20 October 2026
+
+The earlier R1/R2 labels remain for continuity; these probes verify the named function behavior, not the entire Flask/worker flow. The isolated probe script is ephemeral and outside the audit deliverable. It extracts the production function bodies without modifying application code or reading excluded tests/migrations.
+
+- **R1, confirmed selection behavior; end-to-end impact still to establish.** In a temporary SQLite database containing completed audit/crawl pairs for `job-A` and `job-B` under the same domain, executing the actual `collect_report_data` function returned `audit_run_id=2`, `crawl_run_id=2`, `execution_run_id=job-B`, `inputs_linked=True`. The function accepts no expected execution ID. A refresh for A can therefore receive B's evidence if B becomes the latest eligible audit before A collects. The worker call and later staged session code support this path, but an interleaved full workflow and any quality gate remain to be checked before assigning final severity.
+- **R2, confirmed middleware behavior; product semantics still to establish.** Executing the actual `_require_public_report_password` function with an enabled password policy whose `updated_at` had changed and a session containing `report-1` returned `None`, permitting the request. The middleware does not compare the session grant with the policy version. This demonstrates that password rotation alone does not invalidate an authorized session at this boundary; full Flask route behavior and intended rotation semantics remain I01 work.
+- **Probe limits.** The function bodies ran with narrow stubs for external dependencies, a temporary database with only needed tables, and a simulated Flask request/session. They did not exercise actual HTTP requests, the production database, a live worker, or a full report. No tests or migrations were audited or executed.
+
+B015, B019, B021, B023, B046, C04, I01, I02 and I04 remain open. Next: complete the URL and ownership boundaries, then proceed through the scheduled flow batches.
