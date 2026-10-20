@@ -11,6 +11,7 @@ def _basic(username: str, password: str) -> str:
 
 
 def _configure_env(monkeypatch, mode="application"):
+    monkeypatch.setattr("services.security_boundary.access_state_for_report", lambda *_: None)
     monkeypatch.setenv("PULSE_SECURITY_MODE", mode)
     monkeypatch.setenv("PULSE_SECRET_KEY", "test-secret-key")
     monkeypatch.setenv("PULSE_ADMIN_USERNAME", "admin")
@@ -120,6 +121,21 @@ def test_public_report_bypasses_management_auth(monkeypatch):
     assert client.get("/reports/capability123").status_code == 200
     assert client.get("/reports/capability123/export.json").status_code == 200
     assert client.get("/reports/capability123/pdf").status_code == 200
+
+
+def test_public_report_policy_lookup_error_denies_access(monkeypatch, tmp_path):
+    import sqlite3
+    import services.security_boundary as boundary
+
+    app = _make_app(monkeypatch)
+    db = tmp_path / "incomplete.db"
+    with sqlite3.connect(db) as con:
+        con.execute("CREATE TABLE report_session(id TEXT PRIMARY KEY, domain TEXT)")
+        con.execute("INSERT INTO report_session VALUES ('capability123', 'example.com')")
+    app.config["RESEARCH_DB"] = db
+    from services.public_report_access import access_state_for_report
+    monkeypatch.setattr(boundary, "access_state_for_report", access_state_for_report)
+    assert app.test_client().get("/reports/capability123").status_code == 503
 
 
 def test_public_skin_is_readable_but_editor_requires_management_auth(monkeypatch):
