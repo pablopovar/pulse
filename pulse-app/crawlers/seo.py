@@ -631,7 +631,6 @@ def _sync_url_inventory(con, domain, base_url, selected_urls=None, max_depth=5, 
                        ON CONFLICT(crawl_run_id,requested_url) DO UPDATE SET parse_status=excluded.parse_status,parse_error=excluded.parse_error,observed_at=excluded.observed_at""",
                     (crawl_run_id, domain, source, "unknown", "conventional_filename", utcnow(), "failed", warning),
                 )
-    con.commit()
     return len(entries), sitemap_source, warnings
 
 
