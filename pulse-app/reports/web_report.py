@@ -326,10 +326,10 @@ def set_recommendation_tracking(db_path:Path,domain:str,finding_key:str,status:s
     return {"finding_key":finding_key,"status":status,"note":note or "","updated_at":now}
 
 
-def _auto_update_recommendations(con,domain:str,snapshot:dict[str,Any]):
+def _recommendation_updates(con,domain:str,snapshot:dict[str,Any]):
     tracked=_load_recommendation_tracking(con,domain)
     if not tracked:
-        return
+        return {}
     view=prepare_report_view(snapshot)
     root_statuses=defaultdict(list)
     for family in view.get("families") or []:
@@ -339,14 +339,22 @@ def _auto_update_recommendations(con,domain:str,snapshot:dict[str,Any]):
             for check in category.get("checks") or []:
                 key,_=root_cause_key(str(check.get("title") or ""))
                 root_statuses[key].append(normalize_status(check.get("status")))
-    now=datetime.now(timezone.utc).isoformat(timespec="seconds")
+    updates={}
     for key,state in tracked.items():
         statuses=root_statuses.get(key) or []
         if state.get("status")=="implemented" and statuses and all(s=="PASS" for s in statuses):
-            con.execute("UPDATE recommendation_tracking SET status='verified',updated_at=? WHERE domain=? COLLATE NOCASE AND finding_key=?",(now,domain,key))
+            updates[key]="verified"
         elif state.get("status")=="verified" and any(is_issue(s) for s in statuses):
-            con.execute("UPDATE recommendation_tracking SET status='reopened',updated_at=? WHERE domain=? COLLATE NOCASE AND finding_key=?",(now,domain,key))
-    con.commit()
+            updates[key]="reopened"
+    return updates
+
+
+def _apply_recommendation_updates(con,domain:str,updates:dict[str,str],now:str):
+    for key,status in updates.items():
+        con.execute(
+            "UPDATE recommendation_tracking SET status=?,updated_at=? WHERE domain=? COLLATE NOCASE AND finding_key=?",
+            (status,now,domain,key),
+        )
 
 
 def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any],*,execution_run_id:str|None=None,publish:bool=True)->str:
@@ -405,9 +413,15 @@ def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any],*,execu
                 "observed_at":row.get("observed_at") or None,
             } for row in coverage],
         }
-        _auto_update_recommendations(con,domain,immutable)
-        immutable["recommendation_tracking"]=_load_recommendation_tracking(con,domain)
+        if publish:
+            updates=_recommendation_updates(con,domain,immutable)
+            for key,status in updates.items():
+                immutable["recommendation_tracking"][key]={
+                    **immutable["recommendation_tracking"][key], "status":status, "updated_at":now,
+                }
         con.execute("BEGIN IMMEDIATE")
+        if publish:
+            _apply_recommendation_updates(con,domain,updates,now)
         con.execute("INSERT INTO report_session(id,domain,created_at,snapshot_json,execution_run_id) VALUES (?,?,?,?,?)",(report_id,domain,now,json.dumps(immutable,default=_json_default,separators=(",",":")),execution_run_id))
         if publish:
             living=con.execute("SELECT baseline_report_id FROM domain_report WHERE domain=? COLLATE NOCASE",(domain,)).fetchone()
@@ -483,8 +497,40 @@ def load_current_report_session(db_path:Path,domain:str):
 
 
 def list_report_sessions(db_path:Path,domain:str,limit:int=12):
+    """List published observations, with the living pointer first.
+
+    Staged sessions can be retained for recovery, but must not appear as the
+    current report or as a client-facing historical observation.
+    """
     with _connect(db_path) as con:
-        rows=con.execute("SELECT id,domain,created_at FROM report_session WHERE domain=? COLLATE NOCASE ORDER BY created_at DESC LIMIT ?",(domain,limit)).fetchall()
+        current=con.execute(
+            "SELECT current_report_id FROM domain_report WHERE domain=? COLLATE NOCASE",
+            (domain,),
+        ).fetchone()
+        if not current or not current["current_report_id"]:
+            return []
+        current_id=current["current_report_id"]
+        rows=con.execute(
+            """
+            SELECT rs.id,rs.domain,rs.created_at
+            FROM report_session rs
+            LEFT JOIN durable_job job ON job.id=rs.execution_run_id
+            WHERE rs.domain=? COLLATE NOCASE
+              AND (
+                rs.id=?
+                OR job.publication_status='published'
+                OR (
+                  job.id IS NULL
+                  AND rs.created_at<=(
+                    SELECT created_at FROM report_session WHERE id=?
+                  )
+                )
+              )
+            ORDER BY CASE WHEN rs.id=? THEN 0 ELSE 1 END,rs.created_at DESC
+            LIMIT ?
+            """,
+            (domain,current_id,current_id,current_id,limit),
+        ).fetchall()
     return [dict(r) for r in rows]
 
 

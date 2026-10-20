@@ -570,17 +570,19 @@ def _reclassify_redirect_aliases(con, domain):
     return changed
 
 
-def _sync_url_inventory(con, domain, base_url, selected_urls=None, max_depth=5, crawl_run_id=None):
-    warnings = []
-    sitemap_source = ""
-    source_evidence = []
-    try:
-        entries, sitemap_source, warnings = discover_domain_sitemap_inventory(
-            domain, max_depth=max_depth, source_evidence=source_evidence
-        )
-    except Exception as exc:
-        entries = []
-        warnings = [str(exc)]
+def _sync_url_inventory(con, domain, base_url, selected_urls=None, max_depth=5, crawl_run_id=None, discovery=None):
+    # The worker prepares discovery before its write transaction. Keep the
+    # direct helper path available for callers that use it independently.
+    if discovery is None:
+        source_evidence = []
+        try:
+            entries, sitemap_source, warnings = discover_domain_sitemap_inventory(
+                domain, max_depth=max_depth, source_evidence=source_evidence
+            )
+        except Exception as exc:
+            entries, sitemap_source, warnings = [], "", [str(exc)]
+    else:
+        entries, sitemap_source, warnings, source_evidence = discovery
 
     policy = get_policy(con, domain)
     try:
@@ -631,7 +633,6 @@ def _sync_url_inventory(con, domain, base_url, selected_urls=None, max_depth=5, 
                        ON CONFLICT(crawl_run_id,requested_url) DO UPDATE SET parse_status=excluded.parse_status,parse_error=excluded.parse_error,observed_at=excluded.observed_at""",
                     (crawl_run_id, domain, source, "unknown", "conventional_filename", utcnow(), "failed", warning),
                 )
-    con.commit()
     return len(entries), sitemap_source, warnings
 
 
@@ -916,13 +917,37 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
             if not duplicate_of:
                 classification = prior["classification"] if prior else "unknown"
                 schedule_next_crawl(con, inventory_id, classification, changed=not unchanged)
-    con.commit()
     return {
         "links": [target for target, internal, _ in links if internal],
         "unchanged": unchanged,
         "duplicate_of": duplicate_of,
         "failure_kind": _failure_kind(result),
     }
+
+
+class CrawlOwnershipLost(RuntimeError):
+    """The worker no longer owns the durable job for this crawl."""
+
+
+def _require_crawl_owner(con, run_id, execution_run_id, worker_id):
+    # A direct bounded crawl has no durable job. Worker-driven crawls must
+    # supply both identifiers and remain owned throughout their writes.
+    if execution_run_id is None and worker_id is None:
+        return
+    if not execution_run_id or not worker_id:
+        raise CrawlOwnershipLost(f"Crawl run {run_id} has no complete job ownership identity.")
+    owned = con.execute(
+        """
+        SELECT 1 FROM durable_job job
+        JOIN crawl_run crawl ON crawl.execution_run_id=job.id
+        WHERE crawl.id=? AND job.id=? AND job.status='running'
+          AND job.worker_id=? AND job.lease_expires_at IS NOT NULL
+          AND job.lease_expires_at>=?
+        """,
+        (run_id, execution_run_id, worker_id, utcnow()),
+    ).fetchone()
+    if owned is None:
+        raise CrawlOwnershipLost(f"Crawl run {run_id} is no longer owned by {worker_id}.")
 
 
 def crawl_worker(
@@ -938,12 +963,34 @@ def crawl_worker(
     *,
     crawl_mode="initial",
     execution_run_id=None,
+    worker_id=None,
     priority_urls=None,
 ):
     """Run one bounded crawl batch from the persistent classified frontier."""
 
     rp, robots_url, robots_error = build_robot_parser(base_url)
+    discovery = None
+    with db_factory() as read_con:
+        existing_frontier = read_con.execute(
+            "SELECT 1 FROM crawl_frontier WHERE crawl_run_id=? LIMIT 1", (run_id,)
+        ).fetchone()
+        inventory_count = read_con.execute(
+            "SELECT COUNT(*) FROM crawl_url_inventory WHERE domain=? COLLATE NOCASE",
+            (domain,),
+        ).fetchone()[0]
+        discovery_depth = int(get_policy(read_con, domain)["max_crawl_depth"])
+    if not existing_frontier and (crawl_mode != "background" or not inventory_count):
+        source_evidence = []
+        try:
+            entries, sitemap_source, warnings = discover_domain_sitemap_inventory(
+                domain, max_depth=discovery_depth, source_evidence=source_evidence
+            )
+        except Exception as exc:
+            entries, sitemap_source, warnings = [], "", [str(exc)]
+        discovery = (entries, sitemap_source, warnings, source_evidence)
     with db_factory() as con:
+        con.execute("BEGIN IMMEDIATE")
+        _require_crawl_owner(con, run_id, execution_run_id, worker_id)
         policy = get_policy(con, domain)
         _revalidate_legacy_duplicates(con, domain)
         _reclassify_redirect_aliases(con, domain)
@@ -964,6 +1011,7 @@ def crawl_worker(
                     base_url,
                     selected_urls=list(selected_urls or []) + list(priority_urls or []),
                     max_depth=int(policy["max_crawl_depth"]), crawl_run_id=run_id,
+                    discovery=discovery,
                 )
             if crawl_mode == "background":
                 rows = remaining_background_inventory(con, domain, page_cap)
@@ -1039,6 +1087,8 @@ def crawl_worker(
                 return control
 
             with db_factory() as con:
+                con.execute("BEGIN IMMEDIATE")
+                _require_crawl_owner(con, run_id, execution_run_id, worker_id)
                 item = con.execute(
                     """
                     SELECT f.*,u.url,u.classification,u.etag,u.last_modified,u.crawl_depth
@@ -1103,6 +1153,8 @@ def crawl_worker(
                         )
 
             with db_factory() as con:
+                con.execute("BEGIN IMMEDIATE")
+                _require_crawl_owner(con, run_id, execution_run_id, worker_id)
                 persisted = persist_page(
                     con,
                     run_id,
@@ -1199,6 +1251,8 @@ def crawl_worker(
                 time.sleep(delay_ms / 1000.0)
 
         with db_factory() as con:
+            con.execute("BEGIN IMMEDIATE")
+            _require_crawl_owner(con, run_id, execution_run_id, worker_id)
             broken = con.execute(
                 """
                 SELECT DISTINCT l.source_url,l.target_url,p.status_code
@@ -1251,8 +1305,12 @@ def crawl_worker(
             )
             con.commit()
         return status
+    except CrawlOwnershipLost:
+        raise
     except Exception as exc:
         with db_factory() as con:
+            con.execute("BEGIN IMMEDIATE")
+            _require_crawl_owner(con, run_id, execution_run_id, worker_id)
             con.execute(
                 "UPDATE crawl_run SET status='failed',completed_at=?,current_url='',error=?,status_reason=? WHERE id=?",
                 (utcnow(), str(exc), "Crawler exception.", run_id),

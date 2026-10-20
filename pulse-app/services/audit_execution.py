@@ -12,6 +12,25 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+class AuditOwnershipLost(RuntimeError):
+    """The worker no longer owns the durable job for this audit."""
+
+
+def _require_audit_owner(con, run_id: int, job_id: str, worker_id: str) -> None:
+    owned = con.execute(
+        """
+        SELECT 1 FROM durable_job job
+        JOIN audit_run audit ON audit.execution_run_id=job.id
+        WHERE audit.id=? AND job.id=? AND job.status='running'
+          AND job.worker_id=? AND job.lease_expires_at IS NOT NULL
+          AND job.lease_expires_at>=?
+        """,
+        (run_id, job_id, worker_id, _now()),
+    ).fetchone()
+    if owned is None:
+        raise AuditOwnershipLost(f"Audit run {run_id} is no longer owned by {worker_id}.")
+
+
 def recompute_domain_summary(con, run_id: int, domain: str) -> None:
     pages = con.execute(
         "SELECT geo_score,aeo_score,combined_score FROM audit_page WHERE audit_run_id=?",
@@ -69,12 +88,17 @@ def store_structured_audit(
     page_id: int,
     url: str,
     report: dict,
+    *,
+    job_id: str,
+    worker_id: str,
 ) -> None:
     capture = report.get("capture", {})
     geo = report.get("geo", {})
     aeo = report.get("aeo", {})
     combined = report.get("combined", {})
     with connect_sqlite(db_path) as con:
+        con.execute("BEGIN IMMEDIATE")
+        _require_audit_owner(con, run_id, job_id, worker_id)
         con.execute(
             """
             INSERT OR REPLACE INTO audit_page(
@@ -119,16 +143,26 @@ def run_audit_pages(
     domain: str,
     run_id: int,
     pages: list[dict],
+    *,
+    job_id: str,
+    worker_id: str,
 ) -> str:
     errors: list[str] = []
     for page in pages:
         try:
             report = run_geo_aeo_audit(page["url"])
-            store_structured_audit(db_path, domain, run_id, page["id"], page["url"], report)
+            store_structured_audit(
+                db_path, domain, run_id, page["id"], page["url"], report,
+                job_id=job_id, worker_id=worker_id,
+            )
+        except AuditOwnershipLost:
+            raise
         except Exception as exc:
             errors.append(f'{page["url"]}: {exc}')
     status = "completed" if not errors else ("partial" if len(errors) < len(pages) else "failed")
     with connect_sqlite(db_path) as con:
+        con.execute("BEGIN IMMEDIATE")
+        _require_audit_owner(con, run_id, job_id, worker_id)
         con.execute(
             "UPDATE audit_run SET status=?,completed_at=?,error=? WHERE id=?",
             (status, _now(), "\n".join(errors), run_id),
