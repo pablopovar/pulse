@@ -561,6 +561,9 @@ def run_report_refresh(job, worker_id):
         site_id=site_id_value(site),
         seo_db=SEO_DB,
         research_db=RESEARCH_DB,
+        execution_run_id=rid,
+        audit_run_id=audit["result_ref"]["audit_run_id"],
+        crawl_run_id=crawl["result_ref"]["crawl_run_id"],
     )
     data["selected_sources"] = selected_source_keys(
         site, research_db=RESEARCH_DB, opengsc_db=SEO_DB
