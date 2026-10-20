@@ -1,4 +1,5 @@
 import json
+import threading
 
 import pytest
 
@@ -115,3 +116,111 @@ def test_staged_report_does_not_change_live_tracking_or_current_listing(tmp_path
         assert snapshot["recommendation_tracking"]["finding"]["status"] == "verified"
         assert con.execute("SELECT current_report_id FROM domain_report WHERE domain=?", (DOMAIN,)).fetchone()[0] == staged
     assert web_report.list_report_sessions(db, DOMAIN)[0]["id"] == staged
+
+
+def test_two_refresh_workflows_keep_their_own_evidence(tmp_path, monkeypatch):
+    """B's newer audit must not be captured in A's report assembly."""
+    from jobs import workflows
+    from services import report_data
+
+    db = tmp_path / "pulse.db"
+    migrate_up(db)
+    with connect_sqlite(db) as con:
+        con.execute(
+            "INSERT INTO dashboard_domain(domain,base_url,created_at,updated_at) "
+            "VALUES (?, ?, 'now', 'now')", (DOMAIN, "https://example.com"),
+        )
+        page_id = con.execute(
+            "INSERT INTO site_page(domain,url,path,source,discovered_at,updated_at) "
+            "VALUES (?, ?, '/', 'sitemap', 'now', 'now')",
+            (DOMAIN, "https://example.com/"),
+        ).lastrowid
+        con.commit()
+    enqueue_job(db, "report_refresh", domain=DOMAIN, payload={"domain": DOMAIN}, job_id="A")
+    enqueue_job(db, "report_refresh", domain=DOMAIN, payload={"domain": DOMAIN}, job_id="B")
+    first = claim_next_job(db, worker_id="worker-A", lease_seconds=60)
+    second = claim_next_job(db, worker_id="worker-B", lease_seconds=60)
+    assert {first["id"], second["id"]} == {"A", "B"}
+    monkeypatch.setattr(workflows, "RESEARCH_DB", db)
+    monkeypatch.setattr(workflows, "SEO_DB", tmp_path / "seo.db")
+    monkeypatch.setattr(workflows, "schedule_background_crawl", lambda *a, **kw: None)
+    monkeypatch.setattr(workflows, "selected_source_keys", lambda *a, **kw: [])
+    monkeypatch.setattr(workflows, "domain_sources_for_site", lambda *a, **kw: [])
+    monkeypatch.setattr(workflows, "manual_ai_source_for_report", lambda *a, **kw: {})
+    monkeypatch.setattr(workflows, "load_client_report_config", lambda *a, **kw: {})
+
+    class EmptyAdapter:
+        def __init__(self, _path):
+            pass
+
+        def report_core(self, _site_id):
+            return {}
+
+        def enrich_report(self, data, _site_id, _domain):
+            return data
+
+    monkeypatch.setattr(report_data, "OpenGSCAdapter", EmptyAdapter)
+
+    def crawl(job, _worker_id):
+        with connect_sqlite(db) as con:
+            run_id = con.execute(
+                "INSERT INTO crawl_run(domain,base_url,status,page_cap,delay_ms,obey_robots,execution_run_id) "
+                "VALUES (?, ?, 'completed', 1, 0, 1, ?)",
+                (DOMAIN, "https://example.com", job["id"]),
+            ).lastrowid
+            con.execute(
+                "INSERT INTO crawl_page(crawl_run_id,url,final_url,path,status_code,created_at) "
+                "VALUES (?, ?, ?, '/', 200, 'now')",
+                (run_id, "https://example.com/", "https://example.com/"),
+            )
+            con.commit()
+        return {"status": "completed", "result_ref": {"crawl_run_id": run_id}}
+
+    b_audit_ready = threading.Event()
+
+    def audit(job, _worker_id):
+        with connect_sqlite(db) as con:
+            run_id = con.execute(
+                "INSERT INTO audit_run(domain,scope,status,started_at,execution_run_id) "
+                "VALUES (?, 'report', 'completed', 'now', ?)",
+                (DOMAIN, job["id"]),
+            ).lastrowid
+            con.commit()
+        if job["id"] == "A":
+            assert b_audit_ready.wait(10), "B did not complete its newer audit"
+        else:
+            b_audit_ready.set()
+        return {"status": "completed", "result_ref": {"audit_run_id": run_id}}
+
+    monkeypatch.setattr(workflows, "run_crawl", crawl)
+    monkeypatch.setattr(workflows, "run_audit", audit)
+    results = {}
+    errors = []
+
+    def run(job, owner):
+        try:
+            results[job["id"]] = workflows.run_report_refresh(job, owner)
+        except BaseException as exc:
+            errors.append(exc)
+
+    ta = threading.Thread(target=run, args=(first, "worker-A"))
+    tb = threading.Thread(target=run, args=(second, "worker-B"))
+    ta.start()
+    tb.start()
+    ta.join(15)
+    tb.join(15)
+    assert not ta.is_alive() and not tb.is_alive()
+    assert not errors, errors
+    with connect_sqlite(db, readonly=True) as con:
+        for job_id in ("A", "B"):
+            ref = results[job_id]["result_ref"]
+            row = con.execute(
+                "SELECT snapshot_json,execution_run_id FROM report_session WHERE id=?",
+                (ref["report_id"],),
+            ).fetchone()
+            snapshot = json.loads(row["snapshot_json"])
+            assert row["execution_run_id"] == job_id
+            assert snapshot["audit"]["id"] == ref["audit_run_id"]
+            assert snapshot["crawl"]["id"] == ref["crawl_run_id"]
+            assert snapshot["audit"]["execution_run_id"] == job_id
+            assert snapshot["crawl"]["execution_run_id"] == job_id
