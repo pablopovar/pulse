@@ -483,8 +483,40 @@ def load_current_report_session(db_path:Path,domain:str):
 
 
 def list_report_sessions(db_path:Path,domain:str,limit:int=12):
+    """List published observations, with the living pointer first.
+
+    Staged sessions can be retained for recovery, but must not appear as the
+    current report or as a client-facing historical observation.
+    """
     with _connect(db_path) as con:
-        rows=con.execute("SELECT id,domain,created_at FROM report_session WHERE domain=? COLLATE NOCASE ORDER BY created_at DESC LIMIT ?",(domain,limit)).fetchall()
+        current=con.execute(
+            "SELECT current_report_id FROM domain_report WHERE domain=? COLLATE NOCASE",
+            (domain,),
+        ).fetchone()
+        if not current or not current["current_report_id"]:
+            return []
+        current_id=current["current_report_id"]
+        rows=con.execute(
+            """
+            SELECT rs.id,rs.domain,rs.created_at
+            FROM report_session rs
+            LEFT JOIN durable_job job ON job.id=rs.execution_run_id
+            WHERE rs.domain=? COLLATE NOCASE
+              AND (
+                rs.id=?
+                OR job.publication_status='published'
+                OR (
+                  job.id IS NULL
+                  AND rs.created_at<=(
+                    SELECT created_at FROM report_session WHERE id=?
+                  )
+                )
+              )
+            ORDER BY CASE WHEN rs.id=? THEN 0 ELSE 1 END,rs.created_at DESC
+            LIMIT ?
+            """,
+            (domain,current_id,current_id,current_id,limit),
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
