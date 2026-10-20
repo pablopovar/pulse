@@ -916,13 +916,31 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
             if not duplicate_of:
                 classification = prior["classification"] if prior else "unknown"
                 schedule_next_crawl(con, inventory_id, classification, changed=not unchanged)
-    con.commit()
     return {
         "links": [target for target, internal, _ in links if internal],
         "unchanged": unchanged,
         "duplicate_of": duplicate_of,
         "failure_kind": _failure_kind(result),
     }
+
+
+class CrawlOwnershipLost(RuntimeError):
+    """The worker no longer owns the durable job for this crawl."""
+
+
+def _require_crawl_owner(con, run_id, execution_run_id, worker_id):
+    owned = con.execute(
+        """
+        SELECT 1 FROM durable_job job
+        JOIN crawl_run crawl ON crawl.execution_run_id=job.id
+        WHERE crawl.id=? AND job.id=? AND job.status='running'
+          AND job.worker_id=? AND job.lease_expires_at IS NOT NULL
+          AND job.lease_expires_at>=?
+        """,
+        (run_id, execution_run_id, worker_id, utcnow()),
+    ).fetchone()
+    if owned is None:
+        raise CrawlOwnershipLost(f"Crawl run {run_id} is no longer owned by {worker_id}.")
 
 
 def crawl_worker(
@@ -938,12 +956,15 @@ def crawl_worker(
     *,
     crawl_mode="initial",
     execution_run_id=None,
+    worker_id=None,
     priority_urls=None,
 ):
     """Run one bounded crawl batch from the persistent classified frontier."""
 
     rp, robots_url, robots_error = build_robot_parser(base_url)
     with db_factory() as con:
+        con.execute("BEGIN IMMEDIATE")
+        _require_crawl_owner(con, run_id, execution_run_id, worker_id)
         policy = get_policy(con, domain)
         _revalidate_legacy_duplicates(con, domain)
         _reclassify_redirect_aliases(con, domain)
@@ -1039,6 +1060,8 @@ def crawl_worker(
                 return control
 
             with db_factory() as con:
+                con.execute("BEGIN IMMEDIATE")
+                _require_crawl_owner(con, run_id, execution_run_id, worker_id)
                 item = con.execute(
                     """
                     SELECT f.*,u.url,u.classification,u.etag,u.last_modified,u.crawl_depth
@@ -1103,6 +1126,8 @@ def crawl_worker(
                         )
 
             with db_factory() as con:
+                con.execute("BEGIN IMMEDIATE")
+                _require_crawl_owner(con, run_id, execution_run_id, worker_id)
                 persisted = persist_page(
                     con,
                     run_id,
@@ -1199,6 +1224,8 @@ def crawl_worker(
                 time.sleep(delay_ms / 1000.0)
 
         with db_factory() as con:
+            con.execute("BEGIN IMMEDIATE")
+            _require_crawl_owner(con, run_id, execution_run_id, worker_id)
             broken = con.execute(
                 """
                 SELECT DISTINCT l.source_url,l.target_url,p.status_code
@@ -1251,8 +1278,12 @@ def crawl_worker(
             )
             con.commit()
         return status
+    except CrawlOwnershipLost:
+        raise
     except Exception as exc:
         with db_factory() as con:
+            con.execute("BEGIN IMMEDIATE")
+            _require_crawl_owner(con, run_id, execution_run_id, worker_id)
             con.execute(
                 "UPDATE crawl_run SET status='failed',completed_at=?,current_url='',error=?,status_reason=? WHERE id=?",
                 (utcnow(), str(exc), "Crawler exception.", run_id),
