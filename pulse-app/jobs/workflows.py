@@ -231,8 +231,12 @@ def ensure_audit(job, scope):
         return int(cur.lastrowid), "running"
 
 
-def reset_audit(run_id):
+def reset_audit(run_id, job_id, worker_id):
+    from services.audit_execution import _require_audit_owner
+
     with connect_sqlite(RESEARCH_DB) as con:
+        con.execute("BEGIN IMMEDIATE")
+        _require_audit_owner(con, run_id, job_id, worker_id)
         ids = [
             int(row["id"])
             for row in con.execute("SELECT id FROM audit_page WHERE audit_run_id=?", (run_id,))
@@ -265,20 +269,23 @@ def audit_pages(domain, page_ids):
 
 def run_audit(job, worker_id):
     p = job["payload"]
-    run_id, status = ensure_audit(job, p.get("scope") or "whole_site")
-    if status in {"completed", "partial"}:
-        return result(status, audit_run_id=run_id)
-    reset_audit(run_id)
     _require_owned(
         set_job_stage(RESEARCH_DB, job["id"], worker_id=worker_id, stage="audit"),
         stage="audit",
     )
+    run_id, status = ensure_audit(job, p.get("scope") or "whole_site")
+    if status in {"completed", "partial"}:
+        return result(status, audit_run_id=run_id)
+    reset_audit(run_id, job["id"], worker_id)
     pages = audit_pages(p["domain"], p.get("page_ids") or [])
     if not pages:
         raise RuntimeError(
             "No site pages are available to audit. Run page discovery before the audit."
         )
-    status = run_audit_pages(RESEARCH_DB, p["domain"], run_id, pages)
+    status = run_audit_pages(
+        RESEARCH_DB, p["domain"], run_id, pages,
+        job_id=job["id"], worker_id=worker_id,
+    )
     if status == "failed":
         with connect_sqlite(RESEARCH_DB, readonly=True) as con:
             row = con.execute("SELECT error FROM audit_run WHERE id=?", (run_id,)).fetchone()
