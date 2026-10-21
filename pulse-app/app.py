@@ -35,7 +35,7 @@ import json
 APP_DIR = Path(__file__).resolve().parent
 SEO_DB = Path(os.environ.get("SEO_DB", "/data/opengsc/prod.db"))
 REPORTS_DIR = Path(os.environ.get("REPORTS_DIR", "/data/reports"))
-RESEARCH_DB = Path(os.environ.get("RESEARCH_DB", "/data/dashboard/research.db"))
+RESEARCH_DB = Path(os.environ.get("RESEARCH_DB", "/data/audit/research.db"))
 from audits.geo_aeo.service import run_audit as run_geo_aeo_audit
 from reports.web_report import (
     load_client_report_config,
@@ -70,6 +70,7 @@ from services.source_inventory import (
 )
 
 app = Flask(__name__)
+app.config["RESEARCH_DB"] = RESEARCH_DB
 configure_security(app)
 
 
@@ -1232,6 +1233,9 @@ def research_bulk_tag(domain):
             for value in request.form.getlist("keyword_ids"):
                 try: ids.append(int(value))
                 except (TypeError,ValueError): pass
+        if ids:
+            ph=','.join('?' for _ in ids)
+            ids=[r["id"] for r in con.execute(f"SELECT id FROM research_keyword WHERE domain=? AND id IN ({ph})",[domain,*ids])]
         if not ids: return research_redirect(domain,"No keywords were selected.",request.form)
         tag_id=None
         if action=="add" and new_tag:
@@ -1254,6 +1258,9 @@ def research_bulk_delete(domain):
             for value in request.form.getlist("keyword_ids"):
                 try: ids.append(int(value))
                 except (TypeError,ValueError): pass
+        if ids:
+            ph=','.join('?' for _ in ids)
+            ids=[r["id"] for r in con.execute(f"SELECT id FROM research_keyword WHERE domain=? AND id IN ({ph})",[domain,*ids])]
         if not ids: return research_redirect(domain,"No keywords were selected.",request.form)
         ph=','.join('?' for _ in ids); con.execute(f"DELETE FROM research_keyword_tag WHERE research_keyword_id IN ({ph})",ids); con.execute(f"DELETE FROM research_keyword WHERE domain=? AND id IN ({ph})",[domain,*ids]); con.commit()
     return research_redirect(domain,f"Deleted {len(ids)} research keyword(s).",request.form)
@@ -1316,7 +1323,7 @@ def research_edit(domain,keyword_id):
 def research_delete(domain,keyword_id):
     get_site(domain)
     with research_db() as con:
-        con.execute("DELETE FROM research_keyword_tag WHERE research_keyword_id=?",(keyword_id,)); con.execute("DELETE FROM research_keyword WHERE id=? AND domain=?",(keyword_id,domain)); con.commit()
+        con.execute("DELETE FROM research_keyword_tag WHERE research_keyword_id=? AND EXISTS (SELECT 1 FROM research_keyword WHERE id=? AND domain=?)",(keyword_id,keyword_id,domain)); con.execute("DELETE FROM research_keyword WHERE id=? AND domain=?",(keyword_id,domain)); con.commit()
     return research_redirect(domain,"Research keyword deleted.",request.form)
 
 
@@ -1527,7 +1534,11 @@ def taxonomy_apply(domain):
                 row=con.execute("SELECT id FROM page_tag WHERE id=? AND domain=?",(int(tag_id_raw),domain)).fetchone()
                 tag_id=row["id"] if row else None
             if tag_id is None: abort(400)
-            ids=[int(v) for v in values if v.isdigit()]
+            submitted=[int(v) for v in values if v.isdigit()]
+            ids=[]
+            if submitted:
+                ph=','.join('?' for _ in submitted)
+                ids=[r["id"] for r in con.execute(f"SELECT id FROM site_page WHERE domain=? AND id IN ({ph})",[domain,*submitted])]
             if action=="add":
                 con.executemany("INSERT OR IGNORE INTO site_page_tag(page_id,tag_id) VALUES (?,?)",[(i,tag_id) for i in ids])
             else:
@@ -1577,6 +1588,7 @@ def keyword_wanted_set(domain):
     if not keyword: abort(400)
     now=datetime.now(timezone.utc).isoformat(timespec="seconds")
     with research_db() as con:
+        if page_id is not None and not con.execute("SELECT 1 FROM site_page WHERE id=? AND domain=?",(page_id,domain)).fetchone(): abort(400)
         existing=con.execute("SELECT id FROM wanted_keyword WHERE domain=? AND keyword=? COLLATE NOCASE",(domain,keyword)).fetchone()
         if existing:
             con.execute("UPDATE wanted_keyword SET page_id=?,updated_at=? WHERE id=?",(page_id,now,existing["id"]))
@@ -1673,6 +1685,7 @@ def geo_aeo_run_page(domain,page_id):
 def geo_aeo_page_json(domain,page_id):
     get_site(domain)
     with research_db() as con:
+        if not con.execute("SELECT 1 FROM site_page WHERE id=? AND domain=?",(page_id,domain)).fetchone(): abort(404)
         audit=latest_audit_page(con,page_id)
         if not audit: return {"audit":None,"signals":[]}
         rows=con.execute(
@@ -1698,6 +1711,7 @@ def geo_aeo_signal_state(domain,page_id):
     if priority not in {"","low","medium","high","critical"}: priority=""
     now=datetime.now(timezone.utc).isoformat(timespec="seconds")
     with research_db() as con:
+        if not con.execute("SELECT 1 FROM site_page WHERE id=? AND domain=?",(page_id,domain)).fetchone(): abort(404)
         con.execute(
             """INSERT INTO audit_signal_state(domain,page_id,family,signal_key,workflow_status,priority,user_note,override_status,updated_at)
             VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(domain,page_id,family,signal_key) DO UPDATE SET

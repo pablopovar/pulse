@@ -29,21 +29,18 @@ def access_state_for_report(db_path: Path, report_id: str) -> dict[str, object] 
     """Resolve a report's optional password policy through the DB subsystem.
 
     Returning ``None`` means the report is not resolvable here. The report
-    route remains responsible for its 404 response; this preserves the generic
-    security boundary's ability to run in isolated tests.
+    route remains responsible for its 404 response. Database errors propagate
+    so the security boundary can deny access.
     """
-    try:
-        with connect_sqlite(db_path, readonly=True) as con:
-            row = con.execute(
-                """SELECT r.domain,a.enabled,a.password_hash,a.updated_at
+    with connect_sqlite(db_path, readonly=True) as con:
+        row = con.execute(
+            """SELECT r.domain,a.enabled,a.password_hash,a.updated_at
                    FROM report_session r
                    LEFT JOIN domain_public_report_access a
                      ON a.domain=r.domain COLLATE NOCASE
                    WHERE r.id=? LIMIT 1""",
-                (report_id,),
-            ).fetchone()
-    except Exception:
-        return None
+            (report_id,),
+        ).fetchone()
     if not row:
         return None
     return {

@@ -6,7 +6,7 @@ import os
 import secrets
 from dataclasses import dataclass
 
-from flask import abort, redirect, request, session, url_for
+from flask import abort, current_app, redirect, request, session, url_for
 from services.public_report_access import access_state_for_report
 
 
@@ -166,11 +166,13 @@ def _enforce_public_report_capability(config: SecurityConfig):
 
 
 def _require_public_report_password(report_id: str):
-    path = os.environ.get("RESEARCH_DB", "/data/audit/research.db")
-    state = access_state_for_report(path, report_id)
+    try:
+        state = access_state_for_report(current_app.config.get("RESEARCH_DB", os.environ.get("RESEARCH_DB", "/data/audit/research.db")), report_id)
+    except Exception:
+        current_app.logger.exception("Public report password policy lookup failed")
+        return ("Client report temporarily unavailable.", 503)
     if state is None:
-        # Route handlers own report existence. A generic security fixture does
-        # not necessarily have a Pulse database behind it.
+        # Route handlers own report existence.
         return None
     if not state["enabled"]:
         return None

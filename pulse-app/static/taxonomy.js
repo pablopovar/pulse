@@ -81,11 +81,18 @@
     toolbar.className="taxonomy-toolbar";
     toolbar.innerHTML=`
       <button type="button" class="button select-page-taxonomy">Select page</button>
-      <select class="taxonomy-tag"><option value="">Choose ${inf.kind} tag…</option>${data.tags.map(t=>`<option value="${t.id}">${t.name}</option>`).join("")}</select>
+      <select class="taxonomy-tag"><option value="">Choose ${inf.kind} tag…</option></select>
       <input class="taxonomy-new-tag" placeholder="or new ${inf.kind} tag">
       <button type="button" class="button add-taxonomy">Add tag</button>
       <button type="button" class="button remove-taxonomy">Remove tag</button>
       <select class="taxonomy-filter"><option value="">Tag filter…</option><option value="show">Show selected tag</option><option value="hide">Hide selected tag</option><option value="clear">Clear tag filter</option></select>`;
+    const tagSelect=toolbar.querySelector(".taxonomy-tag");
+    data.tags.forEach(t=>{
+      const option=document.createElement("option");
+      option.value=String(t.id);
+      option.textContent=String(t.name);
+      tagSelect.appendChild(option);
+    });
     table.parentNode.insertBefore(toolbar, table);
 
     toolbar.querySelector(".select-page-taxonomy").onclick=()=>{
