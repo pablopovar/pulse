@@ -95,10 +95,13 @@ def _affected_page_exposure(details: list[dict[str, Any]], data: dict[str, Any])
     owned_host = urlsplit("//" + str(data.get("domain") or "")).hostname or ""
     for url, path in affected_refs.values():
         matched_impressions = 0.0
+        target_host = urlsplit(url).hostname if url else owned_host
+        if target_host != owned_host:
+            normalized.append(0.0)
+            continue
         if url and url in page_traffic:
             matched_impressions = float(page_traffic[url] or 0.0)
         elif path:
-            target_host = urlsplit(url).hostname if url else owned_host
             matches = [float(imp or 0.0) for page, imp in page_traffic.items()
                        if urlsplit(str(page)).hostname == target_host
                        and urlsplit(str(page)).path == path]
