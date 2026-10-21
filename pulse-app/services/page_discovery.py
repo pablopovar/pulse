@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import io
 import hashlib
 import json
 import re
@@ -16,6 +17,9 @@ from services.url_policy import site_page_identity as normalize_site_page_url, u
 
 DEFAULT_MAX_DEPTH = 5
 DEFAULT_MAX_URLS = 20_000
+DEFAULT_MAX_SITEMAPS = 200
+MAX_DECODED_SITEMAP_BYTES = 5 * 1024 * 1024
+MAX_TOTAL_DECODED_BYTES = 32 * 1024 * 1024
 SITEMAP_CONTENT_TYPES = {
     "application/xml", "text/xml", "text/plain", "application/gzip",
     "application/x-gzip", "application/octet-stream", "application/json",
@@ -33,7 +37,13 @@ def now() -> str:
 
 def _decode_inventory(raw: bytes, source_url: str) -> bytes:
     if raw[:2] == b"\x1f\x8b" or source_url.lower().endswith(".gz"):
-        return gzip.decompress(raw)
+        with gzip.GzipFile(fileobj=io.BytesIO(raw)) as stream:
+            decoded = stream.read(MAX_DECODED_SITEMAP_BYTES + 1)
+        if len(decoded) > MAX_DECODED_SITEMAP_BYTES:
+            raise ValueError("decoded sitemap exceeds size limit")
+        return decoded
+    if len(raw) > MAX_DECODED_SITEMAP_BYTES:
+        raise ValueError("sitemap exceeds decoded size limit")
     return raw
 
 
@@ -164,6 +174,7 @@ def discover_sitemap_inventory(
     fetcher: SafeFetcher = safe_fetcher,
     max_depth: int = DEFAULT_MAX_DEPTH,
     max_urls: int = DEFAULT_MAX_URLS,
+    max_sitemaps: int = DEFAULT_MAX_SITEMAPS,
     source_evidence: list[dict] | None = None,
 ) -> tuple[list[SitemapEntry], list[str]]:
     """Traverse a sitemap tree without discarding child-sitemap provenance."""
@@ -171,14 +182,19 @@ def discover_sitemap_inventory(
     seen_sitemaps: set[str] = set()
     entries: dict[str, SitemapEntry] = {}
     errors: list[str] = []
+    decoded_bytes = 0
 
     def visit(url: str, depth: int, *, root: bool = False, parent: str = "") -> None:
+        nonlocal decoded_bytes
         if url in seen_sitemaps:
             return
         if depth > max_depth:
             errors.append(f"recursion limit reached at {url}")
             return
         if len(entries) >= max_urls:
+            return
+        if len(seen_sitemaps) >= max_sitemaps:
+            errors.append(f"sitemap source limit reached at {url}")
             return
         seen_sitemaps.add(url)
         try:
@@ -189,6 +205,9 @@ def discover_sitemap_inventory(
                 allowed_content_types=SITEMAP_CONTENT_TYPES,
             )
             raw = _decode_inventory(response.content, url)
+            decoded_bytes += len(raw)
+            if decoded_bytes > MAX_TOTAL_DECODED_BYTES:
+                raise ValueError("total decoded sitemap budget exceeded")
             listed_urls = _parse_non_xml_inventory(raw, url)
             root_node = None if listed_urls is not None else ET.fromstring(raw)
         except Exception as exc:

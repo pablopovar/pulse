@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import base64
 from datetime import datetime, timezone
 import hashlib
 from typing import Any
@@ -61,6 +62,8 @@ def response_evidence(*, requested_url: str, final_url: str = "", status: int | 
     resource_type = normalize_resource_type(hdrs.get("content-type", ""), url=final_url or requested_url)
     retain = resource_type in TEXTUAL_RESOURCE_TYPES and len(raw) <= MAX_RETAINED_BODY_BYTES
     observed = observed_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if retain:
+        hdrs["x-pulse-retained-body-encoding"] = "base64"
     return ResourceOutcome(
         requested_url=requested_url,
         final_url=final_url or requested_url,
@@ -76,7 +79,7 @@ def response_evidence(*, requested_url: str, final_url: str = "", status: int | 
         crawl_state="fetched",
         audit_state="audited" if resource_type == "html" else "collected_not_audited",
         reason="" if retain or resource_type == "html" else ("body_not_retained" if resource_type not in TEXTUAL_RESOURCE_TYPES else "body_over_size_limit"),
-    ).as_dict() | {"response_headers": hdrs, "raw_body": raw.decode("utf-8", errors="replace") if retain else "", "body_retained": retain}
+    ).as_dict() | {"response_headers": hdrs, "raw_body": base64.b64encode(raw).decode("ascii") if retain else "", "body_retained": retain}
 
 
 def persist_resource_outcome(con, *, crawl_run_id: int | None, domain: str, outcome: dict[str, Any]) -> None:

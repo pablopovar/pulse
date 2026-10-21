@@ -85,9 +85,11 @@ class OpenGSCAdapter:
             ]
             sql = "SELECT " + ", ".join(parts) + " FROM gsc_keyword_inventory"
             params: list[Any] = []
-            if "site_id" in cols:
-                sql += " WHERE site_id=?"
-                params.append(site_id)
+            if "site_id" not in cols:
+                # Legacy inventory with no site key cannot prove ownership.
+                return []
+            sql += " WHERE site_id=?"
+            params.append(site_id)
             return self._rows(con, sql, params)
 
     def domain_seo(self, site_id: str | None):
@@ -337,17 +339,28 @@ class OpenGSCAdapter:
                         """
                         SELECT query,page,COALESCE(SUM(impressions),0) impressions,
                                COALESCE(SUM(clicks),0) clicks,ROUND(MIN(position),1) best_position,
-                               ROUND(AVG(position),1) latest_position
-                        FROM gsc_keyword_observation
+                               (SELECT ROUND(AVG(recent.position),1)
+                                  FROM gsc_keyword_observation recent
+                                 WHERE recent.site_id=obs.site_id AND recent.query=obs.query
+                                   AND recent.page=obs.page AND recent.date=(
+                                       SELECT MAX(latest.date) FROM gsc_keyword_observation latest
+                                        WHERE latest.site_id=obs.site_id AND latest.query=obs.query
+                                          AND latest.page=obs.page AND latest.date>=? AND latest.date<=?
+                                   )) latest_position
+                        FROM gsc_keyword_observation obs
                         WHERE site_id=? AND date>=? AND date<=?
                         GROUP BY query,page
                         ORDER BY impressions DESC,best_position ASC,query LIMIT 100
                         """,
-                        params,
+                        (period_start.isoformat(), period_end.isoformat(), *params),
                     )
             elif self._exists(con, "gsc_keyword_inventory"):
                 # A legacy schema without daily observations cannot establish a
                 # bounded period, so do not manufacture a current SEO verdict.
+                cols = {row["name"] for row in con.execute("PRAGMA table_info(gsc_keyword_inventory)")}
+                if "site_id" not in cols:
+                    data["source_unavailable_reason"] = "Legacy OpenGSC keyword inventory has no provable site scope."
+                    return data
                 data["keywords"] = self._rows(
                     con,
                     """

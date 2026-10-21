@@ -164,7 +164,10 @@ class SafeFetcher:
             validated = self._validate_ip(str(literal))
             return host, (str(validated),)
 
-        port = parsed.port or (443 if scheme == "https" else 80)
+        try:
+            port = parsed.port or (443 if scheme == "https" else 80)
+        except ValueError as exc:
+            raise UnsafeDestination(f"Invalid URL port: {exc}") from exc
         try:
             records = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
         except socket.gaierror as exc:

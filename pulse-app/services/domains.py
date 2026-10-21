@@ -54,7 +54,7 @@ def delete_domain_data(con, domain):
     for t in ("site_page_tag", "page_note"):
         _delete_ids(con, t, "page_id", page_ids)
 
-    preserve = {"keyword_tag", "page_tag", "domain_suppression", "operational_audit"}
+    preserve = {"domain_suppression", "operational_audit"}
     for table in sorted(tables):
         if table in preserve:
             continue

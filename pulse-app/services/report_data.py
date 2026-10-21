@@ -50,6 +50,7 @@ def collect_report_data(
         "domain_score_history": [],
         "page_score_history": [],
         "dataforseo_snapshots": [],
+        "historical_dataforseo_snapshots": [],
         "llm_sources": [],
         "sitemap_reconciliation": [],
     }
@@ -74,7 +75,7 @@ def collect_report_data(
                 )
 
             if _exists(con, "dataforseo_snapshot"):
-                data["dataforseo_snapshots"] = _rows(
+                paid_rows = _rows(
                     con,
                     """SELECT endpoint,created_at,report_run_id
                        FROM dataforseo_snapshot
@@ -82,6 +83,8 @@ def collect_report_data(
                        ORDER BY id DESC LIMIT 20""",
                     (domain,),
                 )
+                data["dataforseo_snapshots"] = [row for row in paid_rows if str(row.get("report_run_id") or "") == execution_run_id]
+                data["historical_dataforseo_snapshots"] = [row for row in paid_rows if str(row.get("report_run_id") or "") != execution_run_id]
 
             data["audit"] = _row(
                 con,

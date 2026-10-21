@@ -98,7 +98,7 @@ def domain_sources_for_site(
         stored = rows.get(key, {})
         state = detected.get(key, {})
         connected = bool(state.get("connected"))
-        selected = bool(stored.get("selected")) or connected
+        selected = bool(stored.get("selected"))
         out.append({
             "key": key,
             "name": name,
@@ -169,7 +169,7 @@ def save_domain_sources(
                     domain,
                     key,
                     name,
-                    int(key in selected or connected),
+                    int(key in selected),
                     "connected" if connected else "not_connected",
                     state.get("detail", ""),
                     updated_at,

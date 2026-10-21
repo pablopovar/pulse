@@ -232,9 +232,12 @@ def fetch(url: str, method="GET", conditional_headers=None):
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         if response.headers.get("content-encoding", "").lower() == "gzip":
             try:
-                body = gzip.decompress(body)
-            except Exception:
-                pass
+                with gzip.GzipFile(fileobj=io.BytesIO(body)) as stream:
+                    body = stream.read(MAX_BYTES + 1)
+                if len(body) > MAX_BYTES:
+                    raise ValueError("decoded response exceeds size limit")
+            except Exception as exc:
+                raise SafeFetchError(f"gzip decoding failed: {exc}") from exc
         return {
             "ok": 200 <= response.status_code < 400,
             "status": response.status_code,
@@ -668,7 +671,7 @@ def best_effort_site_page(con, domain, url):
         )
 
 
-def persist_page(con, run_id, domain, requested_url, robots_allowed, result, parsed, inventory_id=None):
+def persist_page(con, run_id, domain, requested_url, robots_allowed, result, parsed, inventory_id=None, llm_sources=None):
     status = result["status"]
     final_url = result["final_url"] or requested_url
     robots_meta = (parsed.get("robots_meta") or "").lower()
@@ -884,7 +887,7 @@ def persist_page(con, run_id, domain, requested_url, robots_allowed, result, par
             )
             # llms files are recorded as optional agent-readiness evidence.
             # They never create crawl candidates or influence URL priority.
-            llm_sources = inspect_agent_readiness_sources(domain)
+            llm_sources = llm_sources or []
             con.execute(
                 """
                 INSERT INTO crawl_event(crawl_run_id,domain,event_type,detail_json,created_at)
@@ -1079,6 +1082,8 @@ def crawl_worker(
     consecutive_failures = 0
     circuit_open = False
     max_failures = int(policy["max_consecutive_failures"])
+    # Network collection happens before any per-page write transaction.
+    llm_sources = inspect_agent_readiness_sources(domain)
 
     try:
         while processed < page_cap:
@@ -1164,6 +1169,7 @@ def crawl_worker(
                     result,
                     parsed,
                     item["url_inventory_id"],
+                    llm_sources,
                 )
                 failure_kind = persisted["failure_kind"]
                 if failure_kind:
