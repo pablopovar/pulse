@@ -2,8 +2,8 @@
 <style>body{font-family:system-ui,sans-serif;max-width:1100px;margin:32px auto;padding:0 24px}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;vertical-align:top}@media print{.no-print{display:none}}</style></head><body>
 <div class="no-print"><button onclick="window.print()">Print / Save PDF</button></div><h1>GEO/AEO Structured Audit Report</h1>
 <p>{{ site.domain }} · Run #{{ run.id }} · {{ run.completed_at or run.started_at }}</p>
-<p>GEO {{ summary.geo_score }} · AEO {{ summary.aeo_score }} · Combined {{ summary.combined_score }} · Pages {{ summary.pages_audited }}</p>
-{% for page in pages %}<h2>{{ page.path }}</h2><p>GEO {{ page.geo_score }} · AEO {{ page.aeo_score }} · Combined {{ page.combined_score }}</p>
+<p>{% for family,score in [('GEO',summary.geo_score),('AEO',summary.aeo_score),('all',summary.combined_score)] %}{% set cov=score_coverage.get(family,{}) %}{{ 'Combined' if family == 'all' else family }} {{ score }} ({{ cov.get('evaluated',0) }}/{{ cov.get('applicable',0) }} evaluated; {{ cov.get('coverage',0) }}% coverage) · {% endfor %}Pages {{ summary.pages_audited }}</p>
+{% for page in pages %}<h2>{{ page.path }}</h2><p>{% for family,score in [('GEO',page.geo_score),('AEO',page.aeo_score),('all',page.combined_score)] %}{% set cov=score_coverage.get('page:' ~ page.page_id ~ ':' ~ family,{}) %}{{ 'Combined' if family == 'all' else family }} {{ score }} ({{ cov.get('evaluated',0) }}/{{ cov.get('applicable',0) }} evaluated; {{ cov.get('coverage',0) }}% coverage) · {% endfor %}</p>
 <table><thead><tr><th>Family</th><th>Finding</th><th>Status</th><th>Evidence</th><th>Recommendation</th><th>Workflow</th><th>Note</th></tr></thead><tbody>
 {% for s in page.signals %}<tr><td>{{ s.family }}</td><td>{{ s.title }}<br><small>{{ s.category }}</small></td><td>{{ s.observed_status }}</td><td>{{ s.evidence }}</td><td>{{ s.recommendation }}</td><td>{{ s.workflow_status }}</td><td>{{ s.user_note }}</td></tr>{% endfor %}
 </tbody></table>{% endfor %}</body></html>

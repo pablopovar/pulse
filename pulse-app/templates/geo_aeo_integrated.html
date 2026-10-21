@@ -9,13 +9,13 @@
 <div class="metric-grid">
 <div class="metric-card"><span>Status</span><strong>{{ latest_run.status }}</strong></div>
 <div class="metric-card"><span>Pages</span><strong>{{ summary.pages_audited or 0 }}</strong></div>
-<div class="metric-card"><span>GEO</span><strong>{{ summary.geo_score if summary.geo_score is not none else "—" }}</strong></div>
-<div class="metric-card"><span>AEO</span><strong>{{ summary.aeo_score if summary.aeo_score is not none else "—" }}</strong></div>
-<div class="metric-card"><span>Combined</span><strong>{{ summary.combined_score if summary.combined_score is not none else "—" }}</strong></div>
+<div class="metric-card"><span>GEO</span><strong>{{ summary.geo_score if summary.geo_score is not none else "—" }}</strong><small>{{ score_coverage.get('GEO',{}).get('evaluated',0) }}/{{ score_coverage.get('GEO',{}).get('applicable',0) }} evaluated · {{ score_coverage.get('GEO',{}).get('coverage',0) }}% coverage</small></div>
+<div class="metric-card"><span>AEO</span><strong>{{ summary.aeo_score if summary.aeo_score is not none else "—" }}</strong><small>{{ score_coverage.get('AEO',{}).get('evaluated',0) }}/{{ score_coverage.get('AEO',{}).get('applicable',0) }} evaluated · {{ score_coverage.get('AEO',{}).get('coverage',0) }}% coverage</small></div>
+<div class="metric-card"><span>Combined</span><strong>{{ summary.combined_score if summary.combined_score is not none else "—" }}</strong><small>{{ score_coverage.get('all',{}).get('evaluated',0) }}/{{ score_coverage.get('all',{}).get('applicable',0) }} evaluated · {{ score_coverage.get('all',{}).get('coverage',0) }}% coverage</small></div>
 </div>
 {% else %}<section class="panel"><p>No structured GEO/AEO audit has been stored yet.</p></section>{% endif %}
 <section class="panel"><h2>Pages</h2><div class="table-wrap"><table><thead><tr><th>Page</th><th>GEO</th><th>AEO</th><th>Combined</th><th>Fail</th><th>Partial</th></tr></thead><tbody>
-{% for p in page_rows %}<tr><td><a href="{{ url_for('page_workspace', domain=site.domain, page_id=p.page_id) }}">{{ p.path }}</a></td><td>{{ p.geo_score }}</td><td>{{ p.aeo_score }}</td><td>{{ p.combined_score }}</td><td>{{ p.fail_count }}</td><td>{{ p.partial_count }}</td></tr>
+{% for p in page_rows %}<tr><td><a href="{{ url_for('page_workspace', domain=site.domain, page_id=p.page_id) }}">{{ p.path }}</a></td>{% for family, score in [('GEO',p.geo_score),('AEO',p.aeo_score),('all',p.combined_score)] %}{% set cov=score_coverage.get('page:' ~ p.page_id ~ ':' ~ family,{}) %}<td>{{ score }}<br><small>{{ cov.get('evaluated',0) }}/{{ cov.get('applicable',0) }} evaluated · {{ cov.get('coverage',0) }}% coverage</small></td>{% endfor %}<td>{{ p.fail_count }}</td><td>{{ p.partial_count }}</td></tr>
 {% else %}<tr><td colspan="6">No audited pages yet.</td></tr>{% endfor %}</tbody></table></div></section>
 <section class="panel"><h2>Current priority signals</h2><div class="table-wrap"><table><thead><tr><th>Page</th><th>Family</th><th>Signal</th><th>Observed</th><th>Severity</th><th>Workflow</th><th>Priority</th><th>Note</th><th class="tool-col"></th></tr></thead><tbody>
 {% for s in priority_signals %}<tr><td>{{ s.path }}</td><td>{{ s.family }}</td><td>{{ s.title }}<div class="signal-small">{{ s.category }}</div></td><td>{{ s.observed_status }}</td><td>{{ s.severity }}</td><td>{{ s.workflow_status }}</td><td>{{ s.priority }}</td><td>{{ s.user_note }}</td><td class="tool-col"><span class="wrench-icon" aria-hidden="true">&#128295;</span></td></tr>

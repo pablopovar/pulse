@@ -93,6 +93,11 @@ def save_manual_ai_source(
     if old_prompts != new_prompts:
         version += 1
 
+    changed = old_prompts != new_prompts or any(
+        str(current.get(f"{key}_response") or "") != str(value or "")
+        for key, value in responses.items()
+    )
+
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with connect_sqlite(db_path) as con:
         con.execute(
@@ -101,7 +106,11 @@ def save_manual_ai_source(
             "analysis_text,analysis_status,analysis_error,analysis_updated_at,updated_at"
             ") VALUES (?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(domain) DO UPDATE SET "
-            "question_set_version=excluded.question_set_version,updated_at=excluded.updated_at",
+            "question_set_version=excluded.question_set_version,"
+            "analysis_text=CASE WHEN ? THEN '' ELSE manual_ai_source.analysis_text END,"
+            "analysis_status=CASE WHEN ? THEN 'not_run' ELSE manual_ai_source.analysis_status END,"
+            "analysis_error=CASE WHEN ? THEN '' ELSE manual_ai_source.analysis_error END,"
+            "updated_at=excluded.updated_at",
             (
                 domain,
                 version,
@@ -112,6 +121,7 @@ def save_manual_ai_source(
                 current.get("analysis_error") or "",
                 current.get("analysis_updated_at") or "",
                 now,
+                int(changed), int(changed), int(changed),
             ),
         )
         for phase in ("phase1", "phase2"):

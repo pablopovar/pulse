@@ -9,6 +9,7 @@ from pathlib import Path
 from db.sqlite import connect_sqlite
 from typing import Any
 from services.page_types import applicability, classify_page_type
+from services.manual_ai_payload import parse_manual_ai_payload
 from services.applicability_policy import apply_policy, load_page_type_overrides, load_policy
 
 from reports.prioritization import (
@@ -671,7 +672,9 @@ def _seo_family(data,defn):
             "competitor_keywords":list(data.get("competitor_keywords") or []),"backlinks":list(data.get("backlinks") or []),
             "ref_domains":list(data.get("ref_domains") or []),"backlink_summary":data.get("backlink_summary"),
             "domain_metrics":data.get("domain_metrics"),"clarity":data.get("clarity"),
-            "dataforseo_snapshots":list(data.get("dataforseo_snapshots") or [])}
+            "source_unavailable_reason":data.get("source_unavailable_reason") or "",
+            "dataforseo_snapshots":list(data.get("dataforseo_snapshots") or []),
+            "historical_dataforseo_snapshots":list(data.get("historical_dataforseo_snapshots") or [])}
 
 
 def _onsite_family(data,defn,signals):
@@ -802,16 +805,7 @@ def _normalize_manual_ai_snapshot(manual_ai: dict[str, Any]) -> dict[str, Any]:
     ]
 
     def _active_manual_ai_json(raw):
-        text = str(raw or "").strip()
-        if text.startswith("```") and text.endswith("```"):
-            lines = text.splitlines()
-            if len(lines) >= 3:
-                text = "\n".join(lines[1:-1]).strip()
-        try:
-            value = json.loads(text)
-            return value if isinstance(value, dict) else None
-        except Exception:
-            return None
+        return parse_manual_ai_payload(raw).value
 
     active_runs = 0
     active_valid_json_runs = 0
@@ -941,7 +935,7 @@ def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
             for check in category.get("checks") or []:
                 key = check.get("finding_key") or ""
                 if key:
-                    check_history_index[key] = list(check.get("history") or [])
+                    check_history_index[key] = list(check.get("observations") or [])
     data["check_history_index"] = check_history_index
     monitoring = dict(data.get("monitoring_inventory") or {})
     monitoring.setdefault("summary", {})

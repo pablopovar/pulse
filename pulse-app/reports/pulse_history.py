@@ -169,7 +169,7 @@ def _dedupe_audit_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]
             position_by_run[audit_run_id] = len(deduped)
             deduped.append(record)
 
-    return deduped
+    return sorted(deduped, key=lambda record: (str(record.get("created_at") or ""), str(record.get("id") or "")))
 
 
 def build_finding_history(records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -216,6 +216,7 @@ def attach_history_to_check(check: dict[str, Any], history: dict[str, list[dict[
     check["finding_key"] = key
     material_rows = [row for row in rows if row.get("change") in MATERIAL_CHANGES]
     check["history"] = material_rows
+    check["observations"] = rows
     check["history_count"] = len(material_rows)
     check["observation_count"] = len(rows)
     if rows:

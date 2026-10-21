@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 from pathlib import Path
 
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -10,6 +11,10 @@ from db.sqlite import connect_sqlite
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _policy_version(password_hash: str | None) -> str:
+    return hashlib.sha256((password_hash or "").encode("utf-8")).hexdigest()
 
 
 def access_state(db_path: Path, domain: str) -> dict[str, object]:
@@ -22,6 +27,7 @@ def access_state(db_path: Path, domain: str) -> dict[str, object]:
         "enabled": bool(row and row["enabled"] and row["password_hash"]),
         "configured": bool(row and row["password_hash"]),
         "updated_at": row["updated_at"] if row else "",
+        "policy_version": _policy_version(row["password_hash"] if row else None),
     }
 
 
@@ -48,6 +54,7 @@ def access_state_for_report(db_path: Path, report_id: str) -> dict[str, object] 
         "enabled": bool(row["enabled"] and row["password_hash"]),
         "configured": bool(row["password_hash"]),
         "updated_at": row["updated_at"] or "",
+        "policy_version": _policy_version(row["password_hash"]),
     }
 
 

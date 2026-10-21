@@ -40,6 +40,16 @@ MUTED = colors.HexColor("#64748B")
 _PDF_LOCALE: ContextVar[str] = ContextVar("pulse_pdf_locale", default="en")
 
 
+def _score_with_coverage(data, value, family="all", path=None):
+    rows = [row for row in data.get("audit_signals") or []
+            if (family == "all" or row.get("family") == family)
+            and (path is None or row.get("path") == path)]
+    applicable = sum(row.get("observed_status") != "NOT_APPLICABLE" for row in rows)
+    evaluated = sum(row.get("observed_status") in {"PASS", "PARTIAL", "FAIL"} for row in rows)
+    coverage = round(100 * evaluated / applicable) if applicable else 0
+    return f"{value} ({evaluated}/{applicable}; {coverage}% coverage)"
+
+
 def _connect(path: Path, readonly=False):
     return connect_sqlite(path, readonly=readonly)
 
@@ -273,9 +283,9 @@ def _build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
     story.append(_metric_cards([
         ("Observed keywords", seo.get("keywords", "—")),
         ("Ranking pages", seo.get("pages", "—")),
-        ("GEO score", aud.get("geo_score", "—")),
-        ("AEO score", aud.get("aeo_score", "—")),
-        ("Combined", aud.get("combined_score", "—")),
+        ("GEO score", _score_with_coverage(data, aud.get("geo_score", "—"), "GEO")),
+        ("AEO score", _score_with_coverage(data, aud.get("aeo_score", "—"), "AEO")),
+        ("Combined", _score_with_coverage(data, aud.get("combined_score", "—"))),
     ], S))
     story.append(Spacer(1, 5*mm))
 
@@ -293,8 +303,8 @@ def _build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
         )
     if aud:
         bullets.append(
-            f"GEO/AEO readiness: GEO {aud.get('geo_score','—')}, AEO {aud.get('aeo_score','—')}, "
-            f"combined {aud.get('combined_score','—')} across {aud.get('pages_audited',0)} audited pages."
+            f"GEO/AEO readiness: GEO {_score_with_coverage(data,aud.get('geo_score','—'),'GEO')}, AEO {_score_with_coverage(data,aud.get('aeo_score','—'),'AEO')}, "
+            f"combined {_score_with_coverage(data,aud.get('combined_score','—'))} across {aud.get('pages_audited',0)} audited pages."
         )
     for b in bullets:
         story.append(_P("• " + b, S["body"]))
@@ -303,8 +313,10 @@ def _build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
     severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
     signals = [
         x for x in data.get("audit_signals", [])
-        if x.get("observed_status") in {"FAIL", "PARTIAL", "UNKNOWN", "MANUAL_REVIEW"}
+        if x.get("observed_status") in {"FAIL", "PARTIAL"}
     ]
+    unevaluated_signals = [x for x in data.get("audit_signals", [])
+                           if x.get("observed_status") in {"UNKNOWN", "MANUAL_REVIEW", "DATA_UNAVAILABLE"}]
     signals.sort(key=lambda x: (
         severity_order.get(str(x.get("severity","")).upper(), 9),
         str(x.get("path","")),
@@ -328,6 +340,14 @@ def _build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
         ))
     else:
         story.append(_P("No stored GEO/AEO priority findings are available.", S["body"]))
+
+    if unevaluated_signals:
+        story.append(_P("Unevaluated signals", S["h2"]))
+        review_rows = [[_P(x, S["tiny"]) for x in ["Family", "Page", "Signal", "Status"]]]
+        for signal in unevaluated_signals[:20]:
+            review_rows.append([_P(str(signal.get(key) or ""), S["tiny"])
+                                for key in ("family", "path", "title", "observed_status")])
+        story.append(_table(review_rows, [20*mm, 42*mm, 90*mm, 24*mm], font_size=6.2))
 
     crawl_issues = data.get("crawl_issues", [])
     if crawl_issues:
@@ -422,9 +442,9 @@ def _build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
     story.append(_P("GEO / AEO Readiness", S["h1"]))
     if aud:
         story.append(_metric_cards([
-            ("GEO", aud.get("geo_score","—")),
-            ("AEO", aud.get("aeo_score","—")),
-            ("Combined", aud.get("combined_score","—")),
+            ("GEO", _score_with_coverage(data, aud.get("geo_score","—"), "GEO")),
+            ("AEO", _score_with_coverage(data, aud.get("aeo_score","—"), "AEO")),
+            ("Combined", _score_with_coverage(data, aud.get("combined_score","—"))),
             ("Pages", aud.get("pages_audited","—")),
             ("Fails", aud.get("fail_count","—")),
         ], S))
@@ -438,9 +458,9 @@ def _build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
         for p in data.get("audit_pages", []):
             rows.append([
                 _P(p.get("path",""), S["tiny"]),
-                _P(p.get("geo_score",""), S["tiny"]),
-                _P(p.get("aeo_score",""), S["tiny"]),
-                _P(p.get("combined_score",""), S["tiny"]),
+                _P(_score_with_coverage(data, p.get("geo_score",""), "GEO", p.get("path")), S["tiny"]),
+                _P(_score_with_coverage(data, p.get("aeo_score",""), "AEO", p.get("path")), S["tiny"]),
+                _P(_score_with_coverage(data, p.get("combined_score",""), path=p.get("path")), S["tiny"]),
             ])
         if len(rows) > 1:
             story.append(_table(rows, [120*mm,20*mm,20*mm,20*mm], font_size=6.4))
@@ -458,8 +478,8 @@ def _build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
             path = page.get("path","")
             story.append(_P(path or "/", S["h2"]))
             story.append(_P(
-                f"GEO {page.get('geo_score','—')} · AEO {page.get('aeo_score','—')} · "
-                f"Combined {page.get('combined_score','—')}",
+                f"GEO {_score_with_coverage(data,page.get('geo_score','—'),'GEO',path)} · AEO {_score_with_coverage(data,page.get('aeo_score','—'),'AEO',path)} · "
+                f"Combined {_score_with_coverage(data,page.get('combined_score','—'),path=path)}",
                 S["small"],
             ))
             rows = [[_P(x,S["tiny"]) for x in ["Family","Finding","Status","Severity","Evidence / Recommendation"]]]

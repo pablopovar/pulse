@@ -56,6 +56,29 @@ def set_exclusions(
     return len(targets)
 
 
+def load_exclusions(db_path: str | Path, domain: str) -> list[dict]:
+    with connect_sqlite(db_path, readonly=True) as con:
+        return [dict(row) for row in con.execute(
+            "SELECT scope,item_key,page_id FROM report_exclusion WHERE domain=? COLLATE NOCASE",
+            (domain,),
+        ).fetchall()]
+
+
+def apply_exclusions(snapshot: dict, exclusions: list[dict]) -> dict:
+    """Build a presentation projection; the persisted observation is untouched."""
+    if not exclusions:
+        return snapshot
+    blocked = {(row["scope"], str(row["item_key"]), int(row["page_id"])) for row in exclusions}
+    projected = dict(snapshot)
+    projected["audit_signals"] = [row for row in snapshot.get("audit_signals") or []
+        if ("check", str(row.get("signal_key") or ""), -1) not in blocked
+        and ("category", str(row.get("category") or ""), -1) not in blocked
+        and ("family", str(row.get("family") or ""), -1) not in blocked
+        and ("page_check", str(row.get("signal_key") or ""), int(row.get("page_id") or -1)) not in blocked]
+    projected["presentation_exclusions"] = exclusions
+    return projected
+
+
 def load_human_interpretation(
     db_path: str | Path, domain: str, report_id: str
 ) -> dict:

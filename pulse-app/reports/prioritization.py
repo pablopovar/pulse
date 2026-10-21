@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+from urllib.parse import urlsplit
 from collections import defaultdict
 from difflib import SequenceMatcher
 from typing import Any
@@ -90,16 +91,21 @@ def _affected_page_exposure(details: list[dict[str, Any]], data: dict[str, Any])
 
     normalized = []
     matched_pages = 0
+    ambiguous_pages = 0
+    owned_host = urlsplit("//" + str(data.get("domain") or "")).hostname or ""
     for url, path in affected_refs.values():
         matched_impressions = 0.0
         if url and url in page_traffic:
             matched_impressions = float(page_traffic[url] or 0.0)
         elif path:
-            matched_impressions = sum(
-                float(imp or 0.0)
-                for page, imp in page_traffic.items()
-                if str(page).endswith(path)
-            )
+            target_host = urlsplit(url).hostname if url else owned_host
+            matches = [float(imp or 0.0) for page, imp in page_traffic.items()
+                       if urlsplit(str(page)).hostname == target_host
+                       and urlsplit(str(page)).path == path]
+            if len(matches) == 1:
+                matched_impressions = matches[0]
+            elif len(matches) > 1:
+                ambiguous_pages += 1
 
         if matched_impressions > 0:
             matched_pages += 1
@@ -113,6 +119,7 @@ def _affected_page_exposure(details: list[dict[str, Any]], data: dict[str, Any])
         "exposure": sum(normalized) / len(normalized),
         "affected_pages": len(affected_refs),
         "matched_pages": matched_pages,
+        "ambiguous_pages": ambiguous_pages,
     }
 
 

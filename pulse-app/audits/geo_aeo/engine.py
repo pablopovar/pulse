@@ -252,7 +252,7 @@ def capture_page(raw_url: str, selected_page_type: str = "auto") -> dict[str, An
         "robots_meta": robots_meta,
         "robots_status": robots_status,
         "robots_text": robots_text,
-        "robots_blocks": _robots_blocks(robots_text, parsed_final.path or "/"),
+        "robots_blocks": _robots_blocks(robots_text, parsed_final.path or "/") if robots_status == 200 else None,
         "sitemap_url": sitemap_url,
         "sitemap_status": sitemap_status,
         "sitemap_looks_valid": "<urlset" in sitemap_text.lower() or "<sitemapindex" in sitemap_text.lower(),
@@ -361,7 +361,7 @@ def evaluate(c: dict[str, Any]) -> list[dict[str, Any]]:
     add("GEO", cat, 1, "Successful HTML response", _status(200 <= c["status_code"] < 300), f"HTTP {c['status_code']}; {c['content_type'] or 'content type missing'}.", "Return a stable 2xx HTML response for the canonical page.", "CRITICAL", "search")
     add("GEO", cat, 2, "HTTPS delivery", _status(urlparse(c["final_url"]).scheme == "https"), c["final_url"], "Serve and canonicalize the page over HTTPS.", "HIGH", "search")
     add("GEO", cat, 3, "Indexing permitted", _status(not has_noindex), c["robots_meta"] or "No noindex directive observed.", "Remove noindex only if this page is intended to appear in search.", "CRITICAL", "search")
-    add("GEO", cat, 4, "robots.txt permits the page", "UNKNOWN" if c["robots_status"] is None else _status(not c["robots_blocks"]), f"robots.txt status: {c['robots_status'] or 'unreachable'}; blocked: {c['robots_blocks']}.", "Verify the intended crawler rules in robots.txt.", "HIGH", "search")
+    add("GEO", cat, 4, "robots.txt permits the page", "UNKNOWN" if c["robots_blocks"] is None else _status(not c["robots_blocks"]), f"robots.txt status: {c['robots_status'] or 'unreachable'}; blocked: {c['robots_blocks']}.", "Verify the intended crawler rules in robots.txt.", "HIGH", "search")
     add("GEO", cat, 5, "Canonical URL declared", "FAIL" if not c["canonical"] else _status(c["canonical"].rstrip("/") == c["final_url"].rstrip("/"), partial=True), c["canonical"] or "No canonical link observed.", "Declare the preferred canonical URL and ensure it matches the intended indexable page.", "HIGH", "seo")
     add("GEO", cat, 6, "XML sitemap discoverable", "UNKNOWN" if c["sitemap_status"] is None else _status(c["sitemap_status"] == 200 and c["sitemap_looks_valid"], partial=c["sitemap_status"] == 200), f"{c['sitemap_url']} returned {c['sitemap_status'] or 'no response'}.", "Publish a valid XML sitemap and declare it in robots.txt.", "MEDIUM", "search")
     add("GEO", cat, 7, "Substantive server-rendered text", _status(c["word_count"] >= 200, partial=c["word_count"] >= 80), f"{c['word_count']} visible words were present in the fetched HTML.", "Ensure the primary information is available in crawlable HTML; write for people rather than a fixed word count.", "HIGH", "ai")
@@ -502,7 +502,7 @@ def evaluate(c: dict[str, Any]) -> list[dict[str, Any]]:
     add("AEO", cat, 10, "Mobile interaction works", "MANUAL_REVIEW", "A source-only audit does not exercise responsive layout, touch targets, dialogs, or keyboard flow.", "Test the rendered page on mobile sizes and with keyboard and assistive technology.", "HIGH", "wcag")
 
     cat = "Search & Answer Eligibility"
-    add("AEO", cat, 1, "Page is technically indexable", _status(200 <= c["status_code"] < 300 and not has_noindex and not c["robots_blocks"]), f"HTTP {c['status_code']}; noindex: {has_noindex}; robots block: {c['robots_blocks']}.", "Resolve status, robots, and noindex conflicts for pages intended to appear in search.", "CRITICAL", "search")
+    add("AEO", cat, 1, "Page is technically indexable", "UNKNOWN" if c["robots_blocks"] is None else _status(200 <= c["status_code"] < 300 and not has_noindex and not c["robots_blocks"]), f"HTTP {c['status_code']}; noindex: {has_noindex}; robots block: {c['robots_blocks']}.", "Resolve status, robots, and noindex conflicts for pages intended to appear in search.", "CRITICAL", "search")
     add("AEO", cat, 2, "Search snippets are permitted", _status(not has_nosnippet), c["robots_meta"] or "No restrictive snippet directive observed.", "Allow snippets when you want the page to support search and AI-generated result excerpts.", "HIGH", "ai")
     add("AEO", cat, 3, "Relevant structured data is available", _status(bool(c["schema_objects"]), partial=False), f"JSON-LD objects: {len(c['schema_objects'])}.", "Add only accurate, relevant structured data; it is useful for supported search features but not required for generative AI search.", "MEDIUM", "ai")
     add("AEO", cat, 4, "Structured data is syntactically valid", "NOT_APPLICABLE" if not c["schema_objects"] and not c["schema_errors"] else _status(not c["schema_errors"]), "; ".join(c["schema_errors"]) or "Observed JSON-LD parsed.", "Fix JSON-LD syntax and validate with Schema.org and applicable rich-result tools.", "HIGH", "schemaorg")

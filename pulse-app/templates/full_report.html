@@ -1198,9 +1198,10 @@ html[data-theme="dark"] .report-document .root-cause-card.compact-action-card .a
 
   {% elif family.kind == 'seo' %}
     {% set seo = family.seo or {} %}
-    {% if family.dataforseo_snapshots %}<section class="panel"><h3>DataForSEO evidence captured</h3><p>This report includes {{ family.dataforseo_snapshots|length }} recent DataForSEO snapshot{{ '' if family.dataforseo_snapshots|length == 1 else 's' }}. The stored endpoints and capture dates are visible below; source data supports findings but is not represented as an invented score.</p><ul>{% for item in family.dataforseo_snapshots[:8] %}<li>{{ item.endpoint }} · {{ item.created_at }}</li>{% endfor %}</ul></section>{% endif %}
+    {% if family.dataforseo_snapshots %}<section class="panel"><h3>DataForSEO evidence captured for this run</h3><ul>{% for item in family.dataforseo_snapshots[:8] %}<li>{{ item.endpoint }} · {{ item.created_at }}</li>{% endfor %}</ul></section>{% endif %}
+    {% if family.historical_dataforseo_snapshots %}<section class="panel"><h3>Historical supplemental DataForSEO evidence</h3><p>These older snapshots are shown for context only. They are not current-run evidence and do not determine this report's findings.</p><ul>{% for item in family.historical_dataforseo_snapshots[:8] %}<li>{{ item.endpoint }} · {{ item.created_at }}</li>{% endfor %}</ul></section>{% endif %}
     <h3>6.1 Organic Search Performance</h3>
-    {% if not seo or not seo.keywords %}<div class="panel source-required"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><strong> Google Search Console is not available for this report.</strong></div>{% endif %}
+    {% if not seo or not seo.keywords %}<div class="panel source-required"><span class="status-pill status-pill-data_unavailable">DATA_UNAVAILABLE</span><strong> Google Search Console is not available for this report.</strong>{% if family.source_unavailable_reason %}<p>{{ family.source_unavailable_reason }}</p>{% endif %}</div>{% endif %}
     <p class="history-note">Google Search Console period: {{ seo.period_start or 'not established' }}{% if seo.period_end %} – {{ seo.period_end }}{% endif %}{% if seo.window_days %} · {{ seo.window_days }} days{% endif %}</p><div class="family-snapshot"><div class="snapshot-card"><span>Observed queries</span><strong>{{ seo.keywords or 0 }}</strong></div><div class="snapshot-card"><span>Ranking pages</span><strong>{{ seo.pages or 0 }}</strong></div><div class="snapshot-card"><span>Impressions</span><strong>{{ seo.impressions or 0 }}</strong></div><div class="snapshot-card"><span>Search clicks</span><strong>{{ seo.clicks or 0 }}</strong></div><div class="snapshot-card"><span>CTR</span><strong>{{ seo.ctr or 0 }}%</strong></div></div>
     <div class="interactive-evidence">
     {% if family.keywords %}<div class="table-wrap report-table"><table><thead><tr><th>Query</th><th>Landing page</th><th>Impressions</th><th>Clicks</th><th>Best</th><th>Latest</th><th>Status</th></tr></thead><tbody>{% for k in family.keywords %}<tr><td>{{ k.query }}</td><td class="report-url">{{ k.page }}</td><td>{{ k.impressions }}</td><td>{{ k.clicks }}</td><td>{{ k.best_position }}</td><td>{{ k.latest_position }}</td><td>{{ k.status }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
@@ -2006,7 +2007,7 @@ html[data-theme="dark"] .report-document .root-cause-card.compact-action-card .a
     const rows=history[key]||[];
     if(!from||!to)return {change:document.querySelector('[data-finding-key="'+CSS.escape(key)+'"]')?.dataset.currentChange||'new',status:''};
     const earlier=rows.find(row=>row.report_id===from.value),later=rows.find(row=>row.report_id===to.value);
-    if(!later)return {change:'new_page',status:''};
+    if(!later)return {change:'evidence_unavailable',status:'DATA_UNAVAILABLE'};
     const prior=Object.fromEntries(Object.entries(earlier?.page_statuses||{}));
     const changes=Object.entries(later.page_statuses||{}).map(([page,status])=>pageMovement(status,prior[page]));
     if(changes.includes('worsened')&&changes.some(x=>x==='resolved'||x==='improved'))return {change:'mixed',status:later.status||''};

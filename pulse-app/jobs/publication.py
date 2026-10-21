@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from reports.web_report import _apply_recommendation_updates, _recommendation_updates
+from reports.web_report import _apply_recommendation_updates, _recommendation_updates, prepare_report_view
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,6 +63,12 @@ def publish_report_if_owned(
                 "Cannot publish report: report_session does not belong to the durable job."
             )
 
+        snapshot = json.loads(report["snapshot_json"])
+        quality = prepare_report_view(snapshot).get("report_quality") or {}
+        if quality.get("blocking"):
+            con.rollback()
+            raise RuntimeError("Report quality blocked publication: " + "; ".join(quality.get("errors") or []))
+
         con.execute(
             """
             UPDATE durable_job
@@ -111,7 +117,6 @@ def publish_report_if_owned(
             con.rollback()
             return False
 
-        snapshot=json.loads(report["snapshot_json"])
         updates=_recommendation_updates(con,domain,snapshot)
         if updates:
             tracking=dict(snapshot.get("recommendation_tracking") or {})

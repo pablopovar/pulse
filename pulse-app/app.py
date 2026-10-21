@@ -9,6 +9,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from services.url_policy import site_page_identity as normalize_site_page_url
+from services.domain_registry import normalize_dashboard_domain as canonical_dashboard_domain
 from services.manual_ai_sources import load_manual_ai_source as load_manual_ai_source_state, save_manual_ai_source
 from services.domain_company import infer_company_name as infer_company_name_from_db, save_company_name
 from services.report_collaboration import (
@@ -22,6 +23,8 @@ from services.report_collaboration import (
     save_human_interpretation,
     save_report_note as persist_report_note,
     set_exclusions,
+    load_exclusions,
+    apply_exclusions,
 )
 from db.sqlite import connect_sqlite
 from db.migrate import validate_schema_current
@@ -503,21 +506,7 @@ def report_files(domain: str | None = None):
 
 
 def normalize_dashboard_domain(value):
-    value=(value or "").strip()
-    if not value:
-        return None,None
-    if value.lower().startswith("sc-domain:"):
-        value=value.split(":",1)[1].strip()
-    if "://" not in value:
-        value="https://"+value
-    try:
-        parsed=urllib.parse.urlsplit(value)
-    except Exception:
-        return None,None
-    host=(parsed.hostname or "").strip().lower()
-    if not host or "." not in host:
-        return None,None
-    return host,"https://"+host
+    return canonical_dashboard_domain(value)
 
 
 def _site_value(site,key,default=None):
@@ -944,7 +933,7 @@ def pages(domain):
         params = [domain]
         if q:
             where += " AND (path REGEXP ? OR url REGEXP ?)"
-            params += [f"%{q}%", f"%{q}%"]
+            params += [re.escape(q), re.escape(q)]
         page_rows = con.execute(f"SELECT id,url,path,source FROM site_page {where} ORDER BY path COLLATE NOCASE", params).fetchall()
         total = con.execute("SELECT COUNT(*) AS n FROM site_page WHERE domain=?", (domain,)).fetchone()["n"]
 
@@ -1631,13 +1620,32 @@ def keyword_note_page_save(domain):
         con.commit()
     return redirect(url_for("keyword_workspace",domain=domain,keyword=keyword,message="Note saved."))
 
+def audit_score_coverage(con, run_id):
+    rows = con.execute(
+        """SELECT ap.page_id,s.family,s.observed_status FROM audit_signal s
+           JOIN audit_page ap ON ap.id=s.audit_page_id WHERE ap.audit_run_id=?""",
+        (run_id,),
+    ).fetchall()
+    groups = {}
+    for row in rows:
+        for key in ("all", row["family"], f"page:{row['page_id']}:all", f"page:{row['page_id']}:{row['family']}"):
+            item = groups.setdefault(key, {"evaluated": 0, "applicable": 0})
+            status = row["observed_status"]
+            item["applicable"] += int(status != "NOT_APPLICABLE")
+            item["evaluated"] += int(status in {"PASS", "PARTIAL", "FAIL"})
+    for item in groups.values():
+        item["coverage"] = round(100 * item["evaluated"] / item["applicable"]) if item["applicable"] else 0
+    return groups
+
+
 @app.route("/d/<domain>/geo-aeo")
 def geo_aeo_integrated(domain):
     site=get_site(domain)
     with research_db() as con:
         latest_run=con.execute("SELECT * FROM audit_run WHERE domain=? ORDER BY id DESC LIMIT 1",(domain,)).fetchone()
-        summary={}; page_rows=[]; priority_signals=[]
+        summary={}; page_rows=[]; priority_signals=[]; score_coverage={}
         if latest_run:
+            score_coverage = audit_score_coverage(con, latest_run["id"])
             summary=con.execute("SELECT * FROM audit_domain_summary WHERE audit_run_id=?",(latest_run["id"],)).fetchone() or {}
             page_rows=con.execute(
                 """SELECT ap.page_id,p.path,ap.geo_score,ap.aeo_score,ap.combined_score,
@@ -1657,7 +1665,7 @@ def geo_aeo_integrated(domain):
                 ORDER BY CASE s.severity WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MEDIUM' THEN 3 ELSE 4 END,p.path LIMIT 100""",
                 (domain,latest_run["id"])
             ).fetchall()
-    return render_template("geo_aeo_integrated.html",sites=get_sites(),site=site,latest_run=latest_run,summary=summary,
+    return render_template("geo_aeo_integrated.html",sites=get_sites(),site=site,latest_run=latest_run,summary=summary,score_coverage=score_coverage,
                            page_rows=page_rows,priority_signals=priority_signals,message=request.args.get("message","").strip())
 
 
@@ -1688,6 +1696,7 @@ def geo_aeo_page_json(domain,page_id):
         if not con.execute("SELECT 1 FROM site_page WHERE id=? AND domain=?",(page_id,domain)).fetchone(): abort(404)
         audit=latest_audit_page(con,page_id)
         if not audit: return {"audit":None,"signals":[]}
+        coverage = audit_score_coverage(con, audit["run_id"]).get(f"page:{page_id}:all", {})
         rows=con.execute(
             """SELECT s.family,s.signal_key,s.category,s.title,s.observed_status,s.severity,s.evidence,s.recommendation,
             s.source_title,s.source_url,COALESCE(st.workflow_status,'open') workflow_status,
@@ -1697,7 +1706,9 @@ def geo_aeo_page_json(domain,page_id):
             WHERE s.audit_page_id=? ORDER BY s.family,s.category,s.signal_key""",(domain,page_id,audit["id"])
         ).fetchall()
     return {"audit":{"run_id":audit["run_id"],"geo_score":audit["geo_score"],"aeo_score":audit["aeo_score"],
-                     "combined_score":audit["combined_score"],"page_type":audit["page_type"],"completed_at":audit["completed_at"]},
+                     "combined_score":audit["combined_score"],"evaluated_count":coverage.get("evaluated",0),
+                     "applicable_count":coverage.get("applicable",0),"coverage":coverage.get("coverage",0),
+                     "page_type":audit["page_type"],"completed_at":audit["completed_at"]},
             "signals":[dict(x) for x in rows]}
 
 
@@ -1729,6 +1740,7 @@ def geo_aeo_report(domain,run_id):
     with research_db() as con:
         run=con.execute("SELECT * FROM audit_run WHERE id=? AND domain=?",(run_id,domain)).fetchone()
         if not run: abort(404)
+        score_coverage = audit_score_coverage(con, run_id)
         summary=con.execute("SELECT * FROM audit_domain_summary WHERE audit_run_id=?",(run_id,)).fetchone() or {}
         page_rows=con.execute("SELECT ap.*,p.path FROM audit_page ap JOIN site_page p ON p.id=ap.page_id WHERE ap.audit_run_id=? ORDER BY p.path COLLATE NOCASE",(run_id,)).fetchall()
         pages=[]
@@ -1740,7 +1752,7 @@ def geo_aeo_report(domain,run_id):
                 WHERE s.audit_page_id=? ORDER BY s.family,s.category,s.signal_key""",(domain,p["page_id"],p["id"])
             ).fetchall()
             item=dict(p); item["signals"]=[dict(x) for x in sig]; pages.append(item)
-    return render_template("geo_aeo_report.html",site=site,run=run,summary=summary,pages=pages)
+    return render_template("geo_aeo_report.html",site=site,run=run,summary=summary,pages=pages,score_coverage=score_coverage)
 
 @app.route("/d/<domain>/reports")
 def reports(domain):
@@ -1796,10 +1808,9 @@ def public_report_access(report_id):
     error = ""
     if request.method == "POST":
         if password_valid(RESEARCH_DB, domain, request.form.get("password", "")):
-            authorised = list(session.get("_pulse_client_report_ids") or [])
-            if report_id not in authorised:
-                authorised.append(report_id)
-            session["_pulse_client_report_ids"] = authorised[-50:]
+            authorised = dict(session.get("_pulse_client_report_ids") or {})
+            authorised[report_id] = state["policy_version"]
+            session["_pulse_client_report_ids"] = dict(list(authorised.items())[-50:])
             session.modified = True
             return redirect(url_for("public_report", report_id=report_id))
         error = "That password was not accepted."
@@ -1943,11 +1954,10 @@ def report_session_view(domain, report_id):
     if not session:
         abort(404)
 
-    # Historical report data comes exclusively from the stored report_session
-    # snapshot. Current exclusions and current Manual AI state must never be
-    # injected into an existing observation.
+    # Exclusions are a current presentation overlay; the stored observation
+    # and its historical evidence remain immutable.
     historical_snapshot = json.loads(json.dumps(session["snapshot"]))
-    report = prepare_report_view(historical_snapshot)
+    report = prepare_report_view(apply_exclusions(historical_snapshot, load_exclusions(RESEARCH_DB, domain)))
     human_interpretation = load_human_interpretation(RESEARCH_DB, domain, report_id)
     report_notes = load_report_notes(RESEARCH_DB, domain)
 
@@ -1983,7 +1993,9 @@ def _send_observation_export(domain, report_id, fmt):
     session = load_report_session(RESEARCH_DB, domain, report_id)
     if not session:
         abort(404)
-    dataset = canonical_dataset(json.loads(json.dumps(session["snapshot"])), domain=domain, observation_id=report_id)
+    original = json.loads(json.dumps(session["snapshot"]))
+    projected = apply_exclusions(original, load_exclusions(RESEARCH_DB, domain))
+    dataset = canonical_dataset(projected, domain=domain, observation_id=report_id)
     dataset["presentation_locale"] = resolve_report_locale(
         request.args.get("lang"), request.cookies.get("pulse-report-language"),
         request.headers.get("Accept-Language"),

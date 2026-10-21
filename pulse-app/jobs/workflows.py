@@ -426,10 +426,28 @@ def run_ai(job, worker_id):
         if owned is None:
             con.rollback()
             raise RuntimeError("Durable job ownership lost before AI current-state publication.")
+        current = con.execute(
+            "SELECT question_set_version FROM manual_ai_source WHERE domain=? COLLATE NOCASE",
+            (p["domain"],),
+        ).fetchone()
+        rows = con.execute(
+            "SELECT * FROM manual_ai_state_source WHERE domain=? COLLATE NOCASE",
+            (p["domain"],),
+        ).fetchall()
+        same_revision = bool(current and int(current["question_set_version"]) == int(src.get("question_set_version") or 1))
+        for row in rows:
+            prefix = f"{row['phase']}_{row['state']}"
+            same_revision &= str(row["prompt_text"] or "") == str(src.get(f"{prefix}_prompt_text") or "")
+            for provider_name in ("chatgpt", "claude", "gemini"):
+                key = f"{provider_name}_response"
+                same_revision &= str(row[key] or "") == str(src.get(f"{prefix}_{key}") or "")
         con.execute(
             "UPDATE manual_ai_analysis_run SET status='completed',analysis_text=?,error_json='{}',completed_at=?,updated_at=? WHERE run_id=?",
             (analysis, ts, ts, rid),
         )
+        if not same_revision:
+            con.commit()
+            return result("completed", manual_ai_analysis_run_id=rid, current_state="superseded")
         con.execute(
             """
             UPDATE manual_ai_source
@@ -580,6 +598,12 @@ def run_report_refresh(job, worker_id):
     data["selected_sources"] = selected_source_keys(
         site, research_db=RESEARCH_DB, opengsc_db=SEO_DB
     )
+    if "dataforseo" not in data["selected_sources"]:
+        data["historical_dataforseo_snapshots"] = (
+            list(data.get("dataforseo_snapshots") or [])
+            + list(data.get("historical_dataforseo_snapshots") or [])
+        )
+        data["dataforseo_snapshots"] = []
     data["source_inventory"] = domain_sources_for_site(
         site, research_db=RESEARCH_DB, opengsc_db=SEO_DB
     )

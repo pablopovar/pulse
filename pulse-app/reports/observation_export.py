@@ -121,6 +121,14 @@ def json_bytes(dataset: dict[str, Any]) -> bytes:
 
 
 def csv_bytes(dataset: dict[str, Any]) -> bytes:
+    def spreadsheet_safe(value: Any) -> Any:
+        if value is None:
+            return value
+        text = str(value)
+        if text.lstrip("\t\r\n \x00").startswith(("=", "+", "-", "@")):
+            return "'" + text
+        return value
+
     rows = dataset.get("resource_outcomes") or dataset.get("url_decisions") or dataset.get("crawl_pages") or []
     shared = {key: dataset.get(key) for key in ("schema_version", "domain", "observation_id", "observed_at", "crawl_run", "source_observations", "sitemap", "sitemap_reconciliation", "llm_sources", "report_view")}
     fields = sorted(set(shared) | {key for row in rows if isinstance(row, dict) for key in row})
@@ -129,7 +137,7 @@ def csv_bytes(dataset: dict[str, Any]) -> bytes:
     writer.writeheader()
     for row in rows:
         combined = shared | (row if isinstance(row, dict) else {"url": row})
-        writer.writerow({key: json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value for key, value in combined.items()})
+        writer.writerow({key: spreadsheet_safe(json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value) for key, value in combined.items()})
     return out.getvalue().encode("utf-8-sig")
 
 

@@ -176,8 +176,8 @@ def _require_public_report_password(report_id: str):
         return None
     if not state["enabled"]:
         return None
-    authorised = session.get("_pulse_client_report_ids") or []
-    if report_id in authorised:
+    authorised = session.get("_pulse_client_report_ids") or {}
+    if isinstance(authorised, dict) and authorised.get(report_id) == state["policy_version"]:
         return None
     if request.endpoint == "public_report_access":
         return None
