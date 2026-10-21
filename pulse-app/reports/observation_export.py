@@ -68,6 +68,10 @@ def _executive_projection(snapshot: dict[str, Any]) -> dict[str, Any]:
     from reports.web_report import prepare_report_view
 
     report = prepare_report_view(snapshot)
+    seo = report.get("seo") or {}
+    gsc_connected = bool(seo.get("period_start") and seo.get("period_end"))
+    gsc_status = "connected" if gsc_connected else "not_connected"
+    gsc_label = "Google Search Console not connected"
     return _jsonable({
         "current_verdict": (report.get("executive_summary") or {}).get("finding") or (report.get("high_signal_findings") or [{}])[0],
         "executive_summary": report.get("executive_summary") or {},
@@ -75,6 +79,16 @@ def _executive_projection(snapshot: dict[str, Any]) -> dict[str, Any]:
         "top_actions": report.get("top_actions") or [],
         "pulse_summary": report.get("pulse_summary") or {},
         "monitoring_coverage": report.get("monitoring_coverage") or {},
+        "gsc_reporting": {
+            "status": gsc_status,
+            "label": gsc_label if not gsc_connected else "Google Search Console connected",
+            "metrics": {
+                key: (seo.get(key) if gsc_connected else None)
+                for key in ("keywords", "pages", "impressions", "clicks")
+            },
+            "ctr": (round(float(seo.get("clicks") or 0) * 100 / float(seo.get("impressions") or 0), 2)
+                    if gsc_connected and seo.get("impressions") else 0 if gsc_connected else None),
+        },
         "report_quality": report.get("report_quality") or {},
         "methodology": report.get("methodology") or "",
         "methodology_version": report.get("methodology_version") or "",

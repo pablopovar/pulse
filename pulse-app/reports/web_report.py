@@ -692,15 +692,22 @@ def _ai_family(data,defn):
 
 def _seo_family(data,defn):
     seo=dict(data.get("seo") or {})
+    # A missing GSC observation is unavailable evidence, not measured zero.
+    # A bounded reporting period is the signal that current GSC data exists.
+    gsc_available = bool(seo.get("period_start") and seo.get("period_end"))
     try:
-        seo["ctr"]=round(float(seo.get("clicks") or 0)*100/float(seo.get("impressions") or 0),2) if seo.get("impressions") else 0
-    except Exception: seo["ctr"]=0
+        seo["ctr"]=(round(float(seo.get("clicks") or 0)*100/float(seo.get("impressions") or 0),2)
+                    if gsc_available and seo.get("impressions") else 0 if gsc_available else None)
+    except Exception: seo["ctr"]=None
+    if not gsc_available:
+        for key in ("keywords", "pages", "impressions", "clicks"):
+            seo[key] = None
     keywords=list(data.get("keywords") or [])
     striking=[k for k in keywords if k.get("latest_position") is not None and 4<=float(k.get("latest_position") or 999)<=20]
     by_query=defaultdict(list)
     for k in keywords: by_query[k.get("query") or ""].append(k)
     cann=[{"query":q,"pages":rows} for q,rows in by_query.items() if q and len({r.get("page") for r in rows if r.get("page")})>1]
-    return {**defn,"seo":seo,"keywords":keywords,"wanted":list(data.get("wanted") or []),"striking_distance":striking,
+    return {**defn,"seo":seo,"gsc_available":gsc_available,"gsc_unavailable_label":"Google Search Console not connected","keywords":keywords,"wanted":list(data.get("wanted") or []),"striking_distance":striking,
             "exact_cannibalization":cann,"rank_tracking":list(data.get("rank_tracking") or []),
             "competitor_keywords":list(data.get("competitor_keywords") or []),"backlinks":list(data.get("backlinks") or []),
             "ref_domains":list(data.get("ref_domains") or []),"backlink_summary":data.get("backlink_summary"),
@@ -918,6 +925,11 @@ def prepare_report_view(snapshot:dict[str,Any])->dict[str,Any]:
     source_rows = data.get("source_inventory") or []
     by_key = {str(row.get("key") or row.get("name") or "").lower(): row for row in source_rows if isinstance(row, dict)}
     seo = data.get("seo") or {}
+    gsc_period_available = bool(seo.get("period_start") and seo.get("period_end"))
+    if not gsc_period_available:
+        # Legacy/unbounded keyword rows cannot stand in for current GSC
+        # evidence, including as a hidden traffic multiplier in audit scores.
+        data["keywords"] = []
     manual = data.get("manual_ai_source") or data.get("manual_ai_snapshot") or {}
     dataforseo = data.get("dataforseo_snapshots") or []
     llm_sources = data.get("llm_sources") or data.get("agent_readiness_sources") or []

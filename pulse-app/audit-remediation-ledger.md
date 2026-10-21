@@ -2,7 +2,7 @@
 
 Branch: `fix/full-audit`
 
-This ledger records implementation status only. No tests, linters, migrations, containers, services, browsers, or application commands were run during this pass.
+This ledger records implementation status and verification performed. No application, browser, container, service, or migration was run.
 
 ## Findings
 
@@ -42,6 +42,11 @@ This ledger records implementation status only. No tests, linters, migrations, c
 | F32 | implemented | `reports/pulse_history.py`, `reports/web_report.py`, `templates/full_report.html` | Comparison controls used material-change-only history. | Controls receive every normalized observation; compact history remains material-only and absent evidence is unavailable. | Browser interaction remains unverified. |
 | F33 | implemented | `app.py`, `services/security_boundary.py` | Web and security lookup could use different default research DB paths. | Both resolve the same `/data/audit/research.db` default/config value. | Existing branch implementation; env-unset startup remains in the test script. |
 | F34 | implemented | `services/domains.py` | Domain deletion preserved domain tag definitions. | Keyword and page tag definitions are deleted with other domain-owned data. | Destructive validation must use a disposable database. |
+| F35 | implemented | `reports/web_report.py`, `templates/full_report.html`, `reports/full_pdf.py`, `reports/observation_export.py`, `tests/test_observation_export.py` | Missing GSC metrics could display as zero or as if no opportunities were found, and unbounded keyword rows could silently affect traffic-weighted audit scores. | When GSC has no bounded observation, each report summary metric says “Google Search Console not connected”; structured exports report unavailable status and null metrics; unbounded keyword rows are excluded from derived findings and score weighting. | HTML and PDF visual rendering remains for Pablo's user session. |
+
+## Deferred product decision now implemented
+
+Pulse reports remain usable without Google products. Fields that require Google Search Console show “Google Search Console not connected” when there is no bounded GSC observation. Missing values are not converted to zero, and GSC values do not affect derived findings or score weighting without dated GSC evidence. Other provider evidence remains source-labeled and does not substitute for GSC. Client-side application testing is still pending.
 
 ## Schema and configuration implications
 
@@ -51,6 +56,7 @@ This ledger records implementation status only. No tests, linters, migrations, c
 - `RESEARCH_DB` continues to support explicit configuration. The coherent fallback is `/data/audit/research.db` for web, worker, and public access policy lookup.
 - Legacy OpenGSC inventory without `site_id` is deliberately unavailable. A read-only schema inspection is required before deciding whether a safe legacy scope adapter is possible.
 - Sitemap traversal defaults to 200 fetched sitemap sources, 5 MiB decoded per source, and 32 MiB decoded in aggregate.
+- GSC report projections require a bounded start/end period before presenting numeric SEO totals or deriving the CTR. The immutable stored observation remains lossless; the structured report projection marks unavailable GSC metrics as null.
 
 ## Ordered complete-software test session
 

@@ -277,12 +277,14 @@ def _build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
         story.append(_P(f"{term}: {definition}", S["small"]))
     story.append(_P("The PDF is intentionally concise. Detailed page-level checks, SEO tables, technical evidence, filters, and historical drill-down remain in the online HTML report.", S["small"]))
     seo = data.get("seo") or {}
+    gsc_available = bool(seo.get("period_start") and seo.get("period_end"))
+    gsc_unavailable = "Google Search Console not connected"
     aud = data.get("audit_summary") or {}
     crawl = data.get("crawl") or {}
 
     story.append(_metric_cards([
-        ("Observed keywords", seo.get("keywords", "—")),
-        ("Ranking pages", seo.get("pages", "—")),
+        ("Observed keywords", seo.get("keywords") if gsc_available else gsc_unavailable),
+        ("Ranking pages", seo.get("pages") if gsc_available else gsc_unavailable),
         ("GEO score", _score_with_coverage(data, aud.get("geo_score", "—"), "GEO")),
         ("AEO score", _score_with_coverage(data, aud.get("aeo_score", "—"), "AEO")),
         ("Combined", _score_with_coverage(data, aud.get("combined_score", "—"))),
@@ -290,7 +292,7 @@ def _build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
     story.append(Spacer(1, 5*mm))
 
     bullets = []
-    if seo:
+    if gsc_available:
         bullets.append(
             f"Organic visibility: {seo.get('keywords',0)} observed keywords across "
             f"{seo.get('pages',0)} ranking pages, with {seo.get('impressions',0)} impressions "
@@ -370,7 +372,7 @@ def _build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
 
     story.append(PageBreak())
     story.append(_P("Organic Search Visibility", S["h1"]))
-    if seo:
+    if gsc_available:
         period = ""
         if seo.get("first_date") or seo.get("last_date"):
             period = f"{seo.get('first_date','?')} to {seo.get('last_date','?')}"
@@ -394,7 +396,7 @@ def _build_full_report_pdf(data: dict[str, Any], output_path: Path) -> Path:
         if len(rows) > 1:
             story.append(_table(rows, [45*mm,55*mm,18*mm,14*mm,14*mm,14*mm,20*mm], font_size=6.0))
     else:
-        story.append(_P("No GSC keyword-discovery dataset is currently available.", S["body"]))
+        story.append(_P(gsc_unavailable, S["body"]))
 
     if data.get("wanted"):
         story.append(Spacer(1, 4*mm))

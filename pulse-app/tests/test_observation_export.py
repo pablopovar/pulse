@@ -5,6 +5,7 @@ from reports.observation_export import (
     ObservationRenderer, canonical_dataset, csv_bytes, json_bytes, markdown_text,
     register_renderer, render_observation, xml_bytes,
 )
+from reports.web_report import prepare_report_view
 
 
 def dataset():
@@ -64,3 +65,43 @@ def test_markdown_projects_the_same_executive_view_as_json():
     title = value["report_view"]["current_verdict"]["title"]
     assert title == "Search visibility is not turning into search clicks"
     assert title in markdown_text(value).decode("utf-8")
+
+
+def test_unconnected_gsc_is_explicit_and_has_no_inferred_metrics():
+    snapshot = {
+        "seo": None,
+        "keywords": [{"query": "example", "page": "https://example.com/", "impressions": 100000}],
+        "audit_signals": [],
+    }
+    report = prepare_report_view(snapshot)
+    seo_family = next(f for f in report["families"] if f["kind"] == "seo")
+    assert seo_family["gsc_available"] is False
+    assert seo_family["gsc_unavailable_label"] == "Google Search Console not connected"
+    assert seo_family["keywords"] == []
+    assert all(seo_family["seo"].get(key) is None for key in ("keywords", "pages", "impressions", "clicks", "ctr"))
+
+    exported = canonical_dataset(snapshot, domain="example.com", observation_id="obs-no-gsc")
+    coverage = exported["report_view"]["gsc_reporting"]
+    assert coverage["status"] == "not_connected"
+    assert coverage["label"] == "Google Search Console not connected"
+    assert all(value is None for value in coverage["metrics"].values())
+    assert coverage["ctr"] is None
+    assert not any(f.get("source") == "Google Search Console" for f in report["high_signal_findings"])
+
+
+def test_connected_gsc_zeroes_remain_measured_zeroes():
+    report = prepare_report_view({
+        "seo": {
+            "keywords": 0,
+            "pages": 0,
+            "impressions": 0,
+            "clicks": 0,
+            "period_start": "2026-09-01",
+            "period_end": "2026-09-28",
+        },
+        "keywords": [],
+        "audit_signals": [],
+    })
+    seo_family = next(f for f in report["families"] if f["kind"] == "seo")
+    assert seo_family["gsc_available"] is True
+    assert [seo_family["seo"].get(key) for key in ("keywords", "pages", "impressions", "clicks", "ctr")] == [0, 0, 0, 0, 0]
