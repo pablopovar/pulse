@@ -2,7 +2,7 @@
 
 Branch: `fix/full-audit`
 
-This ledger records implementation status and verification performed. No application, browser, container, service, or migration was run.
+This ledger records implementation status and verification performed. An isolated Pulse web-app container runs from this branch on localhost for user review; it uses copies of the existing research/report volumes and an empty read-only OpenGSC volume. The background worker and external provider APIs were not run.
 
 ## Findings
 
@@ -43,6 +43,7 @@ This ledger records implementation status and verification performed. No applica
 | F33 | implemented | `app.py`, `services/security_boundary.py` | Web and security lookup could use different default research DB paths. | Both resolve the same `/data/audit/research.db` default/config value. | Existing branch implementation; env-unset startup remains in the test script. |
 | F34 | implemented | `services/domains.py` | Domain deletion preserved domain tag definitions. | Keyword and page tag definitions are deleted with other domain-owned data. | Destructive validation must use a disposable database. |
 | F35 | implemented | `reports/web_report.py`, `templates/full_report.html`, `reports/full_pdf.py`, `reports/observation_export.py`, `tests/test_observation_export.py` | Missing GSC metrics could display as zero or as if no opportunities were found, and unbounded keyword rows could silently affect traffic-weighted audit scores. | When GSC has no bounded observation, each report summary metric says “Google Search Console not connected”; structured exports report unavailable status and null metrics; unbounded keyword rows are excluded from derived findings and score weighting. | HTML and PDF visual rendering remains for Pablo's user session. |
+| F36 | implemented | `services/source_inventory.py`, `templates/sources.html`, `templates/overview.html`, `integrations/dataforseo/extension.py`, `templates/dataforseo.html`, `tests/test_source_inventory.py` | Source selection was easy to mistake for provider connection; some catalog entries had no connector, and DataForSEO could be marked enabled while credentials or a kill switch blocked every request. | The UI now distinguishes report selection from connection, provides DataForSEO setup, identifies OpenGSC as external/read-only, labels unsupported connectors, and refuses blocked DataForSEO enable requests with a reason. | GA4, Semrush, and generic Google API connectors remain genuine product integrations to build; they are no longer presented as connectable in this build. |
 
 ## Deferred product decision now implemented
 
@@ -57,6 +58,14 @@ Pulse reports remain usable without Google products. Fields that require Google 
 - Legacy OpenGSC inventory without `site_id` is deliberately unavailable. A read-only schema inspection is required before deciding whether a safe legacy scope adapter is possible.
 - Sitemap traversal defaults to 200 fetched sitemap sources, 5 MiB decoded per source, and 32 MiB decoded in aggregate.
 - GSC report projections require a bounded start/end period before presenting numeric SEO totals or deriving the CTR. The immutable stored observation remains lossless; the structured report projection marks unavailable GSC metrics as null.
+- Source selection is separate from provider authorization and connection. DataForSEO requires configured credentials, an enabled project, and all kill switches off; GSC linking remains managed in OpenGSC. GA4, Semrush, and generic Google APIs have no Pulse connector in this build.
+
+## Verification record
+
+- Existing remediation technical pass: 175 tests passed; route/security tests still require Flask/Werkzeug in that environment. (The subsequent isolated app image includes the required application dependencies.)
+- GSC report projection: 6 focused tests passed; Python AST and diff checks passed.
+- Source setup and status regressions: 24 focused tests passed in the isolated Pulse image, including source inventory, DataForSEO enable gates, report source coverage, and exports.
+- User review instance: `pulse-full-audit-test` is bound to `127.0.0.1:4019`; source data is cloned and isolated. No OpenGSC service, worker, or provider API calls were started.
 
 ## Ordered complete-software test session
 

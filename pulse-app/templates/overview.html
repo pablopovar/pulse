@@ -7,7 +7,7 @@
 </div>
 <div class="domain-state-grid">
   <div class="domain-state-card"><span>Status</span><strong class="ready-state">{{ readiness.label }}</strong><small>{{ readiness.pages }} page{{ '' if readiness.pages == 1 else 's' }} available for source-independent checks</small></div>
-  <div class="domain-state-card"><span>Selected / connected sources</span><strong>{{ sources|selectattr('selected')|list|length }}</strong><a href="{{ url_for('domain_sources', domain=site.domain) }}">Add / select sources</a></div>
+  <div class="domain-state-card"><span>Sources selected for reports</span><strong>{{ sources|selectattr('selected')|list|length }}</strong><small>Selection does not connect a provider.</small><a href="{{ url_for('domain_sources', domain=site.domain) }}">Configure source selection</a></div>
   <div class="domain-state-card"><span>Reports</span><strong>{{ reports|length }}</strong><a href="{{ url_for('reports', domain=site.domain) }}">View reports</a></div>
 </div>
 <h2>Sources</h2>

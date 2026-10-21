@@ -98,6 +98,10 @@
 </section>
 
 <form method="post" action="{{ url_for('domain_sources', domain=site.domain) }}">
+  <section class="panel source-connection-guidance" role="note">
+    <h2>Source selection and connection are separate</h2>
+    <p>Selecting a source records that it belongs in this domain's report scope. It does not connect an account, authorize access, or turn on a provider. The connection status and setup path are shown on each source card.</p>
+  </section>
   <div class="source-grid">
     {% for source in sources %}
     {% if source.key == 'manual_ai' %}
@@ -108,6 +112,7 @@
         <span class="source-status source-status-{{ source.status_class }}">{{ source.status }}</span>
       </div>
       <p>{{ source.description }}</p>
+      <p><strong>Connection:</strong> {{ source.connector_status }}</p>
       {% if source.detail %}<small>{{ source.detail }}</small>{% endif %}
       <div class="source-card-actions">
         <a class="button small" href="{{ url_for('manual_ai_source', domain=site.domain) }}">Open</a>
@@ -116,12 +121,26 @@
     {% else %}
     <label class="source-card">
       <div class="source-card-head">
-        <input type="checkbox" name="selected" value="{{ source.key }}" {% if source.selected %}checked{% endif %}>
+        {% if source.connection_kind == 'unavailable' and not source.selected %}
+        <input type="checkbox" value="{{ source.key }}" disabled aria-label="{{ source.name }} connector unavailable">
+        {% else %}
+        <input type="checkbox" name="selected" value="{{ source.key }}" {% if source.selected %}checked{% endif %} aria-label="Include {{ source.name }} when connected">
+        {% endif %}
         <strong>{{ source.name }}</strong>
         <span class="source-status source-status-{{ source.status_class }}">{{ source.status }}</span>
       </div>
       <p>{{ source.description }}</p>
+      <p><strong>Connection:</strong> {{ source.connector_status }}</p>
       {% if source.detail %}<small>{{ source.detail }}</small>{% endif %}
+      {% if source.key == 'dataforseo' %}
+      <div class="source-card-actions"><a class="button small" href="{{ url_for('dataforseo_extension', domain=site.domain) }}">Configure / enable DataForSEO</a></div>
+      {% elif source.key == 'gsc' and source.connection_kind == 'external_read_only' %}
+      <small>Connect or select the Google Search Console property in OpenGSC; Pulse reads the linked property data.</small>
+      {% elif source.key in ['ga4', 'semrush', 'google_apis'] %}
+      <small>This source cannot be enabled in this Pulse build because its connector is not implemented.</small>
+      {% elif source.key in ['chatgpt', 'claude', 'gemini'] %}
+      <small>Use Manual AI Responses to collect provider answers; API connection is not available here.</small>
+      {% endif %}
     </label>
     {% endif %}
     {% endfor %}

@@ -22,11 +22,17 @@ def register_dataforseo_extension(app,research_db,get_site,get_sites):
         except Exception: items=10
         try:
             with research_db() as con:
-                dfs.save_project_settings(
-                    con,site["domain"],enabled=enabled,
-                    max_items_per_run=items,max_calls_per_run=calls,
-                )
-            msg="DataForSEO project settings saved."
+                current = dfs.status(con, site["domain"])
+                if enabled and current["kill_switch"]:
+                    msg = "DataForSEO was not enabled: a kill switch is active. Turn it off in the environment or global settings first."
+                elif enabled and not current["credentials_present"]:
+                    msg = "DataForSEO was not enabled: configure DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD first."
+                else:
+                    dfs.save_project_settings(
+                        con,site["domain"],enabled=enabled,
+                        max_items_per_run=items,max_calls_per_run=calls,
+                    )
+                    msg="DataForSEO project settings saved."
         except SchemaCompatibilityError as exc:
             msg=f"DataForSEO schema is not current: {exc}"
         except Exception as exc:

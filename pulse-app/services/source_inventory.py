@@ -41,18 +41,23 @@ def site_id_value(site: Any):
 
 
 def detected_source_state(site: dict, opengsc_db: str | Path) -> dict[str, dict]:
+    gsc_site_id = site_id_value(site)
+    opengsc = OpenGSCAdapter(opengsc_db)
+    try:
+        gsc_connected = bool(
+            gsc_site_id
+            and str(gsc_site_id) in {str(row.get("id") or "") for row in opengsc.list_sites()}
+        )
+    except Exception:
+        gsc_connected = False
     states = {
         "gsc": {
-            "connected": not bool(site.get("gsc_missing")),
-            "detail": "OpenGSC / GSC property linked" if not site.get("gsc_missing") else "",
-        },
-        "dataforseo": {
-            "connected": bool(os.environ.get("DATAFORSEO_LOGIN") and os.environ.get("DATAFORSEO_PASSWORD")),
-            "detail": "Credentials configured" if os.environ.get("DATAFORSEO_LOGIN") and os.environ.get("DATAFORSEO_PASSWORD") else "",
+            "connected": gsc_connected,
+            "detail": "OpenGSC property linked; Pulse reads it" if gsc_connected else "",
         },
     }
     try:
-        states.update(OpenGSCAdapter(opengsc_db).detected_source_state(site_id_value(site)))
+        states.update(opengsc.detected_source_state(gsc_site_id))
     except Exception:
         pass
     return states
@@ -67,6 +72,31 @@ def domain_sources_for_site(
     detected = detected_source_state(site, opengsc_db)
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
     domain = site["domain"]
+    dataforseo_setup = "Not configured"
+    dataforseo_enabled = False
+    try:
+        with connect_sqlite(research_db) as con:
+            project = con.execute(
+                "SELECT enabled FROM extension_project WHERE domain=? AND extension_key='dataforseo'",
+                (domain,),
+            ).fetchone()
+            global_settings = con.execute(
+                "SELECT kill_switch FROM extension_global WHERE extension_key='dataforseo'"
+            ).fetchone()
+        if str(os.environ.get("DATAFORSEO_KILL_SWITCH", "")).strip().lower() in {"1", "true", "yes", "on", "enabled"}:
+            dataforseo_setup = "Blocked by environment kill switch"
+        elif global_settings and global_settings["kill_switch"]:
+            dataforseo_setup = "Blocked by kill switch"
+        elif not (os.environ.get("DATAFORSEO_LOGIN") and os.environ.get("DATAFORSEO_PASSWORD")):
+            dataforseo_setup = "API credentials not configured"
+        elif not (project and project["enabled"]):
+            dataforseo_setup = "Credentials configured; enable for this domain in DataForSEO settings"
+        else:
+            dataforseo_setup = "Enabled for this domain; the first provider request will verify credentials"
+            dataforseo_enabled = True
+    except Exception:
+        dataforseo_setup = "DataForSEO settings could not be read"
+    detected["dataforseo"] = {"connected": dataforseo_enabled, "detail": dataforseo_setup}
     with connect_sqlite(research_db) as con:
         rows = {
             row["source_key"]: dict(row)
@@ -99,14 +129,37 @@ def domain_sources_for_site(
         state = detected.get(key, {})
         connected = bool(state.get("connected"))
         selected = bool(stored.get("selected"))
+        if key == "gsc":
+            connector_status = "OpenGSC property linked" if connected else "Not connected in OpenGSC"
+            connection_kind = "external_read_only"
+        elif key == "dataforseo":
+            connector_status = dataforseo_setup
+            connection_kind = "api_connector"
+        elif key == "manual_ai":
+            connector_status = "Manual provider responses supported"
+            connection_kind = "manual"
+        elif key == "clarity":
+            connector_status = "Stored Clarity observations available" if connected else "No Clarity observations available"
+            connection_kind = "stored_observations"
+        elif key in {"chatgpt", "claude", "gemini"}:
+            connector_status = "Stored observations available" if connected else "No live API connector; use Manual AI Responses"
+            connection_kind = "stored_observations"
+        elif key in {"ga4", "semrush", "google_apis"}:
+            connector_status = "Connector not implemented in Pulse"
+            connection_kind = "unavailable"
+        else:
+            connector_status = "No connector configured"
+            connection_kind = "unavailable"
         out.append({
             "key": key,
             "name": name,
             "description": description,
             "selected": selected,
-            "status": "Connected" if connected else ("Selected" if selected else "Not selected"),
-            "status_class": "connected" if connected else ("selected" if selected else "off"),
+            "status": "Selected for reports" if selected else "Not selected for reports",
+            "status_class": "selected" if selected else "off",
             "detail": state.get("detail") or stored.get("detail") or "",
+            "connector_status": connector_status,
+            "connection_kind": connection_kind,
             "updated_at": stored.get("updated_at") or "",
         })
     catalog = {row[0] for row in SOURCE_CATALOG}
@@ -118,9 +171,11 @@ def domain_sources_for_site(
             "name": stored["source_name"],
             "description": "Custom or future evidence source.",
             "selected": bool(stored["selected"]),
-            "status": "Selected" if stored["selected"] else "Not selected",
+            "status": "Selected for reports" if stored["selected"] else "Not selected for reports",
             "status_class": "selected" if stored["selected"] else "off",
             "detail": stored["detail"] or "",
+            "connector_status": "Custom source; no Pulse connector configured",
+            "connection_kind": "unavailable",
             "updated_at": stored.get("updated_at") or "",
         })
     return out

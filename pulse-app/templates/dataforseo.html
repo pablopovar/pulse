@@ -9,6 +9,8 @@
   <p><strong>Credentials:</strong> {% if dfs.credentials_present %}configured{% else %}missing{% endif %}</p>
   <p><strong>Project:</strong> {% if dfs.project_enabled %}enabled{% else %}disabled{% endif %}</p>
   <p><strong>Kill switch:</strong> {% if dfs.kill_switch %}<strong>ON — DataForSEO disabled</strong>{% else %}off{% endif %}</p>
+  {% if not dfs.credentials_present %}<p class="notice">DataForSEO cannot be enabled until DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD are configured for Pulse.</p>{% endif %}
+  {% if dfs.kill_switch %}<p class="notice">DataForSEO cannot be enabled while a kill switch is active. An environment kill switch must be changed in deployment configuration.</p>{% endif %}
   <form method="post" action="{{ url_for('dataforseo_settings', domain=site.domain) }}">
     <p><label><input type="checkbox" name="enabled" value="1" {% if dfs.project_enabled %}checked{% endif %}> Enable DataForSEO for this project</label></p>
     <p><label>Max API calls per report <input type="number" name="max_calls_per_run" min="0" max="20" value="{{ dfs.max_calls_per_run }}"></label></p>
