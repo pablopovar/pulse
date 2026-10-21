@@ -432,15 +432,46 @@ def create_report_session(db_path:Path,domain:str,snapshot:dict[str,Any],*,execu
     return report_id
 
 
-def _session_with_history(con, row):
+def _published_report_ids(con, domain):
+    current=con.execute(
+        "SELECT current_report_id FROM domain_report WHERE domain=? COLLATE NOCASE",
+        (domain,),
+    ).fetchone()
+    if not current or not current["current_report_id"]:
+        return set()
+    current_id=current["current_report_id"]
+    rows=con.execute(
+        """SELECT rs.id
+             FROM report_session rs
+             LEFT JOIN durable_job job ON job.id=rs.execution_run_id
+            WHERE rs.domain=? COLLATE NOCASE
+              AND (
+                rs.id=?
+                OR job.publication_status='published'
+                OR (
+                  job.id IS NULL
+                  AND rs.created_at<=(
+                    SELECT created_at FROM report_session WHERE id=?
+                  )
+                )
+              )""",
+        (domain,current_id,current_id),
+    ).fetchall()
+    return {row["id"] for row in rows}
+
+
+def _session_with_history(con, row, *, published_only=False):
     if not row:
+        return None
+    published_ids = _published_report_ids(con, row["domain"]) if published_only else None
+    if published_ids is not None and row["id"] not in published_ids:
         return None
     snapshot=json.loads(row["snapshot_json"])
     history_rows=con.execute(
         "SELECT id,domain,created_at,snapshot_json FROM report_session WHERE domain=? COLLATE NOCASE AND created_at<=? ORDER BY created_at ASC LIMIT 250",
         (row["domain"],row["created_at"]),
     ).fetchall()
-    records=[{"id":r["id"],"domain":r["domain"],"created_at":r["created_at"],"snapshot":json.loads(r["snapshot_json"])} for r in history_rows]
+    records=[{"id":r["id"],"domain":r["domain"],"created_at":r["created_at"],"snapshot":json.loads(r["snapshot_json"])} for r in history_rows if published_ids is None or r["id"] in published_ids]
     _attach_monitoring_history(records)
     history=build_finding_history(records)
     snapshot["finding_history"]=history
@@ -468,6 +499,8 @@ def _session_with_history(con, row):
     ).fetchall()
     observations = []
     for item in available_rows:
+        if published_ids is not None and item["id"] not in published_ids:
+            continue
         observation = dict(item)
         try:
             observed_at = datetime.fromisoformat(str(observation["created_at"]).replace("Z", "+00:00"))
@@ -481,10 +514,10 @@ def _session_with_history(con, row):
     return {"id":row["id"],"domain":row["domain"],"created_at":row["created_at"],"snapshot":snapshot}
 
 
-def load_report_session(db_path:Path,domain:str,report_id:str):
+def load_report_session(db_path:Path,domain:str,report_id:str,*,published_only=False):
     with _connect(db_path) as con:
         row=con.execute("SELECT id,domain,created_at,snapshot_json FROM report_session WHERE id=? AND domain=? COLLATE NOCASE",(report_id,domain)).fetchone()
-        return _session_with_history(con,row)
+        return _session_with_history(con,row,published_only=published_only)
 
 
 def load_current_report_session(db_path:Path,domain:str):

@@ -19,7 +19,7 @@ from services.report_collaboration import (
     add_reply,
     load_human_interpretation,
     load_report_notes,
-    report_domain,
+    published_report_domain,
     save_human_interpretation,
     save_report_note as persist_report_note,
     set_exclusions,
@@ -1696,7 +1696,8 @@ def geo_aeo_page_json(domain,page_id):
         if not con.execute("SELECT 1 FROM site_page WHERE id=? AND domain=?",(page_id,domain)).fetchone(): abort(404)
         audit=latest_audit_page(con,page_id)
         if not audit: return {"audit":None,"signals":[]}
-        coverage = audit_score_coverage(con, audit["run_id"]).get(f"page:{page_id}:all", {})
+        score_coverage = audit_score_coverage(con, audit["run_id"])
+        coverage = score_coverage.get(f"page:{page_id}:all", {})
         rows=con.execute(
             """SELECT s.family,s.signal_key,s.category,s.title,s.observed_status,s.severity,s.evidence,s.recommendation,
             s.source_title,s.source_url,COALESCE(st.workflow_status,'open') workflow_status,
@@ -1708,6 +1709,7 @@ def geo_aeo_page_json(domain,page_id):
     return {"audit":{"run_id":audit["run_id"],"geo_score":audit["geo_score"],"aeo_score":audit["aeo_score"],
                      "combined_score":audit["combined_score"],"evaluated_count":coverage.get("evaluated",0),
                      "applicable_count":coverage.get("applicable",0),"coverage":coverage.get("coverage",0),
+                     "score_coverage":{family:score_coverage.get(f"page:{page_id}:{family}",{}) for family in ("GEO","AEO","all")},
                      "page_type":audit["page_type"],"completed_at":audit["completed_at"]},
             "signals":[dict(x) for x in rows]}
 
@@ -1799,7 +1801,7 @@ def domain_skin(domain):
 
 @app.route("/reports/<report_id>/access", methods=["GET", "POST"])
 def public_report_access(report_id):
-    domain = report_domain(RESEARCH_DB, report_id)
+    domain = published_report_domain(RESEARCH_DB, report_id)
     if not domain:
         abort(404)
     state = public_report_access_state(RESEARCH_DB, domain)
@@ -1838,10 +1840,10 @@ def public_report_note_reply(report_id):
 
 @app.get("/reports/<report_id>")
 def public_report(report_id):
-    domain = report_domain(RESEARCH_DB, report_id)
+    domain = published_report_domain(RESEARCH_DB, report_id)
     if not domain:
         abort(404)
-    return report_session_view(domain, report_id)
+    return report_session_view(domain, report_id, published_only=True)
 
 
 @app.get("/reports/<report_id>/export.<fmt>")
@@ -1851,18 +1853,18 @@ def public_report_export(report_id, fmt):
     Security middleware gives this route exactly the same public-report
     capability and optional password handling as the HTML report.
     """
-    domain = report_domain(RESEARCH_DB, report_id)
+    domain = published_report_domain(RESEARCH_DB, report_id)
     if not domain:
         abort(404)
-    return _send_observation_export(domain, report_id, fmt)
+    return _send_observation_export(domain, report_id, fmt, published_only=True)
 
 
 @app.get("/reports/<report_id>/pdf")
 def public_report_pdf(report_id):
-    domain = report_domain(RESEARCH_DB, report_id)
+    domain = published_report_domain(RESEARCH_DB, report_id)
     if not domain:
         abort(404)
-    return _send_observation_export(domain, report_id, "pdf")
+    return _send_observation_export(domain, report_id, "pdf", published_only=True)
 
 
 @app.post("/d/<domain>/report-workflow/exclusion")
@@ -1948,9 +1950,9 @@ def report_notes_json(domain):
 
 
 @app.get("/d/<domain>/reports/<report_id>")
-def report_session_view(domain, report_id):
+def report_session_view(domain, report_id, published_only=False):
     site = get_site(domain)
-    session = load_report_session(RESEARCH_DB, domain, report_id)
+    session = load_report_session(RESEARCH_DB, domain, report_id, published_only=published_only)
     if not session:
         abort(404)
 
@@ -1989,8 +1991,8 @@ def report_session_export(domain, report_id, fmt):
     return _send_observation_export(site["domain"], report_id, fmt)
 
 
-def _send_observation_export(domain, report_id, fmt):
-    session = load_report_session(RESEARCH_DB, domain, report_id)
+def _send_observation_export(domain, report_id, fmt, published_only=False):
+    session = load_report_session(RESEARCH_DB, domain, report_id, published_only=published_only)
     if not session:
         abort(404)
     original = json.loads(json.dumps(session["snapshot"]))

@@ -7,6 +7,7 @@ from pathlib import Path
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from db.sqlite import connect_sqlite
+from services.report_collaboration import published_report_domain
 
 
 def _now() -> str:
@@ -38,6 +39,8 @@ def access_state_for_report(db_path: Path, report_id: str) -> dict[str, object] 
     route remains responsible for its 404 response. Database errors propagate
     so the security boundary can deny access.
     """
+    if not published_report_domain(db_path, report_id):
+        return None
     with connect_sqlite(db_path, readonly=True) as con:
         row = con.execute(
             """SELECT r.domain,a.enabled,a.password_hash,a.updated_at

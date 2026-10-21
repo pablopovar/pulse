@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -93,6 +93,12 @@ class SitemapEntry:
     priority: float | None = None
 
 
+@dataclass
+class _SitemapTraversalBudget:
+    seen_sitemaps: set[str] = field(default_factory=set)
+    decoded_bytes: int = 0
+
+
 def inspect_agent_readiness_sources(
     domain: str, *, fetcher: SafeFetcher = safe_fetcher
 ) -> list[dict]:
@@ -176,27 +182,35 @@ def discover_sitemap_inventory(
     max_urls: int = DEFAULT_MAX_URLS,
     max_sitemaps: int = DEFAULT_MAX_SITEMAPS,
     source_evidence: list[dict] | None = None,
+    _budget: _SitemapTraversalBudget | None = None,
 ) -> tuple[list[SitemapEntry], list[str]]:
     """Traverse a sitemap tree without discarding child-sitemap provenance."""
 
-    seen_sitemaps: set[str] = set()
+    budget = _budget or _SitemapTraversalBudget()
     entries: dict[str, SitemapEntry] = {}
     errors: list[str] = []
-    decoded_bytes = 0
 
     def visit(url: str, depth: int, *, root: bool = False, parent: str = "") -> None:
-        nonlocal decoded_bytes
-        if url in seen_sitemaps:
+        if url in budget.seen_sitemaps:
             return
         if depth > max_depth:
             errors.append(f"recursion limit reached at {url}")
             return
         if len(entries) >= max_urls:
             return
-        if len(seen_sitemaps) >= max_sitemaps:
-            errors.append(f"sitemap source limit reached at {url}")
+        if len(budget.seen_sitemaps) >= max_sitemaps:
+            message = f"sitemap source limit reached at {url}"
+            if root:
+                raise ValueError(message)
+            errors.append(message)
             return
-        seen_sitemaps.add(url)
+        if budget.decoded_bytes >= MAX_TOTAL_DECODED_BYTES:
+            message = f"total decoded sitemap budget reached at {url}"
+            if root:
+                raise ValueError(message)
+            errors.append(message)
+            return
+        budget.seen_sitemaps.add(url)
         try:
             response = fetcher.get(
                 url,
@@ -205,8 +219,8 @@ def discover_sitemap_inventory(
                 allowed_content_types=SITEMAP_CONTENT_TYPES,
             )
             raw = _decode_inventory(response.content, url)
-            decoded_bytes += len(raw)
-            if decoded_bytes > MAX_TOTAL_DECODED_BYTES:
+            budget.decoded_bytes += len(raw)
+            if budget.decoded_bytes > MAX_TOTAL_DECODED_BYTES:
                 raise ValueError("total decoded sitemap budget exceeded")
             listed_urls = _parse_non_xml_inventory(raw, url)
             root_node = None if listed_urls is not None else ET.fromstring(raw)
@@ -240,6 +254,12 @@ def discover_sitemap_inventory(
         root_name = root_node.tag.rsplit("}", 1)[-1].lower()
         if root_name == "sitemapindex":
             for sitemap in root_node.findall(".//{*}sitemap"):
+                if len(budget.seen_sitemaps) >= max_sitemaps:
+                    errors.append(f"sitemap source limit reached while reading {url}")
+                    break
+                if budget.decoded_bytes >= MAX_TOTAL_DECODED_BYTES:
+                    errors.append(f"total decoded sitemap budget reached while reading {url}")
+                    break
                 loc = sitemap.find("{*}loc")
                 child = (loc.text or "").strip() if loc is not None else ""
                 if child:
@@ -323,7 +343,16 @@ def discover_domain_sitemap_inventory(
     root_failures: list[str] = []
     entries: dict[str, SitemapEntry] = {}
     sources: list[str] = []
+    budget = _SitemapTraversalBudget()
     for path in ROOT_INVENTORY_PATHS:
+        if len(entries) >= max_urls:
+            break
+        if len(budget.seen_sitemaps) >= DEFAULT_MAX_SITEMAPS:
+            failures.append("sitemap source limit reached before all root inventories were attempted")
+            break
+        if budget.decoded_bytes >= MAX_TOTAL_DECODED_BYTES:
+            failures.append("total decoded sitemap budget reached before all root inventories were attempted")
+            break
         sitemap_url = f"https://{domain}/{path}"
         try:
             discovered, child_errors = discover_sitemap_inventory(
@@ -331,8 +360,9 @@ def discover_domain_sitemap_inventory(
                 domain,
                 fetcher=fetcher,
                 max_depth=max_depth,
-                max_urls=max_urls,
+                max_urls=max(0, max_urls - len(entries)),
                 source_evidence=source_evidence,
+                _budget=budget,
             )
             if discovered:
                 sources.append(sitemap_url)

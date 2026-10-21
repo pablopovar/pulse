@@ -30,6 +30,33 @@ def report_domain(db_path: str | Path, report_id: str) -> str | None:
     return str(row["domain"]) if row else None
 
 
+def published_report_domain(db_path: str | Path, report_id: str) -> str | None:
+    """Resolve only observations that have crossed the publication boundary."""
+    with connect_sqlite(db_path, readonly=True) as con:
+        row = con.execute(
+            """SELECT rs.domain
+                 FROM report_session rs
+                 JOIN domain_report dr
+                   ON dr.domain=rs.domain COLLATE NOCASE
+                 LEFT JOIN durable_job job ON job.id=rs.execution_run_id
+                WHERE rs.id=?
+                  AND (
+                    rs.id=dr.current_report_id
+                    OR job.publication_status='published'
+                    OR (
+                      job.id IS NULL
+                      AND rs.created_at<=(
+                        SELECT created_at FROM report_session
+                        WHERE id=dr.current_report_id
+                      )
+                    )
+                  )
+                LIMIT 1""",
+            (report_id,),
+        ).fetchone()
+    return str(row["domain"]) if row else None
+
+
 def set_exclusions(
     db_path: str | Path,
     domain: str,
@@ -206,7 +233,7 @@ def add_public_reply(
     key: str,
     content: str,
 ) -> dict:
-    domain = report_domain(db_path, report_id)
+    domain = published_report_domain(db_path, report_id)
     if not domain:
         raise ReportNotFound("report not found")
     return add_reply(db_path, domain, key, content, author_role="client")

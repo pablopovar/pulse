@@ -12,7 +12,8 @@
     if(!r.ok){body.textContent="Could not load GEO/AEO data.";return}
     const data=await r.json();
     if(!data.audit){body.innerHTML="<p>No stored audit for this page yet.</p>";return}
-    body.innerHTML=`<div class="audit-score-row"><span>GEO <strong>${data.audit.geo_score??"—"}</strong></span><span>AEO <strong>${data.audit.aeo_score??"—"}</strong></span><span>Combined <strong>${data.audit.combined_score??"—"}</strong></span><span>Run #${data.audit.run_id}</span></div><div class="table-wrap"><table><thead><tr><th>Family</th><th>Signal</th><th>Observed</th><th>Severity</th><th>Evidence</th><th>Recommendation</th><th>Workflow</th><th>Priority</th><th>Note</th></tr></thead><tbody></tbody></table></div>`;
+    const score=(label,value,key)=>{const c=data.audit.score_coverage?.[key]||{};return `<span>${label} <strong>${value??"—"}</strong><small>${c.evaluated??0}/${c.applicable??0} evaluated · ${c.coverage??0}% coverage</small></span>`};
+    body.innerHTML=`<div class="audit-score-row">${score("GEO",data.audit.geo_score,"GEO")}${score("AEO",data.audit.aeo_score,"AEO")}${score("Combined",data.audit.combined_score,"all")}<span>Run #${data.audit.run_id}</span></div><div class="table-wrap"><table><thead><tr><th>Family</th><th>Signal</th><th>Observed</th><th>Severity</th><th>Evidence</th><th>Recommendation</th><th>Workflow</th><th>Priority</th><th>Note</th></tr></thead><tbody></tbody></table></div>`;
     const tbody=body.querySelector("tbody");
     data.signals.forEach(s=>{
       const tr=document.createElement("tr");
